@@ -6,6 +6,7 @@ FILE* debug_log = NULL;
 Config conf;
 AIPlans plans[MaxPlayerNum];
 set_str_t movedlabels;
+std::string llm_endpoint = "http://127.0.0.1:8000";
 map_str_t musiclabels;
 
 
@@ -45,6 +46,14 @@ int option_handler(void* user, const char* section, const char* name, const char
         cf->autosave_interval = atoi(value);
     } else if (MATCH("warn_on_former_replace")) {
         cf->warn_on_former_replace = atoi(value);
+    } else if (MATCH("llm_factions")) {
+        cf->llm_factions = atoi(value);
+    } else if (MATCH("llm_endpoint")) {
+        char* p = strtrim(buf);
+        if (strlen(p)) {
+            llm_endpoint = p;
+        }
+        debug("llm_endpoint %s\n", llm_endpoint.c_str());
     } else if (MATCH("manage_player_bases")) {
         cf->manage_player_bases = atoi(value);
     } else if (MATCH("manage_player_units")) {
