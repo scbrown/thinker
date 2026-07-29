@@ -143,6 +143,26 @@ bool thinker_enabled(int faction_id) {
     return faction_id > 0 && faction_id <= conf.factions_enabled && !is_human(faction_id);
 }
 
+/*
+Neural Amplifier: whether this faction's decisions are routed to the LLM
+orchestrator rather than resolved by Thinker's native AI.
+
+This is a parallel gate to thinker_enabled, not a replacement. A faction that
+is not LLM-routed falls through to Thinker's own choice, and that fall-through
+*is* the deterministic tier — so leaving llm_factions at 0 yields stock
+behaviour with no bridge in the loop.
+
+Deliberately not gated on is_human. Mode B+ (a human slot with
+manage_player_bases / manage_player_units enabled) is the configuration that
+plays by human rules while keeping a deterministic tier underneath, and it is
+the recommended one for autonomous play; an AI slot inherits the difficulty
+handicaps instead. Faction 0 is native life and is always excluded.
+*/
+bool llm_enabled(int faction_id) {
+    return faction_id > 0 && faction_id < MaxPlayerNum
+        && (conf.llm_factions & (1 << faction_id));
+}
+
 bool thinker_move_upkeep(int faction_id) {
     if (is_human(faction_id)) {
         return faction_id > 0 && conf.manage_player_units;

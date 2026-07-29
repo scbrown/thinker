@@ -160,6 +160,13 @@ struct Config {
     int new_unit_names = 1;
     int design_units = 1;
     int factions_enabled = 7;
+    /*
+    Neural Amplifier: bitmask of faction ids whose decisions are routed to the
+    LLM orchestrator instead of Thinker's native AI. 0 disables the bridge, so
+    an unconfigured build behaves exactly like stock Thinker.
+    Bit N = faction N, e.g. llm_factions=2 routes faction 1 only.
+    */
+    int llm_factions = 0;
     int social_ai = 1;
     int social_ai_bias = 10;
     int tech_balance = 0;
@@ -372,6 +379,11 @@ extern FILE* debug_log;
 extern Config conf;
 extern AIPlans plans[MaxPlayerNum];
 extern set_str_t movedlabels;
+/*
+Neural Amplifier: base URL of the orchestrator that answers /decide.
+A std::string rather than a Config member because Config is all scalars.
+*/
+extern std::string llm_endpoint;
 extern map_str_t musiclabels;
 
 DLL_EXPORT DWORD ThinkerModule();
