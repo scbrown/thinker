@@ -3,6 +3,7 @@
 #include "main.h"
 
 int __cdecl mod_base_hurry();
+int __cdecl na_base_hurry_observed();
 int hurry_item(int base_id, int mins, int cost);
 int consider_staple(int base_id);
 bool redundant_project(int faction_id, int item_id);

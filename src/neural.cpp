@@ -3,6 +3,7 @@
 #include "savegame.h"
 #include "veh.h"
 #include "tech.h"
+#include "build.h"
 
 /*
 The observation sink.
@@ -554,6 +555,82 @@ void na_observe_faction_se(int faction_id, int field, int model, int cost) {
 }
 
 /*
+Hurry production: spend energy credits to finish the current item immediately.
+
+The action space is two options, so the whole decision quality lives in the numbers attached to
+them. Reports the cost in credits, what is left to build, the reserve available, and how long the
+item takes if left alone — because "hurry for 84 credits" is only decidable against "or wait three
+turns" and "we hold 139".
+
+Cost is recomputed from the PRE-decision minerals, passed in by the caller. Recomputing after the
+fact would be wrong whenever the item was actually hurried: hurry_item() moves
+minerals_accumulated, so the cost of a purchase already made would come back as zero.
+*/
+void na_observe_base_hurry(int base_id, int item, int minerals_before, int credits_before,
+                           int native_hurried) {
+    if (base_id < 0 || base_id >= *BaseCount || base_id >= MaxBaseNum) {
+        return;
+    }
+    FILE* fp = na_log_open();
+    if (!fp) {
+        return;
+    }
+    BASE& base = Bases[base_id];
+    const int faction_id = base.faction_id;
+
+    const int total = mineral_cost(base_id, item);
+    const int remaining = total - minerals_before;
+    const int cost = hurry_cost(base_id, item, remaining > 0 ? remaining : 0);
+    const int surplus = base.mineral_surplus;
+    const int turns_if_waiting =
+        surplus > 0 && remaining > 0 ? (remaining + surplus - 1) / surplus : 0;
+
+    fprintf(fp, "{\"surface_id\":\"base.hurry\",\"engine\":\"thinker\"");
+    fprintf(fp, ",\"turn\":%d", *CurrentTurn);
+    fprintf(fp, ",\"faction_id\":%d", faction_id);
+    fputs(",\"faction\":\"", fp);
+    if (faction_id > 0 && faction_id < MaxPlayerNum) {
+        na_write_escaped(fp, MFactions[faction_id].noun_faction);
+    }
+    fputs("\"", fp);
+    fprintf(fp, ",\"base_id\":%d", base_id);
+    fputs(",\"base\":\"", fp);
+    na_write_escaped(fp, base.name);
+    fputs("\"", fp);
+
+    fputs(",\"item\":\"", fp);
+    na_write_escaped(fp, prod_name(item));
+    fputs("\"", fp);
+    fputs(",\"base_state\":{", fp);
+    fprintf(fp, "\"minerals_accumulated\":%d", minerals_before);
+    fprintf(fp, ",\"mineral_cost_total\":%d", total);
+    fprintf(fp, ",\"minerals_remaining\":%d", remaining > 0 ? remaining : 0);
+    fprintf(fp, ",\"mineral_surplus\":%d", surplus);
+    fprintf(fp, ",\"turns_if_waiting\":%d", turns_if_waiting);
+    fprintf(fp, ",\"energy_reserves\":%d", credits_before);
+    fprintf(fp, ",\"pop_size\":%d", (int)base.pop_size);
+    fputs("}", fp);
+
+    /*
+    Affordability is part of the action space, not advice. An option the faction cannot pay for
+    should not be offered: the engine would refuse it, and offering it invites the brain to
+    "decide" something that was never available.
+    */
+    const bool affordable = base.can_hurry_item() && cost > 0 && cost <= credits_before;
+    fputs(",\"action_space\":[{\"id\":\"hurry:none\",\"name\":\"Do not hurry\"", fp);
+    fputs(",\"cost\":0,\"cost_unit\":\"credits\"}", fp);
+    if (affordable) {
+        fprintf(fp, ",{\"id\":\"hurry:now\",\"name\":\"Hurry production\",\"cost\":%d", cost);
+        fprintf(fp, ",\"cost_unit\":\"credits\",\"saves_turns\":%d}", turns_if_waiting);
+    }
+    fprintf(fp, "],\"action_space_size\":%d", affordable ? 2 : 1);
+
+    fprintf(fp, ",\"native_choice\":\"%s\"", native_hurried ? "hurry:now" : "hurry:none");
+    fputs(",\"tier\":\"deterministic\",\"applied\":\"native\"}\n", fp);
+    fflush(fp);
+}
+
+/*
 Startup screen button positions as fractions of the client area, measured at 2560x1440.
 Fractions rather than pixels so a different window size does not silently click empty
 space. QUICK START is the fourth of seven right-aligned buttons.
@@ -1033,6 +1110,31 @@ void na_command_tick(void* hwnd_raw) {
             na_write_escaped(lf, prod_name(item));
             fputs("\",\"tier\":\"llm\",\"applied\":\"llm\"}\n", lf);
             fflush(lf);
+        }
+        return;
+    }
+
+    /*
+    "observe-hurry <base_id>" — the base.hurry probe.
+
+    Serialiser only: reports the current numbers with native_hurried = 0, so it never spends
+    credits. Reads live minerals and reserves, which for a probe is exactly right — the point is
+    to see what the brain would see right now.
+    */
+    if (strncmp(line, "observe-hurry ", 14) == 0) {
+        int base_id = -1;
+        if (sscanf(line + 14, "%d", &base_id) == 1
+        && base_id >= 0 && base_id < *BaseCount) {
+            BASE& b = Bases[base_id];
+            na_observe_base_hurry(base_id, b.item(), b.minerals_accumulated,
+                                  Factions[b.faction_id].energy_credits, 0);
+            char detail[96];
+            snprintf(detail, sizeof(detail), "base_id=%d of %d", base_id, *BaseCount);
+            na_cmd_result("observe-hurry", detail, true);
+        } else {
+            char detail[96];
+            snprintf(detail, sizeof(detail), "need 0 <= base_id < %d", *BaseCount);
+            na_cmd_result("observe-hurry", detail, false);
         }
         return;
     }

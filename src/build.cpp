@@ -1,5 +1,6 @@
 
 #include "build.h"
+#include "neural.h"
 
 static const int GOV_NONE = MaxProtoNum;
 
@@ -36,6 +37,38 @@ static int proto_extra_cost(int unit_id) {
     return unit_id >= MaxProtoFactionNum && !Units[unit_id].is_prototyped()
         ? prototype_factor(unit_id) : 0;
 }
+
+/*
+Neural Amplifier: observe the hurry decision.
+
+A wrapper rather than a hook inside mod_base_hurry, because that function has five separate
+return points and mutates base state through hurry_item() on its way out. Wrapping is the only
+place where BOTH the outcome and the pre-decision numbers are available: minerals_accumulated and
+energy_credits are captured before the call, so a cost reported for a purchase already made is
+still the cost that was actually paid.
+
+Patched in at the hook site in place of mod_base_hurry, so every existing early return is
+preserved untouched.
+*/
+int __cdecl na_base_hurry_observed() {
+    const int base_id = *CurrentBaseID;
+    if (base_id < 0 || base_id >= *BaseCount) {
+        return mod_base_hurry();
+    }
+    BASE* b = &Bases[base_id];
+    const int faction_id = b->faction_id;
+    const int item = b->item();
+    const int minerals_before = b->minerals_accumulated;
+    const int credits_before = Factions[faction_id].energy_credits;
+
+    const int rc = mod_base_hurry();
+
+    if (llm_enabled(faction_id)) {
+        na_observe_base_hurry(base_id, item, minerals_before, credits_before, rc);
+    }
+    return rc;
+}
+
 
 int __cdecl mod_base_hurry() {
     const int base_id = *CurrentBaseID;

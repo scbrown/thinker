@@ -81,6 +81,20 @@ different hook — the choice is made through the UI, not here.
 */
 void na_observe_faction_se(int faction_id, int field, int model, int cost);
 
+/*
+Emit one base.hurry observation: whether to spend energy credits to finish production now.
+
+A binary decision with a price, which makes it a good fit for the LLM tier — the question is not
+"can we" but "is this the best use of the reserve", and that is a judgement about the whole
+faction's position rather than a rule lookup.
+
+Called from a wrapper around mod_base_hurry rather than from inside it. That function has five
+separate return points and mutates base state through hurry_item() on the way out, so the only
+place both the decision AND the pre-decision numbers are available is outside it.
+*/
+void na_observe_base_hurry(int base_id, int item, int minerals_before, int credits_before,
+                           int native_hurried);
+
 void na_autoload_tick();
 
 /*

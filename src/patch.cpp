@@ -669,7 +669,9 @@ bool patch_setup(Config* cf) {
     write_call(0x52768A, (int)mod_turn_upkeep); // control_turn
     write_call(0x52A4AD, (int)mod_turn_upkeep); // net_control_turn
     write_call(0x527039, (int)mod_base_upkeep); // production_phase
-    write_call(0x4F7A38, (int)mod_base_hurry); // base_upkeep
+    // Neural Amplifier: the observing wrapper, which calls mod_base_hurry and records the
+    // decision. Behaviour is unchanged when llm_factions is 0.
+    write_call(0x4F7A38, (int)na_base_hurry_observed); // base_upkeep
     write_call(0x528289, (int)mod_enemy_turn); // control_turn
     write_call(0x5295C0, (int)mod_enemy_turn); // net_upkeep
     write_call(0x513F08, (int)mod_enemy_veh); // Console::veh_turn
