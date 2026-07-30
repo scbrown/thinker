@@ -1,6 +1,7 @@
 
 #include "neural.h"
 #include "savegame.h"
+#include "veh.h"
 
 /*
 The observation sink.
@@ -93,6 +94,82 @@ static int na_next_call_seq(int base_id) {
     return ++na_seq_count[base_id];
 }
 
+/*
+The action space: every build this base may legally start, with what it costs.
+
+Engine-authoritative by construction — membership comes from can_build_unit and
+can_build (base.h:68-69), never from our own idea of what is buildable. That is what
+makes an illegal order impossible rather than merely unlikely, and it is why this
+enumerates and filters rather than constructing a list from rules.
+
+Cost and effect are here because a name alone is not a decidable comparison.
+"Formers" versus "Scout Patrol" cannot be weighed without cost, and a brain that
+cannot compare cost will systematically over-pick expensive items
+(docs/decision-inputs.md 1.1). Facilities carry the engine's own effect string,
+which comes from alphax.txt — so the description is the game's, not ours.
+
+Ids are "unit:<proto>" / "facility:<id>" rather than bare integers, mirroring the
+engine's own encoding (item >= 0 is a unit proto, item < 0 is facility -item) while
+keeping raw engine numbers out of the contract as opaque ints.
+*/
+static void na_write_action_space(FILE* fp, int base_id) {
+    int count = 0;
+    fputs(",\"action_space\":[", fp);
+
+    for (int id = 0; id < MaxProtoNum; id++) {
+        if (!can_build_unit(base_id, id)) {
+            continue;
+        }
+        if (count++) { fputs(",", fp); }
+        fprintf(fp, "{\"id\":\"unit:%d\",\"name\":\"", id);
+        na_write_escaped(fp, Units[id].name);
+        int cost = mod_veh_cost(id, base_id, NULL);
+        fprintf(fp, "\",\"cost\":%d,\"category\":\"unit\"}", cost);
+    }
+
+    for (int id = 1; id <= SP_ID_Last; id++) {
+        if (!can_build(base_id, id)) {
+            continue;
+        }
+        if (count++) { fputs(",", fp); }
+        fprintf(fp, "{\"id\":\"facility:%d\",\"name\":\"", id);
+        na_write_escaped(fp, Facility[id].name);
+        fputs("\",\"effect\":\"", fp);
+        na_write_escaped(fp, Facility[id].effect);
+        fprintf(fp, "\",\"cost\":%d,\"maint\":%d,\"category\":\"%s\"}",
+            Facility[id].cost, Facility[id].maint,
+            id >= SP_ID_First ? "project" : "facility");
+    }
+
+    fprintf(fp, "],\"action_space_size\":%d", count);
+}
+
+/*
+The base's own state — category 1 of the input checklist.
+
+Ships accumulated minerals and surplus separately rather than a pre-computed
+"turns remaining". A partially built item makes that arithmetic subtly wrong, and a
+number that is quietly wrong is worse than two numbers the brain can divide.
+*/
+static void na_write_base_state(FILE* fp, int base_id) {
+    BASE& b = Bases[base_id];
+    fputs(",\"base_state\":{", fp);
+    fprintf(fp, "\"pop_size\":%d", (int)b.pop_size);
+    fprintf(fp, ",\"minerals_accumulated\":%d", b.minerals_accumulated);
+    fprintf(fp, ",\"mineral_surplus\":%d", b.mineral_surplus);
+    fprintf(fp, ",\"nutrient_intake\":%d", b.nutrient_intake);
+    fprintf(fp, ",\"mineral_intake\":%d", b.mineral_intake);
+    fprintf(fp, ",\"energy_intake\":%d", b.energy_intake);
+    fprintf(fp, ",\"eco_damage\":%d", b.eco_damage);
+    fprintf(fp, ",\"worked_tiles\":%d", b.worked_tiles);
+    fprintf(fp, ",\"specialists\":%d", b.specialist_total);
+    fprintf(fp, ",\"queue_size\":%d", b.queue_size);
+    fprintf(fp, ",\"current_item\":%d", b.item());
+    fputs(",\"current_item_name\":\"", fp);
+    na_write_escaped(fp, prod_name(b.item()));
+    fputs("\"}", fp);
+}
+
 void na_observe_base_production(int base_id, int native_choice, int has_gov) {
     if (base_id < 0 || base_id >= *BaseCount || base_id >= MaxBaseNum) {
         return;
@@ -131,6 +208,8 @@ void na_observe_base_production(int base_id, int native_choice, int has_gov) {
     fputs(",\"native_choice_name\":\"", fp);
     na_write_escaped(fp, prod_name(native_choice));
     fputs("\"", fp);
+    na_write_base_state(fp, base_id);
+    na_write_action_space(fp, base_id);
     fputs(",\"tier\":\"deterministic\",\"applied\":\"native\"}\n", fp);
 
     // Flushed per line: a crash mid-turn is exactly when we most want the log,
