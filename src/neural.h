@@ -65,3 +65,14 @@ hwnd comes from the window procedure rather than a FindWindow call, so it is alw
 the right window and needs no title matching.
 */
 void na_command_tick(void* hwnd);
+
+/*
+Start the input worker thread (idempotent). Input lives on its own thread because the
+window procedure - and therefore na_command_tick - stops being called while a modal
+dialog runs its own nested message pump, which is precisely when input is needed.
+
+Reads the "na-input" file; handles click / dclick / key / text by PostMessage only.
+PostMessage is thread-safe and just queues, so this never touches engine state. Anything
+that does must stay on na_command_tick's path.
+*/
+void na_input_start(void* hwnd);

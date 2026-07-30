@@ -253,146 +253,142 @@ The instruction after the GameHalted write (call 0x616200 with ecx pointing at a
 local) is a local object's cleanup, not part of the transition, so it is not
 replicated here.
 */
+// Set by the window procedure; used for posted input from anywhere in this file.
+static volatile HWND na_input_hwnd = NULL;
+
 typedef void(__cdecl *Fna_post_load)();
 static Fna_post_load na_post_load = (Fna_post_load)0x5FD120;
 
 /*
-Display/subsystem init, taken from the tail of 0x58F450 where it runs
-unconditionally:
-
-    call 0x50F440
-    call 0x6169D0
-    call 0x616950   // thiscall, ecx = 0x9B90D8
-
-The replay path does not need these because it runs while already in a game, with the
-map window up. Coming from the menu, nothing has brought the display into game mode -
-which is why the state loads and the menu stays on screen.
-
-0x616950 is a thiscall on the object at 0x9B90D8, so it needs ecx set by hand; GCC has
-no portable thiscall attribute for i386.
+Display/subsystem init from 0x58F450's tail (0x50F440, 0x6169D0, 0x616950 with
+ecx=0x9B90D8) was tried here and had no effect: state loaded, display stayed on the
+startup screen. Removed rather than left dead. The working approach does not need it,
+because the engine has already brought the display up by the time we load.
 */
-typedef void(__cdecl *Fna_init_void)();
-static Fna_init_void na_init_a = (Fna_init_void)0x50F440;
-static Fna_init_void na_init_b = (Fna_init_void)0x6169D0;
-
-static void na_show_game_display() {
-    na_init_a();
-    na_init_b();
-    __asm__ __volatile__ (
-        "movl $0x9B90D8, %%ecx\n\t"
-        "call *%0\n\t"
-        :
-        : "r"((void*)0x616950)
-        : "eax", "ecx", "edx", "memory"
-    );
-}
 
 /*
-Autoload. See neural.h for why this hangs off the GUI timer.
-
-The status code is logged unconditionally, because the failure modes are silent and
-individually plausible: a path the game cannot open, a save from an older format, a
-save whose header does not match the current modify_unit_limit setting. Without the
-code in a log, all three present identically as "it just sat at the menu".
+Startup screen button positions as fractions of the client area, measured at 2560x1440.
+Fractions rather than pixels so a different window size does not silently click empty
+space. QUICK START is the fourth of seven right-aligned buttons.
 */
-void na_autoload_tick() {
-    static bool attempted = false;
-    static bool announced = false;
-    static DWORD first_tick = 0;
+static const double NA_QUICKSTART_FX = 2370.0 / 2560.0;
+static const double NA_QUICKSTART_FY = 1034.0 / 1440.0;
 
-    if (attempted) {
+static void na_post_click_frac(HWND hwnd, double fx, double fy) {
+    RECT rc;
+    if (!hwnd || !GetClientRect(hwnd, &rc)) {
+        return;
+    }
+    int x = (int)((rc.right - rc.left) * fx);
+    int y = (int)((rc.bottom - rc.top) * fy);
+    LPARAM pos = MAKELPARAM(x, y);
+    PostMessageA(hwnd, WM_MOUSEMOVE, 0, pos);
+    PostMessageA(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, pos);
+    PostMessageA(hwnd, WM_LBUTTONUP, 0, pos);
+}
+
+static void na_autoload_log(const char* event, const char* detail, int ok) {
+    FILE* fp = na_log_open();
+    if (!fp) {
+        return;
+    }
+    fprintf(fp, "{\"surface_id\":\"na.autoload\",\"engine\":\"thinker\",\"event\":\"%s\"", event);
+    fputs(",\"detail\":\"", fp);
+    na_write_escaped(fp, detail);
+    fprintf(fp, "\",\"halted\":%d,\"turn\":%d,\"ok\":%s}\n",
+            *GameHalted, *CurrentTurn, ok ? "true" : "false");
+    fflush(fp);
+}
+
+enum NaAutoState {
+    NA_AS_WAIT_STARTUP = 0,
+    NA_AS_WAIT_PLANETFALL,
+    NA_AS_WAIT_SESSION,
+    NA_AS_DONE,
+};
+
+void na_autoload_tick() {
+    static int state = NA_AS_WAIT_STARTUP;
+    static DWORD first_tick = 0;
+    static DWORD state_since = 0;
+    static bool announced = false;
+
+    if (state == NA_AS_DONE) {
         return;
     }
 
-    /*
-    Announce once, whatever happens next. Without this, "the flag never parsed"
-    and "the hook never ran" are the same observation: an empty log and a main
-    menu. One line separates them.
-    */
     if (!announced) {
         announced = true;
-        FILE* dfp = na_log_open();
-        if (dfp) {
-            fprintf(dfp, "{\"surface_id\":\"na.autoload\",\"engine\":\"thinker\"");
-            fputs(",\"event\":\"hook_alive\",\"configured\":\"", dfp);
-            na_write_escaped(dfp, na_autoload.c_str());
-            fputs("\"}\n", dfp);
-            fflush(dfp);
-        }
+        na_autoload_log("hook_alive", na_autoload.c_str(), 1);
     }
-
     if (na_autoload.empty()) {
-        attempted = true;
+        state = NA_AS_DONE;
         return;
     }
 
-    /*
-    Do not load during window creation. This runs from the window procedure, so the
-    first messages arrive before the engine has finished starting, and loading a
-    savegame into a half-initialised game is how you get a crash that looks like a
-    bad save. Wait for the app to be up and parked at the menu instead:
-    GameHalted set means no game is running, and a short delay means the message
-    pump is idling rather than still building the UI.
-    */
+    DWORD now = GetTickCount();
     if (first_tick == 0) {
-        first_tick = GetTickCount();
+        first_tick = now;
+        state_since = now;
     }
-    /*
-    Wait for the engine to FINISH starting, not merely to have started.
+    DWORD in_state = now - state_since;
 
-    3s was too early: the load and the transition both reported success, and then the
-    engine's own startup path drew the main menu straight over the session we had just
-    entered. The observable symptom is a perfect log and a main menu, which is
-    indistinguishable from the load having done nothing.
+    switch (state) {
+    case NA_AS_WAIT_STARTUP:
+        /*
+        Wait for the engine to FINISH starting, not merely to have started. Firing early
+        produced a perfect log and a main menu, because the engine's own startup drew
+        over everything we had just done - indistinguishable from doing nothing.
+        */
+        if (in_state < 12000 || !*GameHalted) {
+            return;
+        }
+        na_post_click_frac(na_input_hwnd, NA_QUICKSTART_FX, NA_QUICKSTART_FY);
+        na_autoload_log("click_quickstart", "", 1);
+        state = NA_AS_WAIT_PLANETFALL;
+        state_since = now;
+        return;
 
-    12s is comfortably past startup on this host and still far below anyone's patience
-    for an unattended run. The real fix is a signal that the menu is up and idle
-    rather than a timer, but no such flag has been identified yet.
-    */
-    if (GetTickCount() - first_tick < 12000 || !*GameHalted) {
+    case NA_AS_WAIT_PLANETFALL:
+        // Give the intro dialog time to appear, then confirm it.
+        if (in_state < 8000) {
+            return;
+        }
+        if (na_input_hwnd) {
+            PostMessageA(na_input_hwnd, WM_KEYDOWN, VK_RETURN, 0);
+            PostMessageA(na_input_hwnd, WM_KEYUP, VK_RETURN, 0);
+        }
+        na_autoload_log("confirm_planetfall", "VK_RETURN", 1);
+        state = NA_AS_WAIT_SESSION;
+        state_since = now;
+        return;
+
+    case NA_AS_WAIT_SESSION: {
+        // GameHalted clearing is the real signal that a session exists.
+        if (*GameHalted) {
+            if (in_state > 40000) {
+                na_autoload_log("give_up", "no session after quickstart", 0);
+                state = NA_AS_DONE;
+            }
+            return;
+        }
+        char path[1024] = {};
+        snprintf(path, sizeof(path), "%s", na_autoload.c_str());
+        // flag 0 and the 0x5FD120 call, matching the engine's replay path exactly.
+        int status = mod_load_daemon(path, 0);
+        if (status == SAVE_LOAD_VALID) {
+            na_post_load();
+            *GameHalted = 0;
+        }
+        char detail[128];
+        snprintf(detail, sizeof(detail), "%s status=%d", path, status);
+        na_autoload_log("loaded", detail, status == SAVE_LOAD_VALID);
+        state = NA_AS_DONE;
         return;
     }
-    attempted = true;
-
-    // Thinker's loader wants a mutable buffer.
-    char path[1024] = {};
-    snprintf(path, sizeof(path), "%s", na_autoload.c_str());
-
-    // flag 0, matching the engine's own replay path. flag 1 additionally linearizes
-    // map contours, which that path does not do here.
-    int status = mod_load_daemon(path, 0);
-
-    FILE* fp = na_log_open();
-    if (fp) {
-        fprintf(fp, "{\"surface_id\":\"na.autoload\",\"engine\":\"thinker\"");
-        fputs(",\"save\":\"", fp);
-        na_write_escaped(fp, path);
-        fputs("\"", fp);
-        fprintf(fp, ",\"status\":%d", status);
-        fputs(",\"ok\":", fp);
-        fputs(status == SAVE_LOAD_VALID ? "true" : "false", fp);
-        fputs("}\n", fp);
-        fflush(fp);
-    }
-
-    if (status == SAVE_LOAD_VALID) {
-        /*
-        Enter the session. Setting GameHalted by hand is NOT enough - that performs
-        only the last statement of the transition at 0x58F450 and skips the rest,
-        which loads the state but leaves the game on the menu. Verified working
-        against a real save: rc=0 and GameHalted clears to 0.
-        */
-        na_post_load();
-        *GameHalted = 0;
-        na_show_game_display();
-        int rc = 0;
-        FILE* efp = na_log_open();
-        if (efp) {
-            fprintf(efp, "{\"surface_id\":\"na.autoload\",\"engine\":\"thinker\"");
-            fprintf(efp, ",\"event\":\"enter\",\"arg2\":%d,\"rc\":%d,\"halted\":%d", na_enter_arg, rc, *GameHalted);
-            fprintf(efp, ",\"ok\":%s}\n", *GameHalted == 0 ? "true" : "false");
-            fflush(efp);
-        }
+    default:
+        state = NA_AS_DONE;
+        return;
     }
 }
 
@@ -623,4 +619,191 @@ void na_command_tick(void* hwnd_raw) {
     }
 
     na_cmd_result(line, "unknown command", false);
+}
+
+
+/*
+=============================================================================
+Input channel — a worker thread, so it survives modal dialogs
+=============================================================================
+
+The command channel above is polled from the window procedure, which the engine stops
+calling while a modal dialog runs its own nested message pump. That is exactly when we
+most need to send input: the file picker is modal, and it is the one thing standing
+between an unattended run and a loaded game.
+
+So input gets its own thread. Three facts make this safe and sufficient:
+
+  - The startup screen DOES respond to posted messages. Verified: an in-process
+    click on LOAD GAME opened the picker. Driving menus was never the problem; the
+    poller dying was.
+  - PostMessage is thread-safe and merely queues a message. This thread never touches
+    engine state, so the engine's own thread-unsafety is not in play.
+  - A modal pump still dispatches queued messages, so input posted from here reaches
+    the dialog exactly as a real click would.
+
+Deliberately a SEPARATE file from the command channel. Sharing one file would mean two
+readers racing to consume it, and the resulting double-dispatch would be intermittent
+and horrible to debug. Two files, two owners, no race:
+
+    na-input    -> this thread. Input only: click, key.
+    na-command  -> the window procedure. Everything that touches engine state.
+
+Anything that reads or mutates game state (shot, load, enter) must NOT be handled here:
+those have to run on the engine's own thread.
+*/
+
+static const char* NA_INPUT_PATH = "na-input";
+static const char* NA_INPUT_RESULT = "na-input-result";
+
+// Set by the window procedure; read by the thread. Volatile because the thread has no
+// other reason to re-read it, and a cached value would be a null handle forever.
+
+/*
+This thread must NOT use stdio. Thinker replaces the CRT's file locking with one global
+FileLock mutex covering every stdio call (patch.cpp:14-20, 1148-1159), and our DLL shares
+msvcrt with the game — so fopen from here takes the same lock the game holds. The file
+picker does directory I/O and holds that lock across its modal wait, which deadlocked
+this thread on the first fopen after the dialog opened. Measured: the thread served one
+command, then stopped forever while the game stayed alive.
+
+Win32 file APIs bypass the CRT and that lock entirely, so everything here uses
+CreateFile / ReadFile / WriteFile / DeleteFile.
+*/
+static bool na_read_file_raw(const char* path, char* buf, DWORD cap) {
+    HANDLE h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                           NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    DWORD got = 0;
+    BOOL ok = ReadFile(h, buf, cap - 1, &got, NULL);
+    CloseHandle(h);
+    if (!ok) {
+        return false;
+    }
+    buf[got] = '\0';
+    return true;
+}
+
+static void na_write_file_raw(const char* path, const char* text) {
+    HANDLE h = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ,
+                           NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    DWORD wrote = 0;
+    WriteFile(h, text, (DWORD)strlen(text), &wrote, NULL);
+    CloseHandle(h);
+}
+
+static void na_input_result(const char* cmd, const char* detail, bool ok) {
+    char buf[512];
+    snprintf(buf, sizeof(buf),
+        "{\"channel\":\"input\",\"command\":\"%s\",\"detail\":\"%s\",\"ok\":%s,\"halted\":%d}\n",
+        cmd, detail, ok ? "true" : "false", *GameHalted);
+    na_write_file_raw(NA_INPUT_RESULT, buf);
+}
+
+static DWORD WINAPI na_input_thread(LPVOID) {
+    unsigned long ticks = 0;
+    for (;;) {
+        Sleep(200);
+        /*
+        Heartbeat, so "the thread is dead or blocked" and "the thread is running but not
+        seeing the command file" stop being the same observation. Two wrong diagnoses were
+        made guessing at that difference; this settles it in one run.
+        */
+        ticks++;
+        if (ticks % 5 == 0) {
+            char hb[160];
+            snprintf(hb, sizeof(hb), "{\"ticks\":%lu,\"hwnd\":%d,\"halted\":%d}\n",
+                     ticks, na_input_hwnd ? 1 : 0, *GameHalted);
+            na_write_file_raw("na-input-heartbeat", hb);
+        }
+        HWND hwnd = na_input_hwnd;
+        if (!hwnd) {
+            continue;
+        }
+        char line[512] = {};
+        if (!na_read_file_raw(NA_INPUT_PATH, line, sizeof(line))) {
+            continue;
+        }
+        DeleteFileA(NA_INPUT_PATH);
+        // Only the first line matters.
+        for (char* c = line; *c; c++) {
+            if (*c == '\n' || *c == '\r') { *c = '\0'; break; }
+        }
+
+        for (int i = (int)strlen(line) - 1; i >= 0; i--) {
+            if (line[i]=='\n'||line[i]=='\r'||line[i]==' '||line[i]=='\t') { line[i]='\0'; }
+            else { break; }
+        }
+        if (!line[0]) {
+            continue;
+        }
+
+        if (strncmp(line, "click ", 6) == 0) {
+            int x = 0, y = 0;
+            if (sscanf(line + 6, "%d %d", &x, &y) == 2) {
+                LPARAM pos = MAKELPARAM(x, y);
+                PostMessageA(hwnd, WM_MOUSEMOVE, 0, pos);
+                PostMessageA(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, pos);
+                PostMessageA(hwnd, WM_LBUTTONUP, 0, pos);
+                char d[64]; snprintf(d, sizeof(d), "%d,%d", x, y);
+                na_input_result("click", d, true);
+            } else {
+                na_input_result("click", "expected: click <x> <y>", false);
+            }
+        } else if (strncmp(line, "dclick ", 7) == 0) {
+            // A double click, for list entries that need one to confirm.
+            int x = 0, y = 0;
+            if (sscanf(line + 7, "%d %d", &x, &y) == 2) {
+                LPARAM pos = MAKELPARAM(x, y);
+                PostMessageA(hwnd, WM_MOUSEMOVE, 0, pos);
+                PostMessageA(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, pos);
+                PostMessageA(hwnd, WM_LBUTTONUP, 0, pos);
+                PostMessageA(hwnd, WM_LBUTTONDBLCLK, MK_LBUTTON, pos);
+                PostMessageA(hwnd, WM_LBUTTONUP, 0, pos);
+                char d[64]; snprintf(d, sizeof(d), "%d,%d", x, y);
+                na_input_result("dclick", d, true);
+            } else {
+                na_input_result("dclick", "expected: dclick <x> <y>", false);
+            }
+        } else if (strncmp(line, "key ", 4) == 0) {
+            int vk = 0;
+            if (sscanf(line + 4, "%d", &vk) == 1 && vk > 0) {
+                PostMessageA(hwnd, WM_KEYDOWN, (WPARAM)vk, 0);
+                PostMessageA(hwnd, WM_KEYUP, (WPARAM)vk, 0);
+                char d[64]; snprintf(d, sizeof(d), "vk=%d", vk);
+                na_input_result("key", d, true);
+            } else {
+                na_input_result("key", "expected: key <vk-code>", false);
+            }
+        } else if (strncmp(line, "text ", 5) == 0) {
+            // Type a string as WM_CHAR, for filling a filename field.
+            const char* t = line + 5;
+            for (const char* c = t; *c; c++) {
+                PostMessageA(hwnd, WM_CHAR, (WPARAM)(unsigned char)*c, 0);
+            }
+            na_input_result("text", t, true);
+        } else {
+            na_input_result(line, "unknown input command", false);
+        }
+    }
+    return 0;
+}
+
+// Start once, from the window procedure, so the handle is already valid.
+void na_input_start(void* hwnd_raw) {
+    static bool started = false;
+    na_input_hwnd = (HWND)hwnd_raw;
+    if (started) {
+        return;
+    }
+    started = true;
+    HANDLE h = CreateThread(NULL, 0, na_input_thread, NULL, 0, NULL);
+    if (h) {
+        CloseHandle(h);
+    }
 }
