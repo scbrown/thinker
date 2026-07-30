@@ -251,6 +251,37 @@ static void na_write_action_space(FILE* fp, int base_id) {
 }
 
 /*
+Faction-level economy, on every surface.
+
+A base deciding whether to spend 81 of 82 energy credits cannot judge that from the price
+alone: the question is what else that energy buys and whether it comes back. Measured, this
+was the whole gap on base.hurry - the surface split 6/4 across ten identical prompts until
+the faction's standing plan and its economy were in front of it.
+
+These names are the orchestrator's metric vocabulary (orchestrator/src/neural_amplifier/
+metrics.py), not engine field names, because a directive may only be written against a name
+the world view actually reports. Shipping them under the engine's own names would leave every
+faction-scope directive permanently unmeasurable - which reads in a record as compliance
+rather than as a gap.
+
+Only fields the engine maintains directly are shipped. Anything needing a sweep over all
+bases is left out rather than approximated: a metric that is quietly wrong is worse than one
+that is absent, because absent reads as "cannot be checked" and wrong reads as fact.
+*/
+static void na_write_faction_state(FILE* fp, int faction_id) {
+    Faction& plr = Factions[faction_id];
+    fputs(",\"faction_state\":{", fp);
+    fprintf(fp, "\"energy_reserves\":%d", plr.energy_credits);
+    fprintf(fp, ",\"energy_income\":%d", plr.energy_surplus_total);
+    fprintf(fp, ",\"labs_output\":%d", plr.labs_total);
+    fprintf(fp, ",\"base_count\":%d", plr.base_count);
+    fprintf(fp, ",\"pop_total\":%d", plr.pop_total);
+    fprintf(fp, ",\"military_units\":%d", plr.total_combat_units);
+    fputs("}", fp);
+}
+
+
+/*
 The base's own state — category 1 of the input checklist.
 
 Ships accumulated minerals and surplus separately rather than a pre-computed
@@ -315,6 +346,7 @@ void na_observe_base_production(int base_id, int native_choice, int has_gov) {
     na_write_escaped(fp, prod_name(native_choice));
     fputs("\"", fp);
     na_write_base_state(fp, base_id);
+    na_write_faction_state(fp, faction_id);
     na_write_action_space(fp, base_id);
     fputs(",\"tier\":\"deterministic\",\"applied\":\"native\"}\n", fp);
 
@@ -421,12 +453,9 @@ void na_observe_faction_tech(int faction_id, int native_choice) {
     fputs("\"", fp);
 
     // Faction research and economic state - categories 1 and 4 of the input checklist.
-    fputs(",\"faction_state\":{", fp);
-    fprintf(fp, "\"tech_accumulated\":%d", plr.tech_accumulated);
+    na_write_faction_state(fp, faction_id);
+    fprintf(fp, ",\"tech_accumulated\":%d", plr.tech_accumulated);
     fprintf(fp, ",\"tech_rate\":%d", mod_tech_rate(faction_id));
-    fprintf(fp, ",\"base_count\":%d", plr.base_count);
-    fprintf(fp, ",\"energy_reserves\":%d", plr.energy_credits);
-    fputs("}", fp);
 
     fprintf(fp, ",\"native_choice\":%d", native_choice);
     fputs(",\"native_choice_name\":\"", fp);
@@ -478,7 +507,7 @@ void na_observe_faction_se(int faction_id, int field, int model, int cost) {
     }
     fputs("}", fp);
 
-    fprintf(fp, ",\"energy_reserves\":%d", plr.energy_credits);
+    na_write_faction_state(fp, faction_id);
 
     /*
     The action space: every (field, model) the faction may legally adopt.
@@ -545,7 +574,33 @@ void na_observe_faction_se(int faction_id, int field, int model, int cost) {
                 if (shown++) { fputs(",", fp); }
                 fprintf(fp, "\"%s\":%d", eff_names[e], v);
             }
-            fputs("}}", fp);
+            fputs("}", fp);
+
+            /*
+            Per-option upheaval cost, and affordability derived from it.
+
+            Without this the action space was not decidable: every option looked free, so the only
+            thing distinguishing "adopt Free Market" from "adopt Green" was the effect deltas, and
+            a faction with 60 credits could be told to buy a 200-credit change. The engine computes
+            the cost from the WHOLE proposed category set, not from the single field being changed,
+            so it has to be asked once per candidate rather than derived from a table.
+
+            Built the same way mod_social_ai builds its own candidate (faction.cpp:1348): copy the
+            current category block, then overwrite the one field.
+
+            Computed here rather than left to the brain, on the same reasoning as the production
+            turn estimates: a model that misreads a state value still decides correctly when the
+            derived number is handed to it, and reasons confidently from a fabricated one when it
+            is not.
+            */
+            CSocialCategory candidate;
+            memcpy(&candidate, &plr.SE_Politics, sizeof(candidate));
+            candidate.models[f] = m;
+            int upheaval = social_upheaval(faction_id, &candidate);
+            fprintf(fp, ",\"cost\":%d,\"cost_unit\":\"credits\"", upheaval);
+            fprintf(fp, ",\"affordable\":%s",
+                    upheaval <= plr.energy_credits ? "true" : "false");
+            fputs("}", fp);
         }
     }
     fprintf(fp, "],\"action_space_size\":%d", count);
@@ -622,6 +677,7 @@ void na_observe_base_hurry(int base_id, int item, int minerals_before, int credi
     fprintf(fp, ",\"energy_reserves\":%d", credits_before);
     fprintf(fp, ",\"pop_size\":%d", (int)base.pop_size);
     fputs("}", fp);
+    na_write_faction_state(fp, faction_id);
 
     /*
     Affordability is part of the action space, not advice. An option the faction cannot pay for
