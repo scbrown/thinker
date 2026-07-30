@@ -392,6 +392,7 @@ A path rather than a save slot because the file we want is Thinker's own
 saves/auto/Autosave_<year>.sav, which is not addressable as a slot.
 */
 extern std::string na_autoload;
+extern int na_enter_arg;
 extern map_str_t musiclabels;
 
 DLL_EXPORT DWORD ThinkerModule();

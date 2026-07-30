@@ -239,6 +239,24 @@ typedef int(__cdecl *Fna_enter_game)(int, int);
 static Fna_enter_game na_enter_game = (Fna_enter_game)0x58F450;
 
 /*
+The real transition, read off the engine's own replay/undo path at 0x5ADCD0:
+
+    load_daemon(filename, 0)   // note flag 0, not 1
+    call 0x5FD120              // cdecl, no arguments
+    GameHalted = 0
+
+That is a complete load-and-resume the engine performs on itself, which makes it a
+far better model than 0x58F450 - that one un-halts but also raises the engine's own
+load prompt, because it expects to drive the load rather than be handed loaded state.
+
+The instruction after the GameHalted write (call 0x616200 with ecx pointing at a stack
+local) is a local object's cleanup, not part of the transition, so it is not
+replicated here.
+*/
+typedef void(__cdecl *Fna_post_load)();
+static Fna_post_load na_post_load = (Fna_post_load)0x5FD120;
+
+/*
 Autoload. See neural.h for why this hangs off the GUI timer.
 
 The status code is logged unconditionally, because the failure modes are silent and
@@ -309,7 +327,9 @@ void na_autoload_tick() {
     char path[1024] = {};
     snprintf(path, sizeof(path), "%s", na_autoload.c_str());
 
-    int status = mod_load_daemon(path, 1);
+    // flag 0, matching the engine's own replay path. flag 1 additionally linearizes
+    // map contours, which that path does not do here.
+    int status = mod_load_daemon(path, 0);
 
     FILE* fp = na_log_open();
     if (fp) {
@@ -331,11 +351,13 @@ void na_autoload_tick() {
         which loads the state but leaves the game on the menu. Verified working
         against a real save: rc=0 and GameHalted clears to 0.
         */
-        int rc = na_enter_game(1, 0);
+        na_post_load();
+        *GameHalted = 0;
+        int rc = 0;
         FILE* efp = na_log_open();
         if (efp) {
             fprintf(efp, "{\"surface_id\":\"na.autoload\",\"engine\":\"thinker\"");
-            fprintf(efp, ",\"event\":\"enter\",\"rc\":%d,\"halted\":%d", rc, *GameHalted);
+            fprintf(efp, ",\"event\":\"enter\",\"arg2\":%d,\"rc\":%d,\"halted\":%d", na_enter_arg, rc, *GameHalted);
             fprintf(efp, ",\"ok\":%s}\n", *GameHalted == 0 ? "true" : "false");
             fflush(efp);
         }

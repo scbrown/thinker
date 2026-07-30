@@ -8,6 +8,7 @@ AIPlans plans[MaxPlayerNum];
 set_str_t movedlabels;
 std::string llm_endpoint = "http://127.0.0.1:8000";
 std::string na_autoload;
+int na_enter_arg = 0;
 map_str_t musiclabels;
 
 
@@ -441,6 +442,11 @@ int cmd_parse(Config* cf) {
             if (n > 0) {
                 na_autoload = buf;
             }
+            i++;
+        } else if (wcscmp(argv[i], L"-na-enter-arg") == 0 && i + 1 < argc) {
+            // Second argument to the 0x58F450 transition. Sweepable from the command
+            // line because its meaning is unknown and each candidate needs a restart.
+            na_enter_arg = _wtoi(argv[i+1]);
             i++;
         }
     }
