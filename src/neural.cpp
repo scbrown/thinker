@@ -507,10 +507,22 @@ void na_observe_faction_se(int faction_id, int field, int model, int cost) {
                 continue;
             }
             count++;
+            /*
+            "name" is the MODEL name alone — "Police State", not "Politics -> Police State".
+
+            It has to match the label in the datalinks graph, because retrieval looks facts up by
+            action name. The composed form read better in a log and silently matched nothing, so
+            this surface had no grounding in the real pipeline even though hand-feeding the model
+            name proved the facts were there. The stability harness caught it; a per-decision
+            record could not, because "no facts retrieved" looks identical to "nothing to retrieve".
+
+            The category travels as its own field, which is where a consumer that wants the
+            composed form should build it from.
+            */
             fprintf(fp, ",{\"id\":\"se:%d:%d\",\"name\":\"", f, m);
-            na_write_escaped(fp, SocialField[f].field_name);
-            fputs(" -> ", fp);
             na_write_escaped(fp, SocialField[f].soc_name[m]);
+            fputs("\",\"field\":\"", fp);
+            na_write_escaped(fp, SocialField[f].field_name);
             fputs("\",\"category\":\"se\",\"effects\":{", fp);
             /*
             The effect deltas, without which this is not a decidable comparison — the same
