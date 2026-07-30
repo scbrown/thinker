@@ -45,6 +45,23 @@ No-op when na_autoload is empty, and no-op after the first attempt whether or no
 it succeeded. A failed autoload must leave a usable main menu rather than retry
 forever.
 */
+/*
+Emit one faction.tech observation: which technology to research next.
+
+The second LLM-tier surface, and the first where a language model should beat the
+deterministic tier rather than merely match it. Thinker picks with weighted tables
+(CTech.AI_growth / AI_tech / AI_wealth / AI_power); it cannot reason "we are boxed in on a
+small continent, so a naval-plus-ecology path suits both our terrain and our character".
+That is a path argument over many turns, which is exactly what weight tables cannot do.
+
+Fires once per tech completion - every five to ten turns - so it can afford a much richer
+world view than base.production, which fires per base per turn.
+
+surface_id is "faction.tech", matching the frozen registry in surfaces.py. Not
+"tech.choose": renaming a surface invalidates every recorded run.
+*/
+void na_observe_faction_tech(int faction_id, int native_choice);
+
 void na_autoload_tick();
 
 /*

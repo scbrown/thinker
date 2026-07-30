@@ -2,6 +2,7 @@
 #include "neural.h"
 #include "savegame.h"
 #include "veh.h"
+#include "tech.h"
 
 /*
 The observation sink.
@@ -293,6 +294,74 @@ ecx=0x9B90D8) was tried here and had no effect: state loaded, display stayed on 
 startup screen. Removed rather than left dead. The working approach does not need it,
 because the engine has already brought the display up by the time we load.
 */
+
+/*
+The researchable-tech action space.
+
+tech_avail is the engine's OWN availability test (tech.h:10) - deliberately not a
+hand-rolled prerequisite check. base.production shipped with can_build_unit, which looks
+like an availability test and is not, and offered 125 impossible options as a result. Use
+what the engine uses.
+
+CTech carries the AI's own valuation weights (AI_growth / AI_tech / AI_wealth / AI_power).
+Those are included on purpose: they are what the deterministic tier would use, so exposing
+them lets the brain see the native reasoning it is being asked to improve on, and lets a
+reviewer tell a considered disagreement from a coin flip.
+*/
+static void na_write_tech_action_space(FILE* fp, int faction_id) {
+    int count = 0;
+    fputs(",\"action_space\":[", fp);
+    for (int id = 0; id < MaxTechnologyNum; id++) {
+        if (!tech_avail(id, faction_id)) {
+            continue;
+        }
+        if (count++) { fputs(",", fp); }
+        fprintf(fp, "{\"id\":\"tech:%d\",\"name\":\"", id);
+        na_write_escaped(fp, Tech[id].name);
+        fputs("\",\"category\":\"tech\"", fp);
+        fprintf(fp, ",\"ai_weights\":{\"growth\":%d,\"tech\":%d,\"wealth\":%d,\"power\":%d}",
+                Tech[id].AI_growth, Tech[id].AI_tech, Tech[id].AI_wealth, Tech[id].AI_power);
+        fputs("}", fp);
+    }
+    fprintf(fp, "],\"action_space_size\":%d", count);
+}
+
+void na_observe_faction_tech(int faction_id, int native_choice) {
+    if (faction_id <= 0 || faction_id >= MaxPlayerNum) {
+        return;
+    }
+    FILE* fp = na_log_open();
+    if (!fp) {
+        return;
+    }
+    Faction& plr = Factions[faction_id];
+
+    fprintf(fp, "{\"surface_id\":\"faction.tech\",\"engine\":\"thinker\"");
+    fprintf(fp, ",\"turn\":%d", *CurrentTurn);
+    fprintf(fp, ",\"faction_id\":%d", faction_id);
+    fputs(",\"faction\":\"", fp);
+    na_write_escaped(fp, MFactions[faction_id].noun_faction);
+    fputs("\"", fp);
+
+    // Faction research and economic state - categories 1 and 4 of the input checklist.
+    fputs(",\"faction_state\":{", fp);
+    fprintf(fp, "\"tech_accumulated\":%d", plr.tech_accumulated);
+    fprintf(fp, ",\"tech_rate\":%d", mod_tech_rate(faction_id));
+    fprintf(fp, ",\"base_count\":%d", plr.base_count);
+    fprintf(fp, ",\"energy_reserves\":%d", plr.energy_credits);
+    fputs("}", fp);
+
+    fprintf(fp, ",\"native_choice\":%d", native_choice);
+    fputs(",\"native_choice_name\":\"", fp);
+    if (native_choice >= 0 && native_choice < MaxTechnologyNum) {
+        na_write_escaped(fp, Tech[native_choice].name);
+    }
+    fputs("\"", fp);
+
+    na_write_tech_action_space(fp, faction_id);
+    fputs(",\"tier\":\"deterministic\",\"applied\":\"native\"}\n", fp);
+    fflush(fp);
+}
 
 /*
 Startup screen button positions as fractions of the client area, measured at 2560x1440.
@@ -671,6 +740,27 @@ void na_command_tick(void* hwnd_raw) {
             char detail[96];
             snprintf(detail, sizeof(detail), "need 0 <= base_id < %d", *BaseCount);
             na_cmd_result("observe", detail, false);
+        }
+        return;
+    }
+
+    /*
+    "observe-tech <faction_id>" — the faction.tech probe.
+
+    Same contract as "observe": serialiser only, no decision, no side effects. Needed
+    because tech selection fires once every five to ten turns, so waiting for it naturally
+    is not a test loop. Passes the faction's CURRENT research target as native_choice, which
+    is what the deterministic tier last picked.
+    */
+    if (strncmp(line, "observe-tech ", 13) == 0) {
+        int fid = -1;
+        if (sscanf(line + 13, "%d", &fid) == 1 && fid > 0 && fid < MaxPlayerNum) {
+            na_observe_faction_tech(fid, Factions[fid].tech_research_id);
+            char detail[96];
+            snprintf(detail, sizeof(detail), "faction_id=%d", fid);
+            na_cmd_result("observe-tech", detail, true);
+        } else {
+            na_cmd_result("observe-tech", "need 0 < faction_id < 8", false);
         }
         return;
     }

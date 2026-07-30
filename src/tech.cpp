@@ -1,5 +1,6 @@
 
 #include "tech.h"
+#include "neural.h"
 
 
 static bool revised_tech_cost() {
@@ -257,6 +258,15 @@ int __cdecl mod_tech_selection(int faction_id) {
     } else {
         tech_id = mod_tech_pick(faction_id, 0, -1, 0);
         plr.tech_research_id = tech_id;
+        /*
+        Neural Amplifier: observe the research choice. Gated on llm_enabled, so a stock
+        build never reaches it. Placed after tech_id is settled and before any of the
+        multiplayer synchronisation below, which is the point where the decision is both
+        complete and still attributable to this faction.
+        */
+        if (llm_enabled(faction_id)) {
+            na_observe_faction_tech(faction_id, tech_id);
+        }
         if (*MultiplayerActive && is_human(faction_id)) {
             synch_researching(faction_id);
             plr.tech_research_id = -1;
