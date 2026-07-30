@@ -1,5 +1,6 @@
 
 #include "base.h"
+#include "neural.h"
 
 static bool delay_base_riot = false;
 static bool base_yield_active = false;
@@ -1194,6 +1195,15 @@ int __cdecl mod_base_build(int base_id, int has_gov) {
     }
     debug("choice: %d %s\n", choice, prod_name(choice));
     flushlog();
+    /*
+    Neural Amplifier (A0): observe this decision point. Gated on llm_enabled, so
+    a stock build with llm_factions=0 never reaches it. Placed after choice is
+    settled and before the return, which is the one spot where the whole
+    decision is known and still attributable to this base.
+    */
+    if (llm_enabled(base.faction_id)) {
+        na_observe_base_production(base_id, choice);
+    }
     return choice;
 }
 
