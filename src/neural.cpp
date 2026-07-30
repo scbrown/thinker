@@ -364,6 +364,120 @@ void na_observe_faction_tech(int faction_id, int native_choice) {
 }
 
 /*
+Social engineering. field/model describe the change the deterministic tier settled on, or
+field < 0 for "no change this turn" — which is a real decision and is recorded as one
+rather than as an absence.
+*/
+void na_observe_faction_se(int faction_id, int field, int model, int cost) {
+    if (faction_id <= 0 || faction_id >= MaxPlayerNum) {
+        return;
+    }
+    FILE* fp = na_log_open();
+    if (!fp) {
+        return;
+    }
+    Faction& plr = Factions[faction_id];
+    const int* current = &plr.SE_Politics;
+
+    fprintf(fp, "{\"surface_id\":\"faction.se\",\"engine\":\"thinker\"");
+    fprintf(fp, ",\"turn\":%d", *CurrentTurn);
+    fprintf(fp, ",\"faction_id\":%d", faction_id);
+    fputs(",\"faction\":\"", fp);
+    na_write_escaped(fp, MFactions[faction_id].noun_faction);
+    fputs("\"", fp);
+
+    // Current settings, by name rather than index — an index means nothing in a prompt.
+    fputs(",\"current\":{", fp);
+    for (int f = 0; f < MaxSocialCatNum; f++) {
+        int m = current[f];
+        if (f) { fputs(",", fp); }
+        fputs("\"", fp);
+        na_write_escaped(fp, SocialField[f].field_name);
+        fputs("\":\"", fp);
+        if (m >= 0 && m < MaxSocialModelNum) {
+            na_write_escaped(fp, SocialField[f].soc_name[m]);
+        }
+        fputs("\"", fp);
+    }
+    fputs("}", fp);
+
+    fprintf(fp, ",\"energy_reserves\":%d", plr.energy_credits);
+
+    /*
+    The action space: every (field, model) the faction may legally adopt.
+
+    Excluded, not flagged: models whose prerequisite tech is unresearched, and the model
+    already in force for that field. Faction-prohibited models are excluded too — factions
+    are forbidden certain values, and that is a rule the action space must enforce because
+    grounding only advises.
+    */
+    int count = 0;
+    fputs(",\"action_space\":[{\"id\":\"se:none\",\"name\":\"No change\",\"category\":\"se\"}", fp);
+    count++;
+    for (int f = 0; f < MaxSocialCatNum; f++) {
+        for (int m = 0; m < MaxSocialModelNum; m++) {
+            if (m == current[f]) {
+                continue;
+            }
+            int preq = SocialField[f].soc_preq_tech[m];
+            if (preq >= 0 && !has_tech(preq, faction_id)) {
+                continue;
+            }
+            // Factions are forbidden specific values; the action space must enforce that,
+            // because grounding advises and only the action space binds.
+            if (MFactions[faction_id].soc_opposition_category == f
+            && MFactions[faction_id].soc_opposition_model == m) {
+                continue;
+            }
+            count++;
+            fprintf(fp, ",{\"id\":\"se:%d:%d\",\"name\":\"", f, m);
+            na_write_escaped(fp, SocialField[f].field_name);
+            fputs(" -> ", fp);
+            na_write_escaped(fp, SocialField[f].soc_name[m]);
+            fputs("\",\"category\":\"se\",\"effects\":{", fp);
+            /*
+            The effect deltas, without which this is not a decidable comparison — the same
+            mistake as shipping build options without cost. "Democratic" tells the brain
+            nothing; "+2 efficiency, +2 growth, -1 support" is the actual choice.
+
+            Only non-zero entries are emitted: eleven fields per model, mostly zero, and a
+            wall of zeros costs tokens while hiding the two numbers that matter.
+            */
+            static const char* eff_names[MaxSocialEffectNum] = {
+                "economy", "efficiency", "support", "talent", "morale", "police",
+                "growth", "planet", "probe", "industry", "research"
+            };
+            int shown = 0;
+            for (int e = 0; e < MaxSocialEffectNum; e++) {
+                int v = SocialField[f].soc_effect[m].values[e];
+                if (!v) {
+                    continue;
+                }
+                if (shown++) { fputs(",", fp); }
+                fprintf(fp, "\"%s\":%d", eff_names[e], v);
+            }
+            fputs("}}", fp);
+        }
+    }
+    fprintf(fp, "],\"action_space_size\":%d", count);
+
+    if (field >= 0 && field < MaxSocialCatNum && model >= 0 && model < MaxSocialModelNum) {
+        fprintf(fp, ",\"native_choice\":\"se:%d:%d\"", field, model);
+        fputs(",\"native_choice_name\":\"", fp);
+        na_write_escaped(fp, SocialField[field].field_name);
+        fputs(" -> ", fp);
+        na_write_escaped(fp, SocialField[field].soc_name[model]);
+        fprintf(fp, "\",\"upheaval_cost\":%d", cost);
+    } else {
+        fputs(",\"native_choice\":\"se:none\",\"native_choice_name\":\"No change\"", fp);
+        fputs(",\"upheaval_cost\":0", fp);
+    }
+
+    fputs(",\"tier\":\"deterministic\",\"applied\":\"native\"}\n", fp);
+    fflush(fp);
+}
+
+/*
 Startup screen button positions as fractions of the client area, measured at 2560x1440.
 Fractions rather than pixels so a different window size does not silently click empty
 space. QUICK START is the fourth of seven right-aligned buttons.
@@ -761,6 +875,21 @@ void na_command_tick(void* hwnd_raw) {
             na_cmd_result("observe-tech", detail, true);
         } else {
             na_cmd_result("observe-tech", "need 0 < faction_id < 8", false);
+        }
+        return;
+    }
+
+    // "observe-se <faction_id>" — the faction.se probe. Serialiser only; reports the
+    // current settings and a "no change" native choice, since no decision is being made.
+    if (strncmp(line, "observe-se ", 11) == 0) {
+        int fid = -1;
+        if (sscanf(line + 11, "%d", &fid) == 1 && fid > 0 && fid < MaxPlayerNum) {
+            na_observe_faction_se(fid, -1, -1, 0);
+            char detail[96];
+            snprintf(detail, sizeof(detail), "faction_id=%d", fid);
+            na_cmd_result("observe-se", detail, true);
+        } else {
+            na_cmd_result("observe-se", "need 0 < faction_id < 8", false);
         }
         return;
     }

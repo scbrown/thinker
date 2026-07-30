@@ -62,6 +62,25 @@ surface_id is "faction.tech", matching the frozen registry in surfaces.py. Not
 */
 void na_observe_faction_tech(int faction_id, int native_choice);
 
+/*
+Emit one faction.se observation: the social-engineering choice.
+
+Low frequency, high leverage, and a strong LLM fit — it is a values trade-off with faction
+character attached, which is what a weight table handles worst.
+
+The engine models this as "change one field to one model, if we can afford the upheaval",
+so the action space is the legal (field, model) pairs plus the option to change nothing.
+Prohibited and un-researched models are excluded from the space rather than merely flagged:
+the action space BINDS, grounding only advises, and an option the brain must not pick should
+not be offered.
+
+LIMITATION worth knowing before relying on this: mod_social_ai returns immediately for human
+factions, so this never fires in the recommended Mode B+ configuration (a human slot with
+manage_player_bases). It covers AI factions only. Routing a human slot's SE decision needs a
+different hook — the choice is made through the UI, not here.
+*/
+void na_observe_faction_se(int faction_id, int field, int model, int cost);
+
 void na_autoload_tick();
 
 /*

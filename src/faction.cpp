@@ -1,5 +1,6 @@
 
 #include "faction.h"
+#include "neural.h"
 
 static char PlrBuf[StrBufLen] = {};
 
@@ -1556,6 +1557,14 @@ int __cdecl mod_social_ai(int faction_id, int a2, int a3, int a4, int a5, CSocia
         debug("social_change %d %d %8s cost: %d score: %d %s -> %s\n",
             *CurrentTurn, faction_id, m->filename,
             cost, score_diff, SocialField[sf].soc_name[sm1], SocialField[sf].soc_name[sm2]);
+    }
+    /*
+    Neural Amplifier: observe the social-engineering choice. Placed after the decision is
+    settled and after any upheaval has been paid for, so cost reflects what was actually
+    spent. sf < 0 means "no change", which is recorded as a decision rather than skipped.
+    */
+    if (llm_enabled(faction_id)) {
+        na_observe_faction_se(faction_id, sf, sf >= 0 ? sm2 : -1, sf >= 0 ? cost : 0);
     }
     social_set(faction_id);
     design_units(faction_id);
