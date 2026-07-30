@@ -46,3 +46,22 @@ it succeeded. A failed autoload must leave a usable main menu rather than retry
 forever.
 */
 void na_autoload_tick();
+
+/*
+Poll the command channel and act on it. Called from the window procedure.
+
+Why a file and not input injection: terranx.exe reads the mouse through DirectInput
+and runs inside a Wine virtual desktop, so synthesised clicks do not reach it —
+measured, both via window messages and via XTEST with warped coordinates. And under
+XWayland an external screenshot of the root window returns solid black, because each
+X client is composited separately.
+
+Both problems disappear in-process. The DLL already owns the window handle and can
+BitBlt its own client area, which needs no compositor cooperation, no portal
+permission, and no X server at all — so it works identically under Xvfb. A file is
+the simplest channel an outside agent can drive with no IPC setup.
+
+hwnd comes from the window procedure rather than a FindWindow call, so it is always
+the right window and needs no title matching.
+*/
+void na_command_tick(void* hwnd);

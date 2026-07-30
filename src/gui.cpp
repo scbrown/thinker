@@ -568,6 +568,7 @@ LRESULT WINAPI ModWinProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     installed, so an autoload hung off it silently never fires.
     */
     na_autoload_tick();
+    na_command_tick((void*)hwnd);
     const bool debug_cmd = DEBUG && !*GameHalted && msg == WM_CHAR;
     const bool is_editor = !*GameHalted
         && *GameState & STATE_SCENARIO_EDITOR && *GameState & STATE_OMNISCIENT_VIEW;

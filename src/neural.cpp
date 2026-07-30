@@ -218,3 +218,207 @@ void na_autoload_tick() {
         *GameHalted = 0;
     }
 }
+
+/*
+=============================================================================
+Command channel and in-process frame capture
+=============================================================================
+
+See neural.h for why this exists rather than driving the game from outside.
+*/
+
+static const char* NA_CMD_PATH = "na-command";
+static const char* NA_CMD_RESULT = "na-command-result";
+
+/*
+Write the window's client area to a 24-bit BMP.
+
+BMP rather than PNG because it needs no encoder: this has to work from a DLL
+injected into a 1999 binary with nothing linked but user32/gdi32/winmm/psapi, and a
+raw BMP is a header plus bottom-up BGR rows. Converting to PNG is the caller's job
+and one ImageMagick invocation.
+
+GetDIBits with a negative biHeight would give top-down rows, but not every driver
+honours it, so this writes the natural bottom-up order that every BMP reader expects.
+*/
+static bool na_capture_bmp(HWND hwnd, const char* path) {
+    if (!hwnd) {
+        return false;
+    }
+    RECT rc;
+    if (!GetClientRect(hwnd, &rc)) {
+        return false;
+    }
+    const int w = rc.right - rc.left;
+    const int h = rc.bottom - rc.top;
+    if (w <= 0 || h <= 0) {
+        return false;
+    }
+
+    HDC src = GetDC(hwnd);
+    if (!src) {
+        return false;
+    }
+    HDC mem = CreateCompatibleDC(src);
+    HBITMAP bmp = CreateCompatibleBitmap(src, w, h);
+    bool ok = false;
+
+    if (mem && bmp) {
+        HGDIOBJ old = SelectObject(mem, bmp);
+        if (BitBlt(mem, 0, 0, w, h, src, 0, 0, SRCCOPY)) {
+            BITMAPINFO bi = {};
+            bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+            bi.bmiHeader.biWidth = w;
+            bi.bmiHeader.biHeight = h;
+            bi.bmiHeader.biPlanes = 1;
+            bi.bmiHeader.biBitCount = 24;
+            bi.bmiHeader.biCompression = BI_RGB;
+
+            // Rows are padded to a 4-byte boundary — the single most common way a
+            // hand-rolled BMP writer produces a skewed image.
+            const int stride = ((w * 3) + 3) & ~3;
+            const size_t bytes = (size_t)stride * (size_t)h;
+            unsigned char* pixels = (unsigned char*)malloc(bytes);
+
+            if (pixels && GetDIBits(mem, bmp, 0, h, pixels, &bi, DIB_RGB_COLORS)) {
+                FILE* fp = fopen(path, "wb");
+                if (fp) {
+                    BITMAPFILEHEADER fh = {};
+                    fh.bfType = 0x4D42; // "BM"
+                    fh.bfOffBits = sizeof(fh) + sizeof(BITMAPINFOHEADER);
+                    fh.bfSize = fh.bfOffBits + (DWORD)bytes;
+                    fwrite(&fh, sizeof(fh), 1, fp);
+                    fwrite(&bi.bmiHeader, sizeof(BITMAPINFOHEADER), 1, fp);
+                    fwrite(pixels, 1, bytes, fp);
+                    fclose(fp);
+                    ok = true;
+                }
+            }
+            free(pixels);
+        }
+        SelectObject(mem, old);
+    }
+    if (bmp) { DeleteObject(bmp); }
+    if (mem) { DeleteDC(mem); }
+    ReleaseDC(hwnd, src);
+    return ok;
+}
+
+// Report the outcome so the caller can tell "not processed yet" from "failed".
+static void na_cmd_result(const char* cmd, const char* detail, bool ok) {
+    FILE* fp = fopen(NA_CMD_RESULT, "wt");
+    if (!fp) {
+        return;
+    }
+    fputs("{\"command\":\"", fp);
+    na_write_escaped(fp, cmd);
+    fputs("\",\"detail\":\"", fp);
+    na_write_escaped(fp, detail);
+    fprintf(fp, "\",\"ok\":%s", ok ? "true" : "false");
+    fprintf(fp, ",\"turn\":%d", *CurrentTurn);
+    fprintf(fp, ",\"halted\":%d}\n", *GameHalted);
+    fclose(fp);
+}
+
+void na_command_tick(void* hwnd_raw) {
+    HWND hwnd = (HWND)hwnd_raw;
+    static DWORD last_poll = 0;
+
+    /*
+    The window procedure runs on every message — thousands per second while the game
+    is animating. Statting a file that often is real overhead for no benefit, so poll
+    at 4Hz, which is far faster than any human or agent needs.
+    */
+    DWORD now = GetTickCount();
+    if (now - last_poll < 250) {
+        return;
+    }
+    last_poll = now;
+
+    FILE* fp = fopen(NA_CMD_PATH, "rt");
+    if (!fp) {
+        return;
+    }
+    char line[1024] = {};
+    if (!fgets(line, sizeof(line)-1, fp)) {
+        line[0] = '\0';
+    }
+    fclose(fp);
+
+    // Consume the command before acting on it. If handling crashes the game, the
+    // command must not re-run on the next launch and crash it again.
+    remove(NA_CMD_PATH);
+
+    // Trim trailing newline and whitespace.
+    for (int i = (int)strlen(line) - 1; i >= 0; i--) {
+        if (line[i] == '\n' || line[i] == '\r' || line[i] == ' ' || line[i] == '\t') {
+            line[i] = '\0';
+        } else {
+            break;
+        }
+    }
+    if (!line[0]) {
+        return;
+    }
+
+    // "shot" or "shot <path>"
+    if (strncmp(line, "shot", 4) == 0) {
+        const char* path = "na-screen.bmp";
+        if (line[4] == ' ' && line[5]) {
+            path = line + 5;
+        }
+        bool ok = na_capture_bmp(hwnd, path);
+        na_cmd_result("shot", path, ok);
+        return;
+    }
+
+    /*
+    "click <x> <y>" — client-relative, posted straight to our own window.
+
+    This is the in-process counterpart to the external click that did not work.
+    External injection has to guess which X window owns the coordinate space, and
+    under a Wine virtual desktop it guesses wrong. Here the handle comes from the
+    window procedure itself and the coordinates are client-relative, so there is
+    nothing left to guess.
+
+    PostMessage rather than SendMessage: we are *inside* the window procedure, and
+    a synchronous send would re-enter it. Posting queues the click for the normal
+    pump, which is also how a real click arrives.
+    */
+    if (strncmp(line, "click ", 6) == 0) {
+        int x = 0, y = 0;
+        if (sscanf(line + 6, "%d %d", &x, &y) == 2) {
+            LPARAM pos = MAKELPARAM(x, y);
+            PostMessageA(hwnd, WM_MOUSEMOVE, 0, pos);
+            PostMessageA(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, pos);
+            PostMessageA(hwnd, WM_LBUTTONUP, 0, pos);
+            char detail[64];
+            snprintf(detail, sizeof(detail), "%d,%d", x, y);
+            na_cmd_result("click", detail, true);
+        } else {
+            na_cmd_result("click", "expected: click <x> <y>", false);
+        }
+        return;
+    }
+
+    /*
+    "key <vk>" — a virtual-key press, by numeric VK code. Menus in this engine
+    respond to the keyboard, and a keystroke needs no coordinates at all, which
+    makes it far more robust than clicking if it works.
+    */
+    if (strncmp(line, "key ", 4) == 0) {
+        int vk = 0;
+        if (sscanf(line + 4, "%d", &vk) == 1 && vk > 0) {
+            PostMessageA(hwnd, WM_KEYDOWN, (WPARAM)vk, 0);
+            PostMessageA(hwnd, WM_KEYUP, (WPARAM)vk, 0);
+            char detail[64];
+            snprintf(detail, sizeof(detail), "vk=%d", vk);
+            na_cmd_result("key", detail, true);
+        } else {
+            na_cmd_result("key", "expected: key <vk-code>", false);
+        }
+        return;
+    }
+
+    na_cmd_result(line, "unknown command", false);
+}
