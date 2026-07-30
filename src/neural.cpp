@@ -257,6 +257,37 @@ typedef void(__cdecl *Fna_post_load)();
 static Fna_post_load na_post_load = (Fna_post_load)0x5FD120;
 
 /*
+Display/subsystem init, taken from the tail of 0x58F450 where it runs
+unconditionally:
+
+    call 0x50F440
+    call 0x6169D0
+    call 0x616950   // thiscall, ecx = 0x9B90D8
+
+The replay path does not need these because it runs while already in a game, with the
+map window up. Coming from the menu, nothing has brought the display into game mode -
+which is why the state loads and the menu stays on screen.
+
+0x616950 is a thiscall on the object at 0x9B90D8, so it needs ecx set by hand; GCC has
+no portable thiscall attribute for i386.
+*/
+typedef void(__cdecl *Fna_init_void)();
+static Fna_init_void na_init_a = (Fna_init_void)0x50F440;
+static Fna_init_void na_init_b = (Fna_init_void)0x6169D0;
+
+static void na_show_game_display() {
+    na_init_a();
+    na_init_b();
+    __asm__ __volatile__ (
+        "movl $0x9B90D8, %%ecx\n\t"
+        "call *%0\n\t"
+        :
+        : "r"((void*)0x616950)
+        : "eax", "ecx", "edx", "memory"
+    );
+}
+
+/*
 Autoload. See neural.h for why this hangs off the GUI timer.
 
 The status code is logged unconditionally, because the failure modes are silent and
@@ -353,6 +384,7 @@ void na_autoload_tick() {
         */
         na_post_load();
         *GameHalted = 0;
+        na_show_game_display();
         int rc = 0;
         FILE* efp = na_log_open();
         if (efp) {
