@@ -113,6 +113,23 @@ Ids are "unit:<proto>" / "facility:<id>" rather than bare integers, mirroring th
 engine's own encoding (item >= 0 is a unit proto, item < 0 is facility -item) while
 keeping raw engine numbers out of the contract as opaque ints.
 */
+
+// Emit the two turn estimates for one candidate item. surplus <= 0 means never, which is
+// real: a base with no mineral surplus genuinely cannot finish anything.
+static void na_write_turns(FILE* fp, int cost, int surplus, int banked, bool is_current) {
+    if (surplus <= 0) {
+        fputs(",\"turns_if_switched\":null", fp);
+        return;
+    }
+    int t_switch = (cost + surplus - 1) / surplus;
+    fprintf(fp, ",\"turns_if_switched\":%d", t_switch);
+    if (is_current) {
+        int left = cost - banked;
+        if (left < 0) { left = 0; }
+        fprintf(fp, ",\"turns_if_continued\":%d", (left + surplus - 1) / surplus);
+    }
+}
+
 static void na_write_action_space(FILE* fp, int base_id) {
     int count = 0;
     const int faction_id = Bases[base_id].faction_id;
@@ -129,6 +146,32 @@ static void na_write_action_space(FILE* fp, int base_id) {
     versus 4.
     */
     const int mineral_factor = mod_cost_factor(faction_id, RSC_MINERAL, -1);
+
+    /*
+    Turns are computed here rather than left to the brain.
+
+    The original reasoning was to ship cost and accumulated minerals and let the brain
+    divide, on the grounds that a pre-computed figure would be subtly wrong for a
+    partially-built item. Measurement changed the calculus: across two runs on the same
+    world view, Haiku computed (33-4)/2 correctly once and then 22/2 - silently dropping the
+    4 banked minerals - the next time. An arithmetic slip in the input to a strategic
+    judgement is worse than a documented approximation.
+
+    So both numbers are given explicitly, and they are DIFFERENT numbers on purpose:
+
+      turns_if_switched   ceil(cost / surplus), ignoring accumulated minerals. Switching
+                          item category in this engine forfeits progress, so ignoring the
+                          bank is the conservative and usually correct reading.
+      turns_if_continued  only on the item currently in production, where the bank does
+                          apply: ceil((cost - accumulated) / surplus).
+
+    Naming them separately is the point. A single "turns" field would have to pick one
+    meaning and would be wrong half the time.
+    */
+    BASE& b = Bases[base_id];
+    const int surplus = b.mineral_surplus;
+    const int banked = b.minerals_accumulated;
+    const int current_item = b.item();
 
     fputs(",\"action_space\":[", fp);
 
@@ -149,7 +192,37 @@ static void na_write_action_space(FILE* fp, int base_id) {
         fprintf(fp, "{\"id\":\"unit:%d\",\"name\":\"", id);
         na_write_escaped(fp, Units[id].name);
         int rows = mod_veh_cost(id, base_id, NULL);
-        fprintf(fp, "\",\"cost\":%d,\"category\":\"unit\"}", rows * mineral_factor);
+        fprintf(fp, "\",\"cost\":%d,\"category\":\"unit\"", rows * mineral_factor);
+        /*
+        A one-line role, because facilities carry CFacility.effect and units carried nothing
+        — so a unit's purpose had to come from the model's own recollection of a 1999 game.
+        Measured: Haiku, given this action space, picked Colony Pod and justified it as
+        raising THIS base's population. A Colony Pod founds a new base; the arithmetic was
+        right and the mechanic was wrong, and the world view gave it nothing to check against.
+
+        Derived from UNIT.plan, which is the engine's own classification, plus triad so a
+        sea unit is not proposed as a land defender.
+        */
+        static const char* plan_role[] = {
+            "attacks enemy units and bases", "general combat unit",
+            "defends a base or position", "explores and scouts terrain",
+            "intercepts enemy aircraft", "destroys a base outright",
+            "controls sea zones", "carries land units across water",
+            "FOUNDS A NEW BASE elsewhere - does not grow this base",
+            "terraforms terrain to improve tile yields",
+            "ferries minerals or nutrients to another base",
+            "infiltrates and sabotages rival factions",
+        };
+        int plan = Units[id].plan;
+        fputs(",\"role\":\"", fp);
+        if (plan >= 0 && plan < (int)(sizeof(plan_role)/sizeof(plan_role[0]))) {
+            na_write_escaped(fp, plan_role[plan]);
+        }
+        int tri = Units[id].triad();
+        fprintf(fp, "\",\"triad\":\"%s\"",
+                tri == TRIAD_SEA ? "sea" : (tri == TRIAD_AIR ? "air" : "land"));
+        na_write_turns(fp, rows * mineral_factor, surplus, banked, current_item == id);
+        fputs("}", fp);
     }
 
     for (int id = 1; id <= SP_ID_Last; id++) {
@@ -165,9 +238,12 @@ static void na_write_action_space(FILE* fp, int base_id) {
         na_write_escaped(fp, Facility[id].name);
         fputs("\",\"effect\":\"", fp);
         na_write_escaped(fp, Facility[id].effect);
-        fprintf(fp, "\",\"cost\":%d,\"maint\":%d,\"category\":\"%s\"}",
+        fprintf(fp, "\",\"cost\":%d,\"maint\":%d,\"category\":\"%s\"",
             Facility[id].cost * mineral_factor, Facility[id].maint,
             id >= SP_ID_First ? "project" : "facility");
+        na_write_turns(fp, Facility[id].cost * mineral_factor, surplus, banked,
+                       current_item == -id);
+        fputs("}", fp);
     }
 
     fprintf(fp, "],\"action_space_size\":%d,\"cost_unit\":\"minerals\"", count);
@@ -890,6 +966,73 @@ void na_command_tick(void* hwnd_raw) {
             na_cmd_result("observe-se", detail, true);
         } else {
             na_cmd_result("observe-se", "need 0 < faction_id < 8", false);
+        }
+        return;
+    }
+
+    /*
+    "apply <base_id> <action_id>" — set a base's production to a chosen action.
+
+    This is the act half of the loop, and it is what lets an agent outside the process be
+    the brain: observe, decide, apply. No orchestrator and no transport required.
+
+    action_id uses the same encoding the observation emits, "unit:<proto>" or
+    "facility:<id>", so a decision can be copied straight back from a world view without
+    translation.
+
+    The choice is VALIDATED against the engine's own availability tests before being
+    applied, not merely parsed. That is the same guarantee the contract makes: an order can
+    only name something the engine actually offered, so an illegal order is impossible
+    rather than unlikely. A rejected action leaves production untouched and says why.
+    */
+    if (strncmp(line, "apply ", 6) == 0) {
+        int base_id = -1;
+        char kind[32] = {};
+        int id = -1;
+        if (sscanf(line + 6, "%d %31[^:]:%d", &base_id, kind, &id) != 3
+        || base_id < 0 || base_id >= *BaseCount) {
+            na_cmd_result("apply", "expected: apply <base_id> unit:<n>|facility:<n>", false);
+            return;
+        }
+        const int fid = Bases[base_id].faction_id;
+        int item = 99999;
+        if (strcmp(kind, "unit") == 0) {
+            if (id < 0 || id >= MaxProtoNum
+            || !mod_veh_avail(id, fid, base_id) || !can_build_unit(base_id, id)) {
+                na_cmd_result("apply", "unit not available for this base", false);
+                return;
+            }
+            item = id;              // item >= 0 encodes a unit prototype
+        } else if (strcmp(kind, "facility") == 0) {
+            if (id < 1 || id > SP_ID_Last
+            || !mod_facility_avail((FacilityId)id, fid, base_id, 0) || !can_build(base_id, id)) {
+                na_cmd_result("apply", "facility not available for this base", false);
+                return;
+            }
+            item = -id;             // item < 0 encodes a facility
+        } else {
+            na_cmd_result("apply", "kind must be unit or facility", false);
+            return;
+        }
+
+        mod_base_change(base_id, item);
+        char detail[160];
+        snprintf(detail, sizeof(detail), "base=%d item=%d now=%s",
+                 base_id, item, prod_name(Bases[base_id].item()));
+        na_cmd_result("apply", detail, true);
+
+        // Record the applied decision so the log shows the LLM tier acting, not just watching.
+        FILE* lf = na_log_open();
+        if (lf) {
+            fprintf(lf, "{\"surface_id\":\"base.production\",\"engine\":\"thinker\"");
+            fprintf(lf, ",\"turn\":%d,\"base_id\":%d", *CurrentTurn, base_id);
+            fputs(",\"base\":\"", lf);
+            na_write_escaped(lf, Bases[base_id].name);
+            fprintf(lf, "\",\"chosen\":\"%s:%d\"", kind, id);
+            fputs(",\"chosen_name\":\"", lf);
+            na_write_escaped(lf, prod_name(item));
+            fputs("\",\"tier\":\"llm\",\"applied\":\"llm\"}\n", lf);
+            fflush(lf);
         }
         return;
     }
