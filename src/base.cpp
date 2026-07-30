@@ -1202,7 +1202,7 @@ int __cdecl mod_base_build(int base_id, int has_gov) {
     decision is known and still attributable to this base.
     */
     if (llm_enabled(base.faction_id)) {
-        na_observe_base_production(base_id, choice);
+        na_observe_base_production(base_id, choice, has_gov);
     }
     return choice;
 }

@@ -52,7 +52,7 @@ static void na_write_escaped(FILE* fp, const char* s) {
     }
 }
 
-void na_observe_base_production(int base_id, int native_choice) {
+void na_observe_base_production(int base_id, int native_choice, int has_gov) {
     if (base_id < 0 || base_id >= *BaseCount) {
         return;
     }
@@ -82,6 +82,9 @@ void na_observe_base_production(int base_id, int native_choice) {
     // Thinker's own pick. Recorded, not overridden: until A1 this is still what
     // the engine executes, so the log shows what the deterministic tier chose.
     fprintf(fp, ",\"native_choice\":%d", native_choice);
+    // See neural.h: the discriminator between the several mod_base_build calls
+    // the engine makes for one base in one turn.
+    fprintf(fp, ",\"has_gov\":%d", has_gov);
     fputs(",\"native_choice_name\":\"", fp);
     na_write_escaped(fp, prod_name(native_choice));
     fputs("\"", fp);
