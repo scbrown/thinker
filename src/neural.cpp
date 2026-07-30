@@ -114,20 +114,48 @@ keeping raw engine numbers out of the contract as opaque ints.
 */
 static void na_write_action_space(FILE* fp, int base_id) {
     int count = 0;
+    const int faction_id = Bases[base_id].faction_id;
+
+    /*
+    Costs are normalised to MINERALS here.
+
+    The engine stores item cost in "rows"; actual minerals is cost * cost_factor, which
+    varies by faction and difficulty (main.h:255 lists 13,12,11,10,8,7 by level). The base
+    state reports minerals_accumulated in raw minerals, so shipping raw row costs
+    alongside it would mix two units in one world view - and the brain would do confident
+    arithmetic on incompatible numbers. Measured before this fix: Colony Pod cost 3
+    against minerals_accumulated 4, which reads as almost affordable and is actually 30
+    versus 4.
+    */
+    const int mineral_factor = mod_cost_factor(faction_id, RSC_MINERAL, -1);
+
     fputs(",\"action_space\":[", fp);
 
     for (int id = 0; id < MaxProtoNum; id++) {
+        /*
+        mod_veh_avail, NOT can_build_unit. can_build_unit checks only proto-slot
+        ownership, the colony/nutrient rule, sea adjacency and the unit cap - it never
+        checks whether the prerequisite tech is known. Using it yielded 125 options for a
+        turn-35 base, including Alien Artifact, which is not buildable at all.
+        */
+        if (!mod_veh_avail(id, faction_id, base_id)) {
+            continue;
+        }
         if (!can_build_unit(base_id, id)) {
             continue;
         }
         if (count++) { fputs(",", fp); }
         fprintf(fp, "{\"id\":\"unit:%d\",\"name\":\"", id);
         na_write_escaped(fp, Units[id].name);
-        int cost = mod_veh_cost(id, base_id, NULL);
-        fprintf(fp, "\",\"cost\":%d,\"category\":\"unit\"}", cost);
+        int rows = mod_veh_cost(id, base_id, NULL);
+        fprintf(fp, "\",\"cost\":%d,\"category\":\"unit\"}", rows * mineral_factor);
     }
 
     for (int id = 1; id <= SP_ID_Last; id++) {
+        // Same reasoning: mod_facility_avail is the engine's own availability test.
+        if (!mod_facility_avail((FacilityId)id, faction_id, base_id, 0)) {
+            continue;
+        }
         if (!can_build(base_id, id)) {
             continue;
         }
@@ -137,11 +165,11 @@ static void na_write_action_space(FILE* fp, int base_id) {
         fputs("\",\"effect\":\"", fp);
         na_write_escaped(fp, Facility[id].effect);
         fprintf(fp, "\",\"cost\":%d,\"maint\":%d,\"category\":\"%s\"}",
-            Facility[id].cost, Facility[id].maint,
+            Facility[id].cost * mineral_factor, Facility[id].maint,
             id >= SP_ID_First ? "project" : "facility");
     }
 
-    fprintf(fp, "],\"action_space_size\":%d", count);
+    fprintf(fp, "],\"action_space_size\":%d,\"cost_unit\":\"minerals\"", count);
 }
 
 /*
@@ -615,6 +643,35 @@ void na_command_tick(void* hwnd_raw) {
         snprintf(detail, sizeof(detail), "args=%d,%d rc=%d halted_after=%d",
                  a, b, rc, *GameHalted);
         na_cmd_result("enter", detail, *GameHalted == 0);
+        return;
+    }
+
+    /*
+    "observe <base_id>" — emit a base.production observation for one base without making
+    a decision.
+
+    A test hook, and deliberately side-effect free: it calls only the serializer, not
+    mod_base_build, so it exercises the action-space enumeration and base-state block
+    against a live game without perturbing production, minerals or the governor.
+
+    It exists because in-game mouse and keyboard input do NOT reach the engine through
+    posted messages - the startup screen and dialogs accept them, the map UI does not, it
+    reads DirectInput. So there is no way to end a turn from outside, and waiting for
+    natural turn upkeep is not a usable test loop.
+    */
+    if (strncmp(line, "observe ", 8) == 0) {
+        int base_id = -1;
+        if (sscanf(line + 8, "%d", &base_id) == 1
+        && base_id >= 0 && base_id < *BaseCount) {
+            na_observe_base_production(base_id, Bases[base_id].item(), 0);
+            char detail[96];
+            snprintf(detail, sizeof(detail), "base_id=%d of %d", base_id, *BaseCount);
+            na_cmd_result("observe", detail, true);
+        } else {
+            char detail[96];
+            snprintf(detail, sizeof(detail), "need 0 <= base_id < %d", *BaseCount);
+            na_cmd_result("observe", detail, false);
+        }
         return;
     }
 
