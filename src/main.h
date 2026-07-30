@@ -384,6 +384,14 @@ Neural Amplifier: base URL of the orchestrator that answers /decide.
 A std::string rather than a Config member because Config is all scalars.
 */
 extern std::string llm_endpoint;
+/*
+Neural Amplifier: savegame to load automatically at startup, from -na-autoload.
+Empty means boot to the main menu as normal.
+
+A path rather than a save slot because the file we want is Thinker's own
+saves/auto/Autosave_<year>.sav, which is not addressable as a slot.
+*/
+extern std::string na_autoload;
 extern map_str_t musiclabels;
 
 DLL_EXPORT DWORD ThinkerModule();

@@ -7,6 +7,7 @@ Config conf;
 AIPlans plans[MaxPlayerNum];
 set_str_t movedlabels;
 std::string llm_endpoint = "http://127.0.0.1:8000";
+std::string na_autoload;
 map_str_t musiclabels;
 
 
@@ -425,6 +426,22 @@ int cmd_parse(Config* cf) {
             cf->video_mode = VM_Custom;
         } else if (wcscmp(argv[i], L"-windowed") == 0) {
             cf->video_mode = VM_Window;
+        } else if (wcscmp(argv[i], L"-na-autoload") == 0 && i + 1 < argc) {
+            /*
+            Neural Amplifier: load this savegame instead of waiting at the main
+            menu. Takes the next argument as a path, so it consumes i+1.
+
+            Narrowed with WideCharToMultiByte rather than assuming ASCII: the
+            path routinely contains a Steam library directory, which is outside
+            our control and may not be ASCII.
+            */
+            char buf[1024] = {};
+            int n = WideCharToMultiByte(CP_ACP, 0, argv[i+1], -1,
+                                        buf, sizeof(buf)-1, NULL, NULL);
+            if (n > 0) {
+                na_autoload = buf;
+            }
+            i++;
         }
     }
     LocalFree(argv);

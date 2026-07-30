@@ -1,5 +1,6 @@
 
 #include "neural.h"
+#include "savegame.h"
 
 /*
 The observation sink.
@@ -135,4 +136,85 @@ void na_observe_base_production(int base_id, int native_choice, int has_gov) {
     // Flushed per line: a crash mid-turn is exactly when we most want the log,
     // and terranx.exe crashing is not hypothetical.
     fflush(fp);
+}
+
+/*
+Autoload. See neural.h for why this hangs off the GUI timer.
+
+The status code is logged unconditionally, because the failure modes are silent and
+individually plausible: a path the game cannot open, a save from an older format, a
+save whose header does not match the current modify_unit_limit setting. Without the
+code in a log, all three present identically as "it just sat at the menu".
+*/
+void na_autoload_tick() {
+    static bool attempted = false;
+    static bool announced = false;
+    static DWORD first_tick = 0;
+
+    if (attempted) {
+        return;
+    }
+
+    /*
+    Announce once, whatever happens next. Without this, "the flag never parsed"
+    and "the hook never ran" are the same observation: an empty log and a main
+    menu. One line separates them.
+    */
+    if (!announced) {
+        announced = true;
+        FILE* dfp = na_log_open();
+        if (dfp) {
+            fprintf(dfp, "{\"surface_id\":\"na.autoload\",\"engine\":\"thinker\"");
+            fputs(",\"event\":\"hook_alive\",\"configured\":\"", dfp);
+            na_write_escaped(dfp, na_autoload.c_str());
+            fputs("\"}\n", dfp);
+            fflush(dfp);
+        }
+    }
+
+    if (na_autoload.empty()) {
+        attempted = true;
+        return;
+    }
+
+    /*
+    Do not load during window creation. This runs from the window procedure, so the
+    first messages arrive before the engine has finished starting, and loading a
+    savegame into a half-initialised game is how you get a crash that looks like a
+    bad save. Wait for the app to be up and parked at the menu instead:
+    GameHalted set means no game is running, and a short delay means the message
+    pump is idling rather than still building the UI.
+    */
+    if (first_tick == 0) {
+        first_tick = GetTickCount();
+    }
+    if (GetTickCount() - first_tick < 3000 || !*GameHalted) {
+        return;
+    }
+    attempted = true;
+
+    // Thinker's loader wants a mutable buffer.
+    char path[1024] = {};
+    snprintf(path, sizeof(path), "%s", na_autoload.c_str());
+
+    int status = mod_load_daemon(path, 1);
+
+    FILE* fp = na_log_open();
+    if (fp) {
+        fprintf(fp, "{\"surface_id\":\"na.autoload\",\"engine\":\"thinker\"");
+        fputs(",\"save\":\"", fp);
+        na_write_escaped(fp, path);
+        fputs("\"", fp);
+        fprintf(fp, ",\"status\":%d", status);
+        fputs(",\"ok\":", fp);
+        fputs(status == SAVE_LOAD_VALID ? "true" : "false", fp);
+        fputs("}\n", fp);
+        fflush(fp);
+    }
+
+    if (status == SAVE_LOAD_VALID) {
+        // Resume the engine's loop. Without this the state is loaded but the game
+        // stays parked at the menu, which looks exactly like a failed load.
+        *GameHalted = 0;
+    }
 }

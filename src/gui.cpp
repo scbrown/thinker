@@ -1,5 +1,6 @@
 
 #include "gui.h"
+#include "neural.h"
 
 const int32_t MainWinHandle = (int32_t)(&MapWin->oMainWin.field_4); // 0x939444
 
@@ -555,6 +556,18 @@ int __cdecl mod_blink_timer() {
 
 LRESULT WINAPI ModWinProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
+    /*
+    Neural Amplifier: -na-autoload gets its chance here.
+
+    This is the window procedure, replaced unconditionally in ModRegisterClassA
+    (patch.cpp:168), so it sees every message from window creation onward — which
+    makes it the one hook guaranteed to run while the main menu waits for a human.
+
+    The obvious candidate, mod_blink_timer, is only patched in when
+    smooth_scrolling is enabled (patch.cpp:1166). With the default ini it is never
+    installed, so an autoload hung off it silently never fires.
+    */
+    na_autoload_tick();
     const bool debug_cmd = DEBUG && !*GameHalted && msg == WM_CHAR;
     const bool is_editor = !*GameHalted
         && *GameState & STATE_SCENARIO_EDITOR && *GameState & STATE_OMNISCIENT_VIEW;

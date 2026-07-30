@@ -27,3 +27,22 @@ discriminator those two lines are indistinguishable, and the orchestrator's
 decision from a re-evaluation of the same one.
 */
 void na_observe_base_production(int base_id, int native_choice, int has_gov);
+
+/*
+Load the -na-autoload savegame, once, as soon as the game is idle at the menu.
+
+Called from the GUI timer (mod_blink_timer) because that is the only thing that
+runs while the main menu is waiting for a human. terranx.exe boots to a menu and
+blocks on input; there is no "game started" hook to attach to, because no game has
+started.
+
+Loading is Thinker's own mod_load_daemon, which reads the file and rebuilds all
+game state. Clearing GameHalted is what resumes the engine's loop afterwards —
+together they are the menu-to-session transition the engine normally performs
+inside load_game, which is not usable here because it addresses saves by slot.
+
+No-op when na_autoload is empty, and no-op after the first attempt whether or not
+it succeeded. A failed autoload must leave a usable main menu rather than retry
+forever.
+*/
+void na_autoload_tick();
