@@ -218,6 +218,27 @@ void na_observe_base_production(int base_id, int native_choice, int has_gov) {
 }
 
 /*
+The menu-to-session transition, found by disassembling terranx.exe.
+
+GameHalted (0x68F21C) is written in seven places; only 0x58F4D8 and 0x5ADCE4 clear
+it. The 0x58F4D8 write is the last statement of a two-argument function at 0x58F450
+which does teardown, calls 0x58F2F0(1, arg2), and un-halts only if that succeeds.
+Poking GameHalted directly - which is what the first autoload attempt did - performs
+the last line of that function and skips everything else, which is exactly why the
+state loaded but the game stayed on the menu.
+
+0x58F2F0 sets GameHalted=1 itself and does timing/seed initialisation; it does not
+read a savegame. So the order is load_daemon first, then this.
+
+Argument meanings are not yet known. arg1 gates a teardown block, so it plausibly
+distinguishes starting fresh from replacing a running game. Exposed through the
+command channel rather than hardcoded so the pair can be found by experiment against
+a live game instead of a rebuild per guess.
+*/
+typedef int(__cdecl *Fna_enter_game)(int, int);
+static Fna_enter_game na_enter_game = (Fna_enter_game)0x58F450;
+
+/*
 Autoload. See neural.h for why this hangs off the GUI timer.
 
 The status code is logged unconditionally, because the failure modes are silent and
@@ -267,7 +288,19 @@ void na_autoload_tick() {
     if (first_tick == 0) {
         first_tick = GetTickCount();
     }
-    if (GetTickCount() - first_tick < 3000 || !*GameHalted) {
+    /*
+    Wait for the engine to FINISH starting, not merely to have started.
+
+    3s was too early: the load and the transition both reported success, and then the
+    engine's own startup path drew the main menu straight over the session we had just
+    entered. The observable symptom is a perfect log and a main menu, which is
+    indistinguishable from the load having done nothing.
+
+    12s is comfortably past startup on this host and still far below anyone's patience
+    for an unattended run. The real fix is a signal that the menu is up and idle
+    rather than a timer, but no such flag has been identified yet.
+    */
+    if (GetTickCount() - first_tick < 12000 || !*GameHalted) {
         return;
     }
     attempted = true;
@@ -292,9 +325,20 @@ void na_autoload_tick() {
     }
 
     if (status == SAVE_LOAD_VALID) {
-        // Resume the engine's loop. Without this the state is loaded but the game
-        // stays parked at the menu, which looks exactly like a failed load.
-        *GameHalted = 0;
+        /*
+        Enter the session. Setting GameHalted by hand is NOT enough - that performs
+        only the last statement of the transition at 0x58F450 and skips the rest,
+        which loads the state but leaves the game on the menu. Verified working
+        against a real save: rc=0 and GameHalted clears to 0.
+        */
+        int rc = na_enter_game(1, 0);
+        FILE* efp = na_log_open();
+        if (efp) {
+            fprintf(efp, "{\"surface_id\":\"na.autoload\",\"engine\":\"thinker\"");
+            fprintf(efp, ",\"event\":\"enter\",\"rc\":%d,\"halted\":%d", rc, *GameHalted);
+            fprintf(efp, ",\"ok\":%s}\n", *GameHalted == 0 ? "true" : "false");
+            fflush(efp);
+        }
     }
 }
 
@@ -496,6 +540,31 @@ void na_command_tick(void* hwnd_raw) {
         } else {
             na_cmd_result("key", "expected: key <vk-code>", false);
         }
+        return;
+    }
+
+    // "load <path>" — run the autoload loader on demand, so a save can be loaded
+    // without restarting the process.
+    if (strncmp(line, "load ", 5) == 0) {
+        char path[1024] = {};
+        snprintf(path, sizeof(path), "%s", line + 5);
+        int status = mod_load_daemon(path, 1);
+        char detail[128];
+        snprintf(detail, sizeof(detail), "status=%d", status);
+        na_cmd_result("load", detail, status == SAVE_LOAD_VALID);
+        return;
+    }
+
+    // "enter <a> <b>" — call the transition at 0x58F450. Result reports GameHalted
+    // afterwards, which is the whole signal: 0 means we are in a session.
+    if (strncmp(line, "enter", 5) == 0) {
+        int a = 1, b = 0;
+        sscanf(line + 5, "%d %d", &a, &b);
+        int rc = na_enter_game(a, b);
+        char detail[128];
+        snprintf(detail, sizeof(detail), "args=%d,%d rc=%d halted_after=%d",
+                 a, b, rc, *GameHalted);
+        na_cmd_result("enter", detail, *GameHalted == 0);
         return;
     }
 
