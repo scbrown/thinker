@@ -107,43 +107,111 @@ void na_buf_escaped(NaBuf* b, const char* s) {
 // ---------------------------------------------------------------- deadline
 
 /*
-Milliseconds left before `deadline`, never negative.
+A deadline of 0 means "no deadline" — wait as long as it takes.
+
+That is the configured default now that a decision is answered by a person or an
+agent rather than by a model on a stopwatch. A turn-based game pausing at a
+decision point is what it already does when a human is playing it.
 
 GetTickCount wraps every 49.7 days. Subtracting as unsigned and casting the
 result to signed is the standard idiom that survives the wrap; comparing the
 two tick values directly is the version that does not, and a game left running
 across the wrap would get an instant timeout on every decision from then on.
 */
-static int na_ms_left(DWORD deadline) {
-    int left = (int)(deadline - GetTickCount());
-    return left > 0 ? left : 0;
+static const DWORD NA_NO_DEADLINE = 0;
+
+static bool na_expired(DWORD deadline) {
+    return deadline != NA_NO_DEADLINE && (int)(deadline - GetTickCount()) <= 0;
 }
 
-// Wait until the socket is readable (or writable, for connect completion) or
-// the deadline passes. Returns false on timeout or error.
+/*
+How long the game may sit inside one select() before coming up for air.
+
+Windows marks a thread unresponsive if it has not touched its message queue for
+about five seconds, and a "not responding" title bar during every decision is
+both alarming and, under a window manager that offers to kill the app, actively
+dangerous. Slicing the wait keeps the queue touched.
+*/
+static const int NA_SLICE_MS = 250;
+
+/*
+Touch the message queue without dispatching anything.
+
+This is the part to be careful about. The obvious way to keep a window alive
+while blocking is to pump — PeekMessage(PM_REMOVE) + DispatchMessage — and that
+is exactly wrong here. We are called from inside mod_base_build, which is inside
+the engine's own base-processing loop. Dispatching would re-enter the window
+procedure, which runs mod_blink_timer, which runs the autoload and command-channel
+ticks, which can touch game state. Re-entering the engine from inside a decision
+hook is how a turn gets corrupted in a way that is almost impossible to
+reproduce afterwards.
+
+PM_NOREMOVE with no dispatch is enough for the only property we actually need:
+the thread has *called* PeekMessage, so the OS stops considering it hung. The
+window does not repaint while a decision is outstanding. That is a real cost and
+the right trade — a stale window for a few seconds against re-entrant mutation of
+the board.
+*/
+static void na_touch_message_queue() {
+    MSG msg;
+    PeekMessageA(&msg, NULL, 0, 0, PM_NOREMOVE);
+}
+
+/*
+Wait until the socket is readable (or writable, for connect completion), or the
+deadline passes. Returns false on timeout or error.
+*/
 static bool na_wait(SOCKET s, bool for_write, DWORD deadline) {
-    int left = na_ms_left(deadline);
-    if (left <= 0) {
-        return false;
+    for (;;) {
+        if (na_expired(deadline)) {
+            return false;
+        }
+        int slice = NA_SLICE_MS;
+        if (deadline != NA_NO_DEADLINE) {
+            int left = (int)(deadline - GetTickCount());
+            if (left <= 0) {
+                return false;
+            }
+            if (left < slice) {
+                slice = left;
+            }
+        }
+        fd_set set;
+        FD_ZERO(&set);
+        FD_SET(s, &set);
+        timeval tv;
+        tv.tv_sec = slice / 1000;
+        tv.tv_usec = (slice % 1000) * 1000;
+        // Winsock reports a failed non-blocking connect through the exception set
+        // only, so connect waits must watch both or an unreachable orchestrator
+        // costs the full timeout instead of failing immediately.
+        //
+        // The exception set is passed to select ONLY on the write path, so it must
+        // only be *read* on the write path. select clears the sets it is given and
+        // leaves the others alone — so on a read wait `err` still holds the socket
+        // we put in it, and checking it there reports a failure on every healthy
+        // read. That is exactly what happened: every successful POST started
+        // failing the moment this check was added unconditionally.
+        fd_set err;
+        FD_ZERO(&err);
+        FD_SET(s, &err);
+        int rc = select(0, for_write ? NULL : &set, for_write ? &set : NULL,
+                        for_write ? &err : NULL, &tv);
+        if (rc < 0) {
+            return false;
+        }
+        if (rc > 0) {
+            if (for_write && FD_ISSET(s, &err)) {
+                return false;
+            }
+            if (FD_ISSET(s, &set)) {
+                return true;
+            }
+        }
+        // rc == 0 is the slice elapsing, which is the normal case while an agent
+        // is thinking — not a timeout unless the deadline says so.
+        na_touch_message_queue();
     }
-    fd_set set;
-    FD_ZERO(&set);
-    FD_SET(s, &set);
-    timeval tv;
-    tv.tv_sec = left / 1000;
-    tv.tv_usec = (left % 1000) * 1000;
-    // Winsock reports a failed non-blocking connect through the exception set
-    // only, so connect waits must watch both or an unreachable orchestrator
-    // costs the full timeout instead of failing immediately.
-    fd_set err;
-    FD_ZERO(&err);
-    FD_SET(s, &err);
-    int rc = select(0, for_write ? NULL : &set, for_write ? &set : NULL,
-                    for_write ? &err : NULL, &tv);
-    if (rc <= 0) {
-        return false;
-    }
-    return FD_ISSET(s, &set) != 0;
 }
 
 // ---------------------------------------------------------------- endpoint
@@ -213,10 +281,24 @@ bool na_http_post(const char* endpoint, const char* path, const char* body,
     if (!na_split_endpoint(endpoint, host, sizeof(host), &port) || !na_winsock_ready()) {
         return false;
     }
-    if (timeout_ms <= 0) {
-        return false;
+    /*
+    timeout_ms <= 0 means wait indefinitely, which is the configured default.
+
+    The decision is answered by an agent or a person now, not by a model on a
+    stopwatch, and a turn-based game pausing at a decision point is what it
+    already does for a human player. Set llm_timeout_ms to a positive number for
+    an unattended run, where a silent agent would otherwise hang the game with no
+    route back to the deterministic tier.
+    */
+    DWORD deadline = NA_NO_DEADLINE;
+    if (timeout_ms > 0) {
+        deadline = GetTickCount() + (DWORD)timeout_ms;
+        // GetTickCount can legitimately return a value that makes this land on the
+        // sentinel. One millisecond is a cheaper fix than a second flag.
+        if (deadline == NA_NO_DEADLINE) {
+            deadline = 1;
+        }
     }
-    const DWORD deadline = GetTickCount() + (DWORD)timeout_ms;
 
     // getaddrinfo can block past the deadline on a name that needs a DNS
     // lookup. In practice the endpoint is a loopback literal and this returns
@@ -232,7 +314,7 @@ bool na_http_post(const char* endpoint, const char* path, const char* body,
     if (getaddrinfo(host, portstr, &hints, &ai) != 0 || !ai) {
         return false;
     }
-    if (na_ms_left(deadline) <= 0) {
+    if (na_expired(deadline)) {
         freeaddrinfo(ai);
         return false;
     }

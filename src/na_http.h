@@ -59,10 +59,17 @@ POST `body` as application/json and return the response body in `resp`.
 https endpoint is rejected rather than silently downgraded.
 
 `timeout_ms` bounds the WHOLE exchange — DNS, connect, send and the read loop —
-against one deadline, not one timeout per stage. That distinction is invariant 9
-("the game never stalls waiting on the brain"): three stages each honouring a
-2 s timeout is a 6 s freeze, and the number in the config file needs to mean what
-a player would think it means.
+against one deadline, not one timeout per stage. Three stages each honouring a 2 s
+timeout is a 6 s freeze, and the number in the config file needs to mean what a
+player would think it means.
+
+`timeout_ms <= 0` waits indefinitely, and is the default. A decision is answered
+by an agent or a person rather than by a model on a stopwatch, so the game pauses
+at a decision point exactly as it does when a human is playing it. A positive
+value is the escape an unattended run needs: without one a silent agent hangs the
+game with no route back to the deterministic tier. The wait is sliced so the
+thread keeps touching its message queue and Windows does not mark it hung — see
+the note on why it deliberately does NOT dispatch.
 
 Returns true only on a 2xx with a body. Every other outcome — unreachable,
 timed out, 5xx, malformed — is false, and the caller's contract is to fall back

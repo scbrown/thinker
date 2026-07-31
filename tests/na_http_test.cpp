@@ -126,8 +126,8 @@ static void test_endpoint_rejects() {
     check(!na_http_post("http://127.0.0.1:0", "/decide", "{}", 500, &resp), "port 0 fails");
     check(!na_http_post("http://127.0.0.1:99999", "/decide", "{}", 500, &resp),
           "out-of-range port fails");
-    check(!na_http_post("http://127.0.0.1:8099", "/decide", "{}", 0, &resp),
-          "zero timeout fails without connecting");
+    // Note there is deliberately no "zero timeout fails fast" case: zero now means
+    // wait indefinitely, which is the default for an agent-answered decision.
 }
 
 static void test_live(const char* base) {
@@ -180,6 +180,29 @@ static void test_live(const char* base) {
           "a closed port fails");
     spent = GetTickCount() - started;
     check(spent < 3000, "and fails fast rather than burning the whole deadline");
+
+    // The blocking default. A refused connection must still fail rather than wait
+    // forever — "wait indefinitely" is about a slow ANSWER, never about a socket
+    // that cannot be opened, and conflating the two would hang the game whenever
+    // the orchestrator was simply not running.
+    started = GetTickCount();
+    check(!na_http_post("http://127.0.0.1:9", "/decide", "{}", 0, &resp),
+          "a closed port fails even with no deadline");
+    spent = GetTickCount() - started;
+    check(spent < 5000, "and does not hang the game waiting for a socket nobody will open");
+    printf("      no-deadline refused connect returned after %lums\n", (unsigned long)spent);
+
+    // A server slower than the caller, with no deadline: the call must survive the
+    // slice loop rather than giving up when the first select() times out.
+    started = GetTickCount();
+    ok = na_http_post(url, "/echo", "{\"action_id\":\"unit:3\"}", 0, &resp);
+    spent = GetTickCount() - started;
+    check(ok, "a normal call still succeeds with no deadline set");
+    if (ok) {
+        check(na_json_string(resp.data, "action_id", out, sizeof(out))
+              && strcmp(out, "unit:3") == 0, "and returns the body intact");
+        na_buf_free(&resp);
+    }
 }
 
 /*
