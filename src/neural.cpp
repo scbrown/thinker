@@ -574,9 +574,39 @@ int na_decide_base_production(int base_id, int native_choice, int has_gov) {
 
     int cached = 0;
     if (call_seq > 1 && na_cache_get(base_id, &cached)) {
-        // Still verified: a base can lose the ability to build something between
-        // calls in the same turn (a rival completes the secret project we picked).
-        return na_item_is_legal(base_id, cached) ? cached : native_choice;
+        /*
+        Re-verified, because the board moves between the engine's calls.
+
+        The decision was taken at call_seq 1; by the time it is replayed the engine
+        has processed other bases, spent minerals and possibly finished a secret
+        project we picked. na_item_is_legal asks the engine's own availability
+        tests again, which is the only authority worth asking.
+
+        A replay that applies what was decided needs no second record — one
+        decision, one record. A replay that DIVERGES absolutely does: without this
+        the log asserted "llm chose X, applied X" while the base quietly built the
+        deterministic tier's answer instead, and nothing anywhere could tell you.
+        That is the exact failure the state guard exists to make visible, and it
+        was invisible on the adapter side.
+        */
+        if (na_item_is_legal(base_id, cached)) {
+            return cached;
+        }
+        NaBuf d;
+        na_buf_init(&d);
+        na_build_base_production(&d, base_id, native_choice, has_gov, call_seq);
+        na_buf_puts(&d, ",\"tier\":\"deterministic\",\"applied\":\"native\"");
+        na_buf_printf(&d, ",\"applied_item\":%d", native_choice);
+        na_buf_puts(&d, ",\"applied_item_name\":\"");
+        na_buf_escaped(&d, prod_name(native_choice));
+        na_buf_printf(&d, "\",\"superseded_item\":%d", cached);
+        na_buf_puts(&d, ",\"fallback_reason\":\"cached choice became illegal before replay\"}");
+        na_log_record(&d);
+        na_buf_free(&d);
+        // Forget it, so the remaining calls this turn do not each re-discover and
+        // re-report the same divergence.
+        na_cache_put(base_id, native_choice);
+        return native_choice;
     }
 
     NaBuf w;
