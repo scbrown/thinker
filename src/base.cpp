@@ -1196,13 +1196,18 @@ int __cdecl mod_base_build(int base_id, int has_gov) {
     debug("choice: %d %s\n", choice, prod_name(choice));
     flushlog();
     /*
-    Neural Amplifier (A0): observe this decision point. Gated on llm_enabled, so
-    a stock build with llm_factions=0 never reaches it. Placed after choice is
-    settled and before the return, which is the one spot where the whole
-    decision is known and still attributable to this base.
+    Neural Amplifier (A1): route this decision to the orchestrator. Gated on
+    llm_enabled, so a stock build with llm_factions=0 never reaches it. Placed
+    after choice is settled and before the return, which is the one spot where
+    the whole decision is known and still attributable to this base.
+
+    `choice` goes in as the fallback and comes back as either itself or the
+    brain's answer, so the assignment is the entire behaviour change: everything
+    that can go wrong downstream returns the value that was already going to be
+    returned here.
     */
     if (llm_enabled(base.faction_id)) {
-        na_observe_base_production(base_id, choice, has_gov);
+        choice = na_decide_base_production(base_id, choice, has_gov);
     }
     return choice;
 }

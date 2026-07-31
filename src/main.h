@@ -167,6 +167,17 @@ struct Config {
     Bit N = faction N, e.g. llm_factions=2 routes faction 1 only.
     */
     int llm_factions = 0;
+    /*
+    Neural Amplifier: how long a decision may wait on the orchestrator before the
+    engine's own answer is applied instead (invariant 9 — the game never stalls
+    waiting on the brain). Bounds the whole exchange, not each stage.
+
+    2500ms is chosen to cover a Haiku call on a warm connection and to be short
+    enough that a dead orchestrator costs a noticeable pause rather than a hung
+    turn. A base is asked several times per turn but only the first call reaches
+    the network, so this is the per-base-turn cost, not the per-call cost.
+    */
+    int llm_timeout_ms = 2500;
     int social_ai = 1;
     int social_ai_bias = 10;
     int tech_balance = 0;

@@ -50,6 +50,8 @@ int option_handler(void* user, const char* section, const char* name, const char
         cf->warn_on_former_replace = atoi(value);
     } else if (MATCH("llm_factions")) {
         cf->llm_factions = atoi(value);
+    } else if (MATCH("llm_timeout_ms")) {
+        cf->llm_timeout_ms = atoi(value);
     } else if (MATCH("llm_endpoint")) {
         char* p = strtrim(buf);
         if (strlen(p)) {

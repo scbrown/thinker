@@ -1,30 +1,55 @@
 #pragma once
 
 #include "main.h"
+#include "na_http.h"
 
 /*
 Neural Amplifier bridge.
 
 Everything the orchestrator needs to see a decision point, and nothing more. The
-adapter stays thin on purpose: it serializes engine state and (later) applies a
-returned choice. It does not decide, and it does not build the decision record —
-that belongs to the orchestrator, which owns the record of truth.
+adapter stays thin on purpose: it serializes engine state and applies a returned
+choice. It does not decide, and it does not build the decision record — that
+belongs to the orchestrator, which owns the record of truth.
 
-A0 milestone: observe only. No HTTP, no blocking, no behaviour change. A faction
-that is not LLM-routed never reaches this code at all.
+Every surface emits the contract (docs/contract.md) directly rather than a shape
+of its own. Three surfaces are still observe-only: they emit a world view, record
+what the deterministic tier chose, and change nothing. base.production is the one
+that closes the loop.
+
+A faction that is not LLM-routed never reaches any of this code.
 */
 
 /*
-Emit one base.production observation. native_choice is Thinker's own pick, which
-remains authoritative until A1 wires the orchestrator's answer back in.
+A1: decide what this base builds, and return the item to build.
 
-has_gov is recorded because mod_base_build fires MORE THAN ONCE per base per turn:
-mod_base_reset is hooked at eleven engine call sites (patch.cpp:859-869 —
-bases_reset, base_production, and four BaseWin entry points), and measured play
-shows exactly two calls per base per turn returning *different* choices. Without a
-discriminator those two lines are indistinguishable, and the orchestrator's
-"exactly one decision record per decision" invariant has no way to tell a fresh
-decision from a re-evaluation of the same one.
+The one function here that changes the game. Posts the world view to the
+orchestrator and applies the choice that comes back, subject to two gates that
+make invariant 1 structural rather than hopeful: the id must parse as one of ours,
+and the item must pass the engine's own availability tests for this base.
+
+Returns `native_choice` unchanged on every failure — unreachable orchestrator,
+timeout, malformed reply, unparseable or illegal id. That is invariant 9: a slow,
+broken or over-budget model costs a decision, never a turn.
+
+Called once per base-turn on the network. mod_base_build fires MORE THAN ONCE per
+base per turn — mod_base_reset is hooked at eleven engine call sites
+(patch.cpp:859-869), and measured play shows two calls per base per turn returning
+*different* choices — so the answer is cached by turn and replayed for the
+remaining calls. Without that, one build decision would cost several model calls
+and the last caller would silently win.
+*/
+int na_decide_base_production(int base_id, int native_choice, int has_gov);
+
+/*
+Emit one base.production world view without deciding anything.
+
+The `observe <base_id>` command-channel probe. Side-effect free by construction:
+no network call, no application, no call_seq consumed and no per-turn cache
+primed — so running it never changes what the base goes on to build.
+
+It exists because a production decision fires on the engine's schedule and
+in-game input cannot be driven at all, which would otherwise make the whole
+serializer unverifiable without playing until a decision happened to occur.
 */
 void na_observe_base_production(int base_id, int native_choice, int has_gov);
 

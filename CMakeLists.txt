@@ -69,7 +69,7 @@ target_link_options(thinkerlib PRIVATE
 )
 target_compile_definitions(thinkerlib PRIVATE BUILD_DLL)
 set_target_properties(thinkerlib PROPERTIES PREFIX "" OUTPUT_NAME "thinker" SUFFIX ".dll")
-target_link_libraries(thinkerlib PRIVATE user32 gdi32 winmm psapi)
+target_link_libraries(thinkerlib PRIVATE user32 gdi32 winmm psapi ws2_32)
 
 # ---------- Launch executable ----------
 file(GLOB THINKER_LAUNCH_SOURCES
@@ -87,3 +87,18 @@ target_link_options(thinker PRIVATE
 )
 set_target_properties(thinker PROPERTIES PREFIX "" SUFFIX ".exe")
 target_link_libraries(thinker PRIVATE thinkerlib user32)
+
+# ---------- Neural Amplifier wire tests ----------
+# src/na_http.cpp links no engine headers on purpose, so it builds into a
+# standalone exe that runs under Wine with no SMAC install present. Everything
+# else in the adapter needs a game to exercise; this does not.
+add_executable(na_http_test EXCLUDE_FROM_ALL
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/na_http_test.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/na_http.cpp
+)
+set_target_properties(na_http_test PROPERTIES PREFIX "" SUFFIX ".exe")
+# Statically linked so it runs in a bare Wine prefix. Without this it needs the
+# cross-compiler's libstdc++/libgcc DLLs on the Wine search path and exits 53
+# with no output, which reads exactly like a hung test rather than a missing DLL.
+target_link_options(na_http_test PRIVATE -static)
+target_link_libraries(na_http_test PRIVATE ws2_32)

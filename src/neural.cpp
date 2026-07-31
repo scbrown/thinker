@@ -27,33 +27,89 @@ static FILE* na_log_open() {
 }
 
 /*
-Write s as a JSON string body, escaping what RFC 8259 requires.
+Commit one finished record to the log.
 
-Faction and base names are player-supplied (base names are editable in-game and
-faction names come from a text file), so they are untrusted input as far as our
-output format is concerned. An unescaped quote would produce a broken line that
-the orchestrator silently drops — the sort of bug that shows up as "coverage is
-mysteriously low" three weeks later.
+Records are built in memory rather than printed straight to the file because A1
+needs the same bytes as an HTTP body, and because the last two fields (`tier`,
+`applied`) are only known after the decision returns — so the line cannot be
+streamed out as it is composed.
+
+A record that failed to build is dropped rather than written. A half-built world
+view is not a smaller world view: it is an unparseable line that the orchestrator
+silently skips, which shows up weeks later as unexplained low coverage.
+*/
+/*
+Escape straight into a FILE*, for the log lines that are not world views.
+
+The autoload trace and the command channel write small fixed records and have no
+reason to allocate a buffer. Routed through na_buf_escaped rather than repeating
+the escape table, because two copies of that table is exactly how one of them
+ends up missing a case.
 */
 static void na_write_escaped(FILE* fp, const char* s) {
-    if (!s) {
+    NaBuf tmp;
+    na_buf_init(&tmp);
+    na_buf_escaped(&tmp, s);
+    if (!tmp.failed && tmp.data) {
+        fputs(tmp.data, fp);
+    }
+    na_buf_free(&tmp);
+}
+
+static void na_log_record(NaBuf* w) {
+    if (w->failed || !w->data) {
         return;
     }
-    for (const unsigned char* p = (const unsigned char*)s; *p; p++) {
-        switch (*p) {
-            case '"':  fputs("\\\"", fp); break;
-            case '\\': fputs("\\\\", fp); break;
-            case '\n': fputs("\\n", fp); break;
-            case '\r': fputs("\\r", fp); break;
-            case '\t': fputs("\\t", fp); break;
-            default:
-                if (*p < 0x20) {
-                    fprintf(fp, "\\u%04x", *p);
-                } else {
-                    fputc(*p, fp);
-                }
-        }
+    FILE* fp = na_log_open();
+    if (!fp) {
+        return;
     }
+    fputs(w->data, fp);
+    fputc('\n', fp);
+    // Flushed per line: a crash mid-turn is exactly when we most want the log,
+    // and terranx.exe crashing is not hypothetical.
+    fflush(fp);
+}
+
+/*
+The contract preamble every world view starts with.
+
+`schema_version`, `engine`, `scope`, `turn` and `faction` are the contract's five
+required fields (contract.py: WorldView); `surface_id` is invariant 5, the coverage
+key, and must match the frozen registry in surfaces.py.
+
+`trace.traceparent` makes the adapter the trace root, which is the right shape:
+the game is the root of the causality, and the orchestrator continues the trace
+rather than starting one (docs/observability.md §4). The DLL's entire telemetry
+job is this field — export stays in the orchestrator because the DLL must not
+block the game's message pump on a network write.
+
+The trace id is built from turn, faction and a per-record counter rather than from
+a random source. It has to be unique within a run and reproducible from the log
+line, and rand() in a game DLL shares the engine's seed — drawing from it would
+perturb map generation and combat, which is a genuinely terrible way to acquire
+a trace id.
+*/
+static unsigned na_trace_seq = 0;
+
+static void na_write_head(NaBuf* w, const char* surface_id, const char* scope, int faction_id) {
+    na_buf_printf(w, "{\"schema_version\":\"0.1\",\"engine\":\"thinker\"");
+    na_buf_printf(w, ",\"scope\":\"%s\",\"surface_id\":\"%s\"", scope, surface_id);
+    na_buf_printf(w, ",\"turn\":%d", *CurrentTurn);
+    na_buf_printf(w, ",\"faction_id\":%d", faction_id);
+    na_buf_puts(w, ",\"faction\":\"");
+    if (faction_id > 0 && faction_id < MaxPlayerNum) {
+        na_buf_escaped(w, MFactions[faction_id].noun_faction);
+    }
+    na_buf_puts(w, "\"");
+    // W3C traceparent: version-traceid(16 bytes)-spanid(8 bytes)-flags, sampled.
+    // The trailing constant keeps the trace id non-zero on turn 0, which the spec
+    // forbids and collectors drop.
+    na_trace_seq++;
+    na_buf_printf(w,
+        ",\"trace\":{\"traceparent\":\"00-%08x%08x%08x%08x-%08x%08x-01\"}",
+        (unsigned)*CurrentTurn, (unsigned)faction_id, na_trace_seq, 0x7a1c0de,
+        na_trace_seq, (unsigned)(*CurrentTurn + 1));
 }
 
 /*
@@ -115,23 +171,42 @@ engine's own encoding (item >= 0 is a unit proto, item < 0 is facility -item) wh
 keeping raw engine numbers out of the contract as opaque ints.
 */
 
+/*
+What choosing this item immediately costs, in the metric vocabulary.
+
+The contract computes a directive trade-off from `Action.effects` and nothing
+else (contract.py: Tradeoff), so an effect that is not declared here cannot be
+weighed against a standing plan — it just silently does not appear. Deriving it
+downstream from `cost` plus `cost_unit` was the previous arrangement and it put
+this adapter's field names inside the orchestrator, which invariant 2 forbids.
+
+Only the immediate, known cost. What the item goes on to be worth is a prediction,
+and predictions do not belong in a field the orchestrator does arithmetic on.
+*/
+static void na_write_effects(NaBuf* w, int minerals) {
+    if (minerals <= 0) {
+        return;
+    }
+    na_buf_printf(w, ",\"effects\":{\"minerals_remaining\":%d}", -minerals);
+}
+
 // Emit the two turn estimates for one candidate item. surplus <= 0 means never, which is
 // real: a base with no mineral surplus genuinely cannot finish anything.
-static void na_write_turns(FILE* fp, int cost, int surplus, int banked, bool is_current) {
+static void na_write_turns(NaBuf* w, int cost, int surplus, int banked, bool is_current) {
     if (surplus <= 0) {
-        fputs(",\"turns_if_switched\":null", fp);
+        na_buf_puts(w, ",\"turns_if_switched\":null");
         return;
     }
     int t_switch = (cost + surplus - 1) / surplus;
-    fprintf(fp, ",\"turns_if_switched\":%d", t_switch);
+    na_buf_printf(w, ",\"turns_if_switched\":%d", t_switch);
     if (is_current) {
         int left = cost - banked;
         if (left < 0) { left = 0; }
-        fprintf(fp, ",\"turns_if_continued\":%d", (left + surplus - 1) / surplus);
+        na_buf_printf(w, ",\"turns_if_continued\":%d", (left + surplus - 1) / surplus);
     }
 }
 
-static void na_write_action_space(FILE* fp, int base_id) {
+static void na_write_action_space(NaBuf* w, int base_id) {
     int count = 0;
     const int faction_id = Bases[base_id].faction_id;
 
@@ -174,7 +249,7 @@ static void na_write_action_space(FILE* fp, int base_id) {
     const int banked = b.minerals_accumulated;
     const int current_item = b.item();
 
-    fputs(",\"action_space\":[", fp);
+    na_buf_puts(w, ",\"action_space\":[");
 
     for (int id = 0; id < MaxProtoNum; id++) {
         /*
@@ -189,11 +264,12 @@ static void na_write_action_space(FILE* fp, int base_id) {
         if (!can_build_unit(base_id, id)) {
             continue;
         }
-        if (count++) { fputs(",", fp); }
-        fprintf(fp, "{\"id\":\"unit:%d\",\"name\":\"", id);
-        na_write_escaped(fp, Units[id].name);
+        if (count++) { na_buf_puts(w, ","); }
+        na_buf_printf(w, "{\"id\":\"unit:%d\",\"action\":\"", id);
+        na_buf_escaped(w, Units[id].name);
         int rows = mod_veh_cost(id, base_id, NULL);
-        fprintf(fp, "\",\"cost\":%d,\"category\":\"unit\"", rows * mineral_factor);
+        na_buf_printf(w, "\",\"cost\":%d,\"category\":\"unit\"", rows * mineral_factor);
+        na_write_effects(w, rows * mineral_factor);
         /*
         A one-line role, because facilities carry CFacility.effect and units carried nothing
         — so a unit's purpose had to come from the model's own recollection of a 1999 game.
@@ -215,15 +291,15 @@ static void na_write_action_space(FILE* fp, int base_id) {
             "infiltrates and sabotages rival factions",
         };
         int plan = Units[id].plan;
-        fputs(",\"role\":\"", fp);
+        na_buf_puts(w, ",\"role\":\"");
         if (plan >= 0 && plan < (int)(sizeof(plan_role)/sizeof(plan_role[0]))) {
-            na_write_escaped(fp, plan_role[plan]);
+            na_buf_escaped(w, plan_role[plan]);
         }
         int tri = Units[id].triad();
-        fprintf(fp, "\",\"triad\":\"%s\"",
+        na_buf_printf(w, "\",\"triad\":\"%s\"",
                 tri == TRIAD_SEA ? "sea" : (tri == TRIAD_AIR ? "air" : "land"));
-        na_write_turns(fp, rows * mineral_factor, surplus, banked, current_item == id);
-        fputs("}", fp);
+        na_write_turns(w, rows * mineral_factor, surplus, banked, current_item == id);
+        na_buf_puts(w, "}");
     }
 
     for (int id = 1; id <= SP_ID_Last; id++) {
@@ -234,20 +310,21 @@ static void na_write_action_space(FILE* fp, int base_id) {
         if (!can_build(base_id, id)) {
             continue;
         }
-        if (count++) { fputs(",", fp); }
-        fprintf(fp, "{\"id\":\"facility:%d\",\"name\":\"", id);
-        na_write_escaped(fp, Facility[id].name);
-        fputs("\",\"effect\":\"", fp);
-        na_write_escaped(fp, Facility[id].effect);
-        fprintf(fp, "\",\"cost\":%d,\"maint\":%d,\"category\":\"%s\"",
+        if (count++) { na_buf_puts(w, ","); }
+        na_buf_printf(w, "{\"id\":\"facility:%d\",\"action\":\"", id);
+        na_buf_escaped(w, Facility[id].name);
+        na_buf_puts(w, "\",\"effect\":\"");
+        na_buf_escaped(w, Facility[id].effect);
+        na_buf_printf(w, "\",\"cost\":%d,\"maint\":%d,\"category\":\"%s\"",
             Facility[id].cost * mineral_factor, Facility[id].maint,
             id >= SP_ID_First ? "project" : "facility");
-        na_write_turns(fp, Facility[id].cost * mineral_factor, surplus, banked,
+        na_write_effects(w, Facility[id].cost * mineral_factor);
+        na_write_turns(w, Facility[id].cost * mineral_factor, surplus, banked,
                        current_item == -id);
-        fputs("}", fp);
+        na_buf_puts(w, "}");
     }
 
-    fprintf(fp, "],\"action_space_size\":%d,\"cost_unit\":\"minerals\"", count);
+    na_buf_printf(w, "],\"action_space_size\":%d,\"cost_unit\":\"minerals\"", count);
 }
 
 /*
@@ -267,17 +344,46 @@ rather than as a gap.
 Only fields the engine maintains directly are shipped. Anything needing a sweep over all
 bases is left out rather than approximated: a metric that is quietly wrong is worse than one
 that is absent, because absent reads as "cannot be checked" and wrong reads as fact.
+
+Emitted under the contract's `metrics` key, which is the one place the orchestrator reads
+numbers by name (contract.py: WorldView.metrics). It used to be `faction_state`, which meant
+the values reached the prompt but not the directive evaluator — every faction-scope directive
+came back UNMEASURABLE while the numbers it wanted were sitting in the same payload.
 */
-static void na_write_faction_state(FILE* fp, int faction_id) {
+static void na_write_metrics(NaBuf* w, int faction_id, int base_id) {
     Faction& plr = Factions[faction_id];
-    fputs(",\"faction_state\":{", fp);
-    fprintf(fp, "\"energy_reserves\":%d", plr.energy_credits);
-    fprintf(fp, ",\"energy_income\":%d", plr.energy_surplus_total);
-    fprintf(fp, ",\"labs_output\":%d", plr.labs_total);
-    fprintf(fp, ",\"base_count\":%d", plr.base_count);
-    fprintf(fp, ",\"pop_total\":%d", plr.pop_total);
-    fprintf(fp, ",\"military_units\":%d", plr.total_combat_units);
-    fputs("}", fp);
+    na_buf_puts(w, ",\"metrics\":{");
+    na_buf_printf(w, "\"energy_reserves\":%d", plr.energy_credits);
+    na_buf_printf(w, ",\"energy_income\":%d", plr.energy_surplus_total);
+    na_buf_printf(w, ",\"labs_output\":%d", plr.labs_total);
+    na_buf_printf(w, ",\"base_count\":%d", plr.base_count);
+    na_buf_printf(w, ",\"pop_total\":%d", plr.pop_total);
+    na_buf_printf(w, ",\"military_units\":%d", plr.total_combat_units);
+    /*
+    Base-scope metrics on base-scope surfaces only.
+
+    A faction-scope decision has no single base to report these for, and emitting
+    one base's numbers on a faction decision would be worse than omitting them:
+    a directive would evaluate against an arbitrary base and read as satisfied.
+    metrics.py marks the scope of every name for exactly this reason.
+    */
+    if (base_id >= 0 && base_id < *BaseCount && base_id < MaxBaseNum) {
+        BASE& b = Bases[base_id];
+        const int total = mineral_cost(base_id, b.item());
+        const int left = total - b.minerals_accumulated;
+        const int remaining = left > 0 ? left : 0;
+        na_buf_printf(w, ",\"mineral_surplus\":%d", b.mineral_surplus);
+        na_buf_printf(w, ",\"minerals_remaining\":%d", remaining);
+        na_buf_printf(w, ",\"pop_size\":%d", (int)b.pop_size);
+        // Omitted rather than guessed when the base cannot finish anything: a
+        // zero here would read as "completes this turn", which is the opposite
+        // of the truth (metrics.py: absent must never read as satisfied).
+        if (b.mineral_surplus > 0) {
+            na_buf_printf(w, ",\"turns_to_completion\":%d",
+                (remaining + b.mineral_surplus - 1) / b.mineral_surplus);
+        }
+    }
+    na_buf_puts(w, "}");
 }
 
 
@@ -288,71 +394,257 @@ Ships accumulated minerals and surplus separately rather than a pre-computed
 "turns remaining". A partially built item makes that arithmetic subtly wrong, and a
 number that is quietly wrong is worse than two numbers the brain can divide.
 */
-static void na_write_base_state(FILE* fp, int base_id) {
+static void na_write_base_state(NaBuf* w, int base_id) {
     BASE& b = Bases[base_id];
-    fputs(",\"base_state\":{", fp);
-    fprintf(fp, "\"pop_size\":%d", (int)b.pop_size);
-    fprintf(fp, ",\"minerals_accumulated\":%d", b.minerals_accumulated);
-    fprintf(fp, ",\"mineral_surplus\":%d", b.mineral_surplus);
-    fprintf(fp, ",\"nutrient_intake\":%d", b.nutrient_intake);
-    fprintf(fp, ",\"mineral_intake\":%d", b.mineral_intake);
-    fprintf(fp, ",\"energy_intake\":%d", b.energy_intake);
-    fprintf(fp, ",\"eco_damage\":%d", b.eco_damage);
-    fprintf(fp, ",\"worked_tiles\":%d", b.worked_tiles);
-    fprintf(fp, ",\"specialists\":%d", b.specialist_total);
-    fprintf(fp, ",\"queue_size\":%d", b.queue_size);
-    fprintf(fp, ",\"current_item\":%d", b.item());
-    fputs(",\"current_item_name\":\"", fp);
-    na_write_escaped(fp, prod_name(b.item()));
-    fputs("\"}", fp);
+    na_buf_puts(w, ",\"base_state\":{");
+    na_buf_printf(w, "\"pop_size\":%d", (int)b.pop_size);
+    na_buf_printf(w, ",\"minerals_accumulated\":%d", b.minerals_accumulated);
+    na_buf_printf(w, ",\"mineral_surplus\":%d", b.mineral_surplus);
+    na_buf_printf(w, ",\"nutrient_intake\":%d", b.nutrient_intake);
+    na_buf_printf(w, ",\"mineral_intake\":%d", b.mineral_intake);
+    na_buf_printf(w, ",\"energy_intake\":%d", b.energy_intake);
+    na_buf_printf(w, ",\"eco_damage\":%d", b.eco_damage);
+    na_buf_printf(w, ",\"worked_tiles\":%d", b.worked_tiles);
+    na_buf_printf(w, ",\"specialists\":%d", b.specialist_total);
+    na_buf_printf(w, ",\"queue_size\":%d", b.queue_size);
+    na_buf_printf(w, ",\"current_item\":%d", b.item());
+    na_buf_puts(w, ",\"current_item_name\":\"");
+    na_buf_escaped(w, prod_name(b.item()));
+    na_buf_puts(w, "\"}");
 }
 
+// Build the contract world view for one base's production decision.
+static void na_build_base_production(NaBuf* w, int base_id, int native_choice,
+                                     int has_gov, int call_seq) {
+    BASE& base = Bases[base_id];
+    int faction_id = base.faction_id;
+
+    na_write_head(w, "base.production", "base", faction_id);
+    na_buf_printf(w, ",\"base_id\":%d", base_id);
+    na_buf_puts(w, ",\"base\":\"");
+    na_buf_escaped(w, base.name);
+    na_buf_puts(w, "\"");
+    na_buf_printf(w, ",\"x\":%d,\"y\":%d", base.x, base.y);
+
+    /*
+    The engine's own pick, always recorded.
+
+    It is no longer merely a record: it is the fallback this decision degrades to
+    (invariant 9), so the log line shows both what the deterministic tier would
+    have done and what actually ran. Losing that comparison is how an A/B against
+    the deterministic tier (na-6db) stops being possible.
+    */
+    na_buf_printf(w, ",\"native_choice\":%d", native_choice);
+    // has_gov is mod_base_build's own second parameter. Kept because it is free and
+    // documents the call's context, but it does NOT discriminate between repeated
+    // calls — measured 0 on every sample. call_seq is what does.
+    na_buf_printf(w, ",\"has_gov\":%d", has_gov);
+    na_buf_printf(w, ",\"call_seq\":%d", call_seq);
+    na_buf_puts(w, ",\"native_choice_name\":\"");
+    na_buf_escaped(w, prod_name(native_choice));
+    na_buf_puts(w, "\"");
+    na_write_base_state(w, base_id);
+    na_write_metrics(w, faction_id, base_id);
+    na_write_action_space(w, base_id);
+}
+
+/*
+The side-effect-free probe: emit a world view for one base and decide nothing.
+
+Kept as a separate entry point from na_decide_base_production rather than a flag
+on it, because the two differ in every way that matters — the probe does not
+touch the network, does not apply anything, and must not consume a call_seq or
+prime the per-turn cache. A flag would leave one function whose contract is "does
+nothing, unless" and one line of the caller deciding which.
+
+call_seq is emitted as 0, which no real decision ever uses, so a probe line can
+never be mistaken for a decision when the log is analysed.
+*/
 void na_observe_base_production(int base_id, int native_choice, int has_gov) {
     if (base_id < 0 || base_id >= *BaseCount || base_id >= MaxBaseNum) {
         return;
     }
-    FILE* fp = na_log_open();
-    if (!fp) {
-        return;
+    NaBuf w;
+    na_buf_init(&w);
+    na_build_base_production(&w, base_id, native_choice, has_gov, 0);
+    na_buf_puts(&w, ",\"tier\":\"probe\",\"applied\":\"none\"}");
+    na_log_record(&w);
+    na_buf_free(&w);
+}
+
+/*
+Map a contract action id back onto the engine's item encoding.
+
+The inverse of the ids na_write_action_space emits. Returns false for anything
+that is not one of ours, which includes the case that matters: a model inventing
+a plausible-looking id. That is invariant 1 — an illegal order must be impossible,
+not merely unlikely — and the second half of it is the caller's membership check
+against the action space, because a well-formed "unit:99" is still not buildable
+in this base.
+*/
+static bool na_parse_item_id(const char* id, int* item) {
+    if (!id) {
+        return false;
     }
-    BASE& base = Bases[base_id];
-    int faction_id = base.faction_id;
-
-    // surface_id is the contract's coverage key and must match the frozen
-    // registry in the orchestrator (surfaces.py: "base.production").
-    fprintf(fp, "{\"surface_id\":\"base.production\",\"engine\":\"thinker\"");
-    fprintf(fp, ",\"turn\":%d", *CurrentTurn);
-    fprintf(fp, ",\"faction_id\":%d", faction_id);
-    fputs(",\"faction\":\"", fp);
-    if (faction_id > 0 && faction_id < MaxPlayerNum) {
-        na_write_escaped(fp, MFactions[faction_id].noun_faction);
+    int n = 0;
+    if (sscanf(id, "unit:%d", &n) == 1 && n >= 0 && n < MaxProtoNum) {
+        *item = n;
+        return true;
     }
-    fputs("\"", fp);
-    fprintf(fp, ",\"base_id\":%d", base_id);
-    fputs(",\"base\":\"", fp);
-    na_write_escaped(fp, base.name);
-    fputs("\"", fp);
-    fprintf(fp, ",\"x\":%d,\"y\":%d", base.x, base.y);
+    if (sscanf(id, "facility:%d", &n) == 1 && n > 0 && n <= SP_ID_Last) {
+        *item = -n;  // the engine encodes a facility as its negated id
+        return true;
+    }
+    return false;
+}
 
-    // Thinker's own pick. Recorded, not overridden: until A1 this is still what
-    // the engine executes, so the log shows what the deterministic tier chose.
-    fprintf(fp, ",\"native_choice\":%d", native_choice);
-    // has_gov is mod_base_build's own second parameter. Kept because it is free and
-    // documents the call's context, but it does NOT discriminate between repeated
-    // calls — measured 0 on every sample. call_seq is what does.
-    fprintf(fp, ",\"has_gov\":%d", has_gov);
-    fprintf(fp, ",\"call_seq\":%d", na_next_call_seq(base_id));
-    fputs(",\"native_choice_name\":\"", fp);
-    na_write_escaped(fp, prod_name(native_choice));
-    fputs("\"", fp);
-    na_write_base_state(fp, base_id);
-    na_write_faction_state(fp, faction_id);
-    na_write_action_space(fp, base_id);
-    fputs(",\"tier\":\"deterministic\",\"applied\":\"native\"}\n", fp);
+/*
+Is `item` actually in this base's action space?
 
-    // Flushed per line: a crash mid-turn is exactly when we most want the log,
-    // and terranx.exe crashing is not hypothetical.
-    fflush(fp);
+Re-runs the engine's own availability tests rather than re-parsing the JSON we
+just built. The action space is generated from these calls, so asking them again
+is asking the same authority the same question — and it costs a few hundred
+integer comparisons, which is nothing against a network round trip.
+*/
+static bool na_item_is_legal(int base_id, int item) {
+    int faction_id = Bases[base_id].faction_id;
+    if (item >= 0) {
+        return mod_veh_avail(item, faction_id, base_id) && can_build_unit(base_id, item);
+    }
+    int id = -item;
+    return id > 0 && id <= SP_ID_Last
+        && mod_facility_avail((FacilityId)id, faction_id, base_id, 0)
+        && can_build(base_id, id);
+}
+
+/*
+One base-turn, one decision.
+
+The engine asks the same base several times per turn (see na_next_call_seq), and
+each call applies its own answer. Asking the orchestrator every time would mean
+paying for several model calls to settle one build and letting the last one win —
+so the answer from call_seq 1 is cached and replayed for the rest of the turn.
+That is also what makes "one decision record per decision" true rather than
+aspirational.
+*/
+static int na_cached_turn[MaxBaseNum];
+static int na_cached_item[MaxBaseNum];
+static bool na_cached_init = false;
+
+static bool na_cache_get(int base_id, int* item) {
+    if (!na_cached_init) {
+        for (int i = 0; i < MaxBaseNum; i++) {
+            na_cached_turn[i] = -1;
+            na_cached_item[i] = 0;
+        }
+        na_cached_init = true;
+    }
+    if (na_cached_turn[base_id] == *CurrentTurn) {
+        *item = na_cached_item[base_id];
+        return true;
+    }
+    return false;
+}
+
+static void na_cache_put(int base_id, int item) {
+    na_cached_turn[base_id] = *CurrentTurn;
+    na_cached_item[base_id] = item;
+}
+
+/*
+A1: the first decision the brain actually gets to make.
+
+Returns the item this base should build. Every failure path returns
+`native_choice` — unreachable orchestrator, timeout, malformed reply, an id we
+cannot parse, an id that is not legal here. That is invariant 9 stated as
+control flow: there is exactly one `return` that is not the native choice, and it
+is guarded by both a parse and a legality check.
+
+The call is synchronous on the engine thread, bounded by conf.llm_timeout_ms.
+Synchronous because the engine is not thread-safe and mod_base_build's signature
+(one int in, one int out) has nowhere to park a decision and resume it later;
+bounded because a turn-based game can afford a short pause and cannot afford an
+open-ended one.
+*/
+int na_decide_base_production(int base_id, int native_choice, int has_gov) {
+    if (base_id < 0 || base_id >= *BaseCount || base_id >= MaxBaseNum) {
+        return native_choice;
+    }
+    const int call_seq = na_next_call_seq(base_id);
+
+    int cached = 0;
+    if (call_seq > 1 && na_cache_get(base_id, &cached)) {
+        // Still verified: a base can lose the ability to build something between
+        // calls in the same turn (a rival completes the secret project we picked).
+        return na_item_is_legal(base_id, cached) ? cached : native_choice;
+    }
+
+    NaBuf w;
+    na_buf_init(&w);
+    na_build_base_production(&w, base_id, native_choice, has_gov, call_seq);
+
+    int applied = native_choice;
+    const char* tier = "deterministic";
+    const char* how = "native";
+    char detail[192];
+    detail[0] = '\0';
+
+    if (w.failed) {
+        snprintf(detail, sizeof(detail), "world view could not be built");
+    } else {
+        /*
+        The record and the request body are the same bytes, and they differ only
+        by the outcome fields appended after the call returns. So the object is
+        closed in place, sent, then reopened by rewinding the length — rather than
+        copying a world view that runs to tens of kilobytes just to add two fields.
+        */
+        const size_t open_len = w.len;
+        na_buf_puts(&w, "}");
+        NaBuf body;
+        if (!w.failed && na_http_post(llm_endpoint.c_str(), "/decide", w.data,
+                                      conf.llm_timeout_ms, &body)) {
+            char action_id[64];
+            int item = 0;
+            if (!na_json_string(body.data, "action_id", action_id, sizeof(action_id))) {
+                snprintf(detail, sizeof(detail), "no action_id in reply");
+            } else if (!na_parse_item_id(action_id, &item)) {
+                snprintf(detail, sizeof(detail), "unparseable action_id %.48s", action_id);
+            } else if (!na_item_is_legal(base_id, item)) {
+                // The invariant-1 backstop. Worth its own detail string: an id that
+                // parses but is not legal means the action space and the reply
+                // disagree, which is a bug in us, not a bad model day.
+                snprintf(detail, sizeof(detail), "illegal action_id %.48s", action_id);
+            } else {
+                applied = item;
+                tier = "llm";
+                how = na_json_true(body.data, "degraded") ? "llm_degraded" : "llm";
+            }
+            na_buf_free(&body);
+        } else {
+            snprintf(detail, sizeof(detail), "orchestrator unreachable or slow");
+        }
+        if (!w.failed) {
+            w.len = open_len;
+            w.data[w.len] = '\0';
+        }
+    }
+
+    na_cache_put(base_id, applied);
+
+    na_buf_printf(&w, ",\"tier\":\"%s\",\"applied\":\"%s\"", tier, how);
+    na_buf_printf(&w, ",\"applied_item\":%d", applied);
+    na_buf_puts(&w, ",\"applied_item_name\":\"");
+    na_buf_escaped(&w, prod_name(applied));
+    na_buf_puts(&w, "\"");
+    if (detail[0]) {
+        na_buf_puts(&w, ",\"fallback_reason\":\"");
+        na_buf_escaped(&w, detail);
+        na_buf_puts(&w, "\"");
+    }
+    na_buf_puts(&w, "}");
+    na_log_record(&w);
+    na_buf_free(&w);
+    return applied;
 }
 
 /*
@@ -417,56 +709,50 @@ Those are included on purpose: they are what the deterministic tier would use, s
 them lets the brain see the native reasoning it is being asked to improve on, and lets a
 reviewer tell a considered disagreement from a coin flip.
 */
-static void na_write_tech_action_space(FILE* fp, int faction_id) {
+static void na_write_tech_action_space(NaBuf* w, int faction_id) {
     int count = 0;
-    fputs(",\"action_space\":[", fp);
+    na_buf_puts(w, ",\"action_space\":[");
     for (int id = 0; id < MaxTechnologyNum; id++) {
         if (!tech_avail(id, faction_id)) {
             continue;
         }
-        if (count++) { fputs(",", fp); }
-        fprintf(fp, "{\"id\":\"tech:%d\",\"name\":\"", id);
-        na_write_escaped(fp, Tech[id].name);
-        fputs("\",\"category\":\"tech\"", fp);
-        fprintf(fp, ",\"ai_weights\":{\"growth\":%d,\"tech\":%d,\"wealth\":%d,\"power\":%d}",
+        if (count++) { na_buf_puts(w, ","); }
+        na_buf_printf(w, "{\"id\":\"tech:%d\",\"action\":\"", id);
+        na_buf_escaped(w, Tech[id].name);
+        na_buf_puts(w, "\",\"category\":\"tech\"");
+        na_buf_printf(w, ",\"ai_weights\":{\"growth\":%d,\"tech\":%d,\"wealth\":%d,\"power\":%d}",
                 Tech[id].AI_growth, Tech[id].AI_tech, Tech[id].AI_wealth, Tech[id].AI_power);
-        fputs("}", fp);
+        na_buf_puts(w, "}");
     }
-    fprintf(fp, "],\"action_space_size\":%d", count);
+    na_buf_printf(w, "],\"action_space_size\":%d", count);
 }
 
 void na_observe_faction_tech(int faction_id, int native_choice) {
     if (faction_id <= 0 || faction_id >= MaxPlayerNum) {
         return;
     }
-    FILE* fp = na_log_open();
-    if (!fp) {
-        return;
-    }
     Faction& plr = Factions[faction_id];
-
-    fprintf(fp, "{\"surface_id\":\"faction.tech\",\"engine\":\"thinker\"");
-    fprintf(fp, ",\"turn\":%d", *CurrentTurn);
-    fprintf(fp, ",\"faction_id\":%d", faction_id);
-    fputs(",\"faction\":\"", fp);
-    na_write_escaped(fp, MFactions[faction_id].noun_faction);
-    fputs("\"", fp);
+    NaBuf wb;
+    NaBuf* w = &wb;
+    na_buf_init(w);
+    na_write_head(w, "faction.tech", "turn", faction_id);
 
     // Faction research and economic state - categories 1 and 4 of the input checklist.
-    na_write_faction_state(fp, faction_id);
-    fprintf(fp, ",\"tech_accumulated\":%d", plr.tech_accumulated);
-    fprintf(fp, ",\"tech_rate\":%d", mod_tech_rate(faction_id));
+    na_write_metrics(w, faction_id, -1);
+    na_buf_printf(w, ",\"tech_accumulated\":%d", plr.tech_accumulated);
+    na_buf_printf(w, ",\"tech_rate\":%d", mod_tech_rate(faction_id));
 
-    fprintf(fp, ",\"native_choice\":%d", native_choice);
-    fputs(",\"native_choice_name\":\"", fp);
+    na_buf_printf(w, ",\"native_choice\":%d", native_choice);
+    na_buf_puts(w, ",\"native_choice_name\":\"");
     if (native_choice >= 0 && native_choice < MaxTechnologyNum) {
-        na_write_escaped(fp, Tech[native_choice].name);
+        na_buf_escaped(w, Tech[native_choice].name);
     }
-    fputs("\"", fp);
+    na_buf_puts(w, "\"");
 
-    na_write_tech_action_space(fp, faction_id);
-    fputs(",\"tier\":\"deterministic\",\"applied\":\"native\"}\n", fp);
-    fflush(fp);
+    na_write_tech_action_space(w, faction_id);
+    na_buf_puts(w, ",\"tier\":\"deterministic\",\"applied\":\"native\"}");
+    na_log_record(w);
+    na_buf_free(w);
 }
 
 /*
@@ -478,36 +764,29 @@ void na_observe_faction_se(int faction_id, int field, int model, int cost) {
     if (faction_id <= 0 || faction_id >= MaxPlayerNum) {
         return;
     }
-    FILE* fp = na_log_open();
-    if (!fp) {
-        return;
-    }
     Faction& plr = Factions[faction_id];
     const int* current = &plr.SE_Politics;
-
-    fprintf(fp, "{\"surface_id\":\"faction.se\",\"engine\":\"thinker\"");
-    fprintf(fp, ",\"turn\":%d", *CurrentTurn);
-    fprintf(fp, ",\"faction_id\":%d", faction_id);
-    fputs(",\"faction\":\"", fp);
-    na_write_escaped(fp, MFactions[faction_id].noun_faction);
-    fputs("\"", fp);
+    NaBuf wb;
+    NaBuf* w = &wb;
+    na_buf_init(w);
+    na_write_head(w, "faction.se", "turn", faction_id);
 
     // Current settings, by name rather than index — an index means nothing in a prompt.
-    fputs(",\"current\":{", fp);
+    na_buf_puts(w, ",\"current\":{");
     for (int f = 0; f < MaxSocialCatNum; f++) {
         int m = current[f];
-        if (f) { fputs(",", fp); }
-        fputs("\"", fp);
-        na_write_escaped(fp, SocialField[f].field_name);
-        fputs("\":\"", fp);
+        if (f) { na_buf_puts(w, ","); }
+        na_buf_puts(w, "\"");
+        na_buf_escaped(w, SocialField[f].field_name);
+        na_buf_puts(w, "\":\"");
         if (m >= 0 && m < MaxSocialModelNum) {
-            na_write_escaped(fp, SocialField[f].soc_name[m]);
+            na_buf_escaped(w, SocialField[f].soc_name[m]);
         }
-        fputs("\"", fp);
+        na_buf_puts(w, "\"");
     }
-    fputs("}", fp);
+    na_buf_puts(w, "}");
 
-    na_write_faction_state(fp, faction_id);
+    na_write_metrics(w, faction_id, -1);
 
     /*
     The action space: every (field, model) the faction may legally adopt.
@@ -518,7 +797,7 @@ void na_observe_faction_se(int faction_id, int field, int model, int cost) {
     grounding only advises.
     */
     int count = 0;
-    fputs(",\"action_space\":[{\"id\":\"se:none\",\"name\":\"No change\",\"category\":\"se\"}", fp);
+    na_buf_puts(w, ",\"action_space\":[{\"id\":\"se:none\",\"action\":\"No change\",\"category\":\"se\"}");
     count++;
     for (int f = 0; f < MaxSocialCatNum; f++) {
         for (int m = 0; m < MaxSocialModelNum; m++) {
@@ -548,11 +827,11 @@ void na_observe_faction_se(int faction_id, int field, int model, int cost) {
             The category travels as its own field, which is where a consumer that wants the
             composed form should build it from.
             */
-            fprintf(fp, ",{\"id\":\"se:%d:%d\",\"name\":\"", f, m);
-            na_write_escaped(fp, SocialField[f].soc_name[m]);
-            fputs("\",\"field\":\"", fp);
-            na_write_escaped(fp, SocialField[f].field_name);
-            fputs("\",\"category\":\"se\",\"effects\":{", fp);
+            na_buf_printf(w, ",{\"id\":\"se:%d:%d\",\"action\":\"", f, m);
+            na_buf_escaped(w, SocialField[f].soc_name[m]);
+            na_buf_puts(w, "\",\"field\":\"");
+            na_buf_escaped(w, SocialField[f].field_name);
+            na_buf_puts(w, "\",\"category\":\"se\",\"effects\":{");
             /*
             The effect deltas, without which this is not a decidable comparison — the same
             mistake as shipping build options without cost. "Democratic" tells the brain
@@ -571,10 +850,10 @@ void na_observe_faction_se(int faction_id, int field, int model, int cost) {
                 if (!v) {
                     continue;
                 }
-                if (shown++) { fputs(",", fp); }
-                fprintf(fp, "\"%s\":%d", eff_names[e], v);
+                if (shown++) { na_buf_puts(w, ","); }
+                na_buf_printf(w, "\"%s\":%d", eff_names[e], v);
             }
-            fputs("}", fp);
+            na_buf_puts(w, "}");
 
             /*
             Per-option upheaval cost, and affordability derived from it.
@@ -597,28 +876,29 @@ void na_observe_faction_se(int faction_id, int field, int model, int cost) {
             memcpy(&candidate, &plr.SE_Politics, sizeof(candidate));
             candidate.models[f] = m;
             int upheaval = social_upheaval(faction_id, &candidate);
-            fprintf(fp, ",\"cost\":%d,\"cost_unit\":\"credits\"", upheaval);
-            fprintf(fp, ",\"affordable\":%s",
+            na_buf_printf(w, ",\"cost\":%d,\"cost_unit\":\"credits\"", upheaval);
+            na_buf_printf(w, ",\"affordable\":%s",
                     upheaval <= plr.energy_credits ? "true" : "false");
-            fputs("}", fp);
+            na_buf_puts(w, "}");
         }
     }
-    fprintf(fp, "],\"action_space_size\":%d", count);
+    na_buf_printf(w, "],\"action_space_size\":%d", count);
 
     if (field >= 0 && field < MaxSocialCatNum && model >= 0 && model < MaxSocialModelNum) {
-        fprintf(fp, ",\"native_choice\":\"se:%d:%d\"", field, model);
-        fputs(",\"native_choice_name\":\"", fp);
-        na_write_escaped(fp, SocialField[field].field_name);
-        fputs(" -> ", fp);
-        na_write_escaped(fp, SocialField[field].soc_name[model]);
-        fprintf(fp, "\",\"upheaval_cost\":%d", cost);
+        na_buf_printf(w, ",\"native_choice\":\"se:%d:%d\"", field, model);
+        na_buf_puts(w, ",\"native_choice_name\":\"");
+        na_buf_escaped(w, SocialField[field].field_name);
+        na_buf_puts(w, " -> ");
+        na_buf_escaped(w, SocialField[field].soc_name[model]);
+        na_buf_printf(w, "\",\"upheaval_cost\":%d", cost);
     } else {
-        fputs(",\"native_choice\":\"se:none\",\"native_choice_name\":\"No change\"", fp);
-        fputs(",\"upheaval_cost\":0", fp);
+        na_buf_puts(w, ",\"native_choice\":\"se:none\",\"native_choice_name\":\"No change\"");
+        na_buf_puts(w, ",\"upheaval_cost\":0");
     }
 
-    fputs(",\"tier\":\"deterministic\",\"applied\":\"native\"}\n", fp);
-    fflush(fp);
+    na_buf_puts(w, ",\"tier\":\"deterministic\",\"applied\":\"native\"}");
+    na_log_record(w);
+    na_buf_free(w);
 }
 
 /*
@@ -638,12 +918,11 @@ void na_observe_base_hurry(int base_id, int item, int minerals_before, int credi
     if (base_id < 0 || base_id >= *BaseCount || base_id >= MaxBaseNum) {
         return;
     }
-    FILE* fp = na_log_open();
-    if (!fp) {
-        return;
-    }
     BASE& base = Bases[base_id];
     const int faction_id = base.faction_id;
+    NaBuf wb;
+    NaBuf* w = &wb;
+    na_buf_init(w);
 
     const int total = mineral_cost(base_id, item);
     const int remaining = total - minerals_before;
@@ -652,32 +931,39 @@ void na_observe_base_hurry(int base_id, int item, int minerals_before, int credi
     const int turns_if_waiting =
         surplus > 0 && remaining > 0 ? (remaining + surplus - 1) / surplus : 0;
 
-    fprintf(fp, "{\"surface_id\":\"base.hurry\",\"engine\":\"thinker\"");
-    fprintf(fp, ",\"turn\":%d", *CurrentTurn);
-    fprintf(fp, ",\"faction_id\":%d", faction_id);
-    fputs(",\"faction\":\"", fp);
-    if (faction_id > 0 && faction_id < MaxPlayerNum) {
-        na_write_escaped(fp, MFactions[faction_id].noun_faction);
-    }
-    fputs("\"", fp);
-    fprintf(fp, ",\"base_id\":%d", base_id);
-    fputs(",\"base\":\"", fp);
-    na_write_escaped(fp, base.name);
-    fputs("\"", fp);
+    na_write_head(w, "base.hurry", "base", faction_id);
+    na_buf_printf(w, ",\"base_id\":%d", base_id);
+    na_buf_puts(w, ",\"base\":\"");
+    na_buf_escaped(w, base.name);
+    na_buf_puts(w, "\"");
 
-    fputs(",\"item\":\"", fp);
-    na_write_escaped(fp, prod_name(item));
-    fputs("\"", fp);
-    fputs(",\"base_state\":{", fp);
-    fprintf(fp, "\"minerals_accumulated\":%d", minerals_before);
-    fprintf(fp, ",\"mineral_cost_total\":%d", total);
-    fprintf(fp, ",\"minerals_remaining\":%d", remaining > 0 ? remaining : 0);
-    fprintf(fp, ",\"mineral_surplus\":%d", surplus);
-    fprintf(fp, ",\"turns_if_waiting\":%d", turns_if_waiting);
-    fprintf(fp, ",\"energy_reserves\":%d", credits_before);
-    fprintf(fp, ",\"pop_size\":%d", (int)base.pop_size);
-    fputs("}", fp);
-    na_write_faction_state(fp, faction_id);
+    na_buf_puts(w, ",\"item\":\"");
+    na_buf_escaped(w, prod_name(item));
+    na_buf_puts(w, "\"");
+
+    /*
+    The entity this decision is ABOUT, as opposed to the entities it chooses between.
+
+    Retrieval keys off action labels, which works for base.production ("Colony Pod" is
+    a node in the datalinks) and retrieves nothing at all here: this surface offers
+    "Hurry production" and "Do not hurry", and neither is in any graph. Measured, that
+    left base.hurry the least grounded surface we have. The item being hurried is the
+    subject, and naming it is the adapter's job — the orchestrator must not go digging
+    through an engine's own field layout to guess (invariant 2).
+    */
+    na_buf_puts(w, ",\"subjects\":[\"");
+    na_buf_escaped(w, prod_name(item));
+    na_buf_puts(w, "\"]");
+    na_buf_puts(w, ",\"base_state\":{");
+    na_buf_printf(w, "\"minerals_accumulated\":%d", minerals_before);
+    na_buf_printf(w, ",\"mineral_cost_total\":%d", total);
+    na_buf_printf(w, ",\"minerals_remaining\":%d", remaining > 0 ? remaining : 0);
+    na_buf_printf(w, ",\"mineral_surplus\":%d", surplus);
+    na_buf_printf(w, ",\"turns_if_waiting\":%d", turns_if_waiting);
+    na_buf_printf(w, ",\"energy_reserves\":%d", credits_before);
+    na_buf_printf(w, ",\"pop_size\":%d", (int)base.pop_size);
+    na_buf_puts(w, "}");
+    na_write_metrics(w, faction_id, base_id);
 
     /*
     Affordability is part of the action space, not advice. An option the faction cannot pay for
@@ -685,17 +971,23 @@ void na_observe_base_hurry(int base_id, int item, int minerals_before, int credi
     "decide" something that was never available.
     */
     const bool affordable = base.can_hurry_item() && cost > 0 && cost <= credits_before;
-    fputs(",\"action_space\":[{\"id\":\"hurry:none\",\"name\":\"Do not hurry\"", fp);
-    fputs(",\"cost\":0,\"cost_unit\":\"credits\"}", fp);
+    na_buf_puts(w, ",\"action_space\":[{\"id\":\"hurry:none\",\"action\":\"Do not hurry\"");
+    na_buf_puts(w, ",\"cost\":0,\"cost_unit\":\"credits\"}");
     if (affordable) {
-        fprintf(fp, ",{\"id\":\"hurry:now\",\"name\":\"Hurry production\",\"cost\":%d", cost);
-        fprintf(fp, ",\"cost_unit\":\"credits\",\"saves_turns\":%d}", turns_if_waiting);
+        na_buf_printf(w, ",{\"id\":\"hurry:now\",\"action\":\"Hurry production\",\"cost\":%d", cost);
+        na_buf_printf(w, ",\"cost_unit\":\"credits\",\"saves_turns\":%d", turns_if_waiting);
+        // Spends credits and completes the item, so it moves two metrics. Both are
+        // declared: the orchestrator computes a directive trade-off from `effects`
+        // and nothing else, so an undeclared effect is an invisible one.
+        na_buf_printf(w, ",\"effects\":{\"energy_reserves\":%d,\"minerals_remaining\":%d}}",
+                      -cost, -(remaining > 0 ? remaining : 0));
     }
-    fprintf(fp, "],\"action_space_size\":%d", affordable ? 2 : 1);
+    na_buf_printf(w, "],\"action_space_size\":%d", affordable ? 2 : 1);
 
-    fprintf(fp, ",\"native_choice\":\"%s\"", native_hurried ? "hurry:now" : "hurry:none");
-    fputs(",\"tier\":\"deterministic\",\"applied\":\"native\"}\n", fp);
-    fflush(fp);
+    na_buf_printf(w, ",\"native_choice\":\"%s\"", native_hurried ? "hurry:now" : "hurry:none");
+    na_buf_puts(w, ",\"tier\":\"deterministic\",\"applied\":\"native\"}");
+    na_log_record(w);
+    na_buf_free(w);
 }
 
 /*
