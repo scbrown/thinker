@@ -92,6 +92,47 @@ a trace id.
 */
 static unsigned na_trace_seq = 0;
 
+/*
+Fixed per process, varying between runs. Wall-clock at first use: this separates two runs of
+the same save, which the turn/faction/counter triple alone cannot — replay the same save and
+every trace id repeats, so two runs collate into one trace and the spans interleave.
+
+Deliberately not drawn from the engine's RNG, which is the *game's* RNG: this is a correlation
+id, not a secret, and perturbing map generation to obtain one would be a bad trade.
+*/
+static unsigned int na_session_salt() {
+    static unsigned int salt = 0;
+    if (salt == 0) {
+        salt = (unsigned int)time(NULL);
+    }
+    return salt;
+}
+
+/*
+What the engine knows about the asymmetry this decision was made under.
+
+**fairness** stamps only the two inputs the engine actually has: which slot this faction is,
+and the difficulty. The ledger itself is derived in the orchestrator (fairness.py) because
+three of its entries change which side they favour as difficulty moves and two are inert under
+the fork's shipped defaults — a static list hardcoded here would declare handicaps that are not
+in force and mislabel ones that are. Reporting the inputs and deriving the rules in one place
+is the division that keeps the ledger honest.
+*/
+static void na_write_fairness(NaBuf* w, int faction_id) {
+    static const char* levels[] = {
+        "citizen", "specialist", "talent", "librarian", "thinker", "transcend"
+    };
+    const int level = *DiffLevel;
+    na_buf_puts(w, ",\"fairness\":{\"slot\":\"");
+    na_buf_puts(w, is_human(faction_id) ? "human" : "ai");
+    na_buf_puts(w, "\",\"difficulty\":\"");
+    na_buf_puts(w, level >= 0 && level < 6 ? levels[level] : "unknown");
+    // handicaps is deliberately EMPTY, not absent: the orchestrator derives the ledger from
+    // these two inputs. An adapter that knows asymmetries the ledger does not model may stamp
+    // its own entries instead, and fairness.drift checks those rather than replacing them.
+    na_buf_puts(w, "\",\"handicaps\":[]}");
+}
+
 static void na_write_head(NaBuf* w, const char* surface_id, const char* scope, int faction_id) {
     na_buf_printf(w, "{\"schema_version\":\"0.1\",\"engine\":\"thinker\"");
     na_buf_printf(w, ",\"scope\":\"%s\",\"surface_id\":\"%s\"", scope, surface_id);
@@ -104,12 +145,16 @@ static void na_write_head(NaBuf* w, const char* surface_id, const char* scope, i
     na_buf_puts(w, "\"");
     // W3C traceparent: version-traceid(16 bytes)-spanid(8 bytes)-flags, sampled.
     // The trailing constant keeps the trace id non-zero on turn 0, which the spec
-    // forbids and collectors drop.
+    // forbids and collectors drop. The salt is folded into the turn word rather than
+    // replacing that constant, so the non-zero guarantee does not come to depend on
+    // what the clock happened to read.
     na_trace_seq++;
     na_buf_printf(w,
         ",\"trace\":{\"traceparent\":\"00-%08x%08x%08x%08x-%08x%08x-01\"}",
-        (unsigned)*CurrentTurn, (unsigned)faction_id, na_trace_seq, 0x7a1c0de,
+        (unsigned)*CurrentTurn ^ na_session_salt(), (unsigned)faction_id,
+        na_trace_seq, 0x7a1c0de,
         na_trace_seq, (unsigned)(*CurrentTurn + 1));
+    na_write_fairness(w, faction_id);
 }
 
 /*
