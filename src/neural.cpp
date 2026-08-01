@@ -870,6 +870,15 @@ reviewer tell a considered disagreement from a coin flip.
 */
 static void na_write_tech_action_space(NaBuf* w, int faction_id) {
     int count = 0;
+    /*
+    Cost is per-tech ONLY under Thinker's revised_tech_cost house rule (tech.cpp:294); stock
+    SMAC charges the same for whichever tech is next (tech.cpp:308 asserts exactly that). So a
+    per-option turns figure is emitted when it can differ and omitted when it cannot — a column
+    of identical numbers invites a brain to compare options on a difference that does not exist.
+    */
+    const int rate = mod_tech_rate(faction_id);
+    const int banked = Factions[faction_id].tech_accumulated;
+    const bool per_tech = conf.revised_tech_cost && !*MultiplayerActive;
     na_buf_puts(w, ",\"action_space\":[");
     for (int id = 0; id < MaxTechnologyNum; id++) {
         if (!tech_avail(id, faction_id)) {
@@ -881,6 +890,13 @@ static void na_write_tech_action_space(NaBuf* w, int faction_id) {
         na_buf_puts(w, "\",\"category\":\"tech\"");
         na_buf_printf(w, ",\"ai_weights\":{\"growth\":%d,\"tech\":%d,\"wealth\":%d,\"power\":%d}",
                 Tech[id].AI_growth, Tech[id].AI_tech, Tech[id].AI_wealth, Tech[id].AI_power);
+        if (per_tech && rate > 0) {
+            int cost = tech_alt_cost(id, faction_id);
+            int left = cost - banked;
+            if (left < 0) { left = 0; }
+            na_buf_printf(w, ",\"cost\":%d,\"turns_to_complete\":%d",
+                          cost, (left + rate - 1) / rate);
+        }
         na_buf_puts(w, "}");
     }
     na_buf_printf(w, "],\"action_space_size\":%d", count);
@@ -898,8 +914,41 @@ void na_observe_faction_tech(int faction_id, int native_choice) {
 
     // Faction research and economic state - categories 1 and 4 of the input checklist.
     na_write_metrics(w, faction_id, -1);
+    const int rate = mod_tech_rate(faction_id);
     na_buf_printf(w, ",\"tech_accumulated\":%d", plr.tech_accumulated);
-    na_buf_printf(w, ",\"tech_rate\":%d", mod_tech_rate(faction_id));
+    na_buf_printf(w, ",\"tech_rate\":%d", rate);
+
+    /*
+    Whether this is a fresh choice or a probe of one already running — and how long it binds.
+
+    Research is not production. Production is re-decided every turn, so a choice there is
+    cheap to revisit. tech_selection fires only when tech_research_id < 0, i.e. when nothing
+    is being researched (tech.cpp:233), so a real selection COMMITS the faction until the
+    tech completes. Switching mid-research is possible and is not what players normally do.
+
+    None of that was in the world view. It carried accumulated points and a rate and no cost,
+    so a decision that binds the faction for several turns looked indistinguishable from a
+    one-turn pick — and a brain asked whether this "genuinely sets direction for future turns"
+    had nothing to answer with. Measured: it issued no directive on ten consecutive runs.
+
+    research_state is the honest signal. The probe passes the CURRENT target as native_choice,
+    so an in_progress record is a serialiser test rather than a decision, and a reader has to
+    be able to tell those apart.
+    */
+    const bool idle = plr.tech_research_id < 0;
+    na_buf_printf(w, ",\"research_state\":\"%s\"", idle ? "idle" : "in_progress");
+    if (!idle && plr.tech_research_id < MaxTechnologyNum) {
+        na_buf_printf(w, ",\"current_research\":%d,\"current_research_name\":\"",
+                      plr.tech_research_id);
+        na_buf_escaped(w, Tech[plr.tech_research_id].name);
+        na_buf_puts(w, "\"");
+    }
+    na_buf_printf(w, ",\"tech_cost\":%d", plr.tech_cost);
+    if (rate > 0 && plr.tech_cost > 0) {
+        int left = plr.tech_cost - plr.tech_accumulated;
+        if (left < 0) { left = 0; }
+        na_buf_printf(w, ",\"turns_to_complete\":%d", (left + rate - 1) / rate);
+    }
 
     na_buf_printf(w, ",\"native_choice\":%d", native_choice);
     na_buf_puts(w, ",\"native_choice_name\":\"");
