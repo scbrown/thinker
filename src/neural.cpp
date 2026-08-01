@@ -1728,6 +1728,223 @@ void na_command_tick(void* hwnd_raw) {
     }
 
     /*
+    "apply-tech <faction_id> <tech_id>" — set the faction's research target.
+
+    Validated with tech_avail, which is the same test the observation's action space is built
+    from, so an id the brain was not offered cannot be applied.
+
+    **Switching mid-research is allowed and is not free.** The engine keeps tech_accumulated
+    against the faction, not against the target, so changing target does not zero it here — but
+    a brain that re-targets every few turns still finishes nothing, which is the same trap
+    base.production has and the reason WorldView.history exists. The response reports the
+    accumulated points so a caller can see what is in flight rather than having to assume.
+    */
+    if (strncmp(line, "apply-tech ", 11) == 0) {
+        int fid = -1;
+        int tech_id = -1;
+        if (sscanf(line + 11, "%d tech:%d", &fid, &tech_id) != 2
+        || fid <= 0 || fid >= MaxPlayerNum) {
+            na_cmd_result("apply-tech", "expected: apply-tech <faction_id> tech:<n>", false);
+            return;
+        }
+        if (tech_id < 0 || tech_id >= MaxTechnologyNum || !tech_avail(tech_id, fid)) {
+            na_cmd_result("apply-tech", "technology not available to this faction", false);
+            return;
+        }
+        Faction& plr = Factions[fid];
+        const int previous = plr.tech_research_id;
+        plr.tech_research_id = tech_id;
+
+        char detail[192];
+        snprintf(detail, sizeof(detail), "faction=%d tech=%d now=%s accumulated=%d was=%s",
+                 fid, tech_id, Tech[tech_id].name, plr.tech_accumulated,
+                 previous >= 0 && previous < MaxTechnologyNum ? Tech[previous].name : "none");
+        na_cmd_result("apply-tech", detail, true);
+
+        FILE* lf = na_log_open();
+        if (lf) {
+            fprintf(lf, "{\"surface_id\":\"faction.tech\",\"engine\":\"thinker\"");
+            fprintf(lf, ",\"turn\":%d,\"faction_id\":%d", *CurrentTurn, fid);
+            fputs(",\"faction\":\"", lf);
+            na_write_escaped(lf, MFactions[fid].noun_faction);
+            fprintf(lf, "\",\"chosen\":\"tech:%d\"", tech_id);
+            fputs(",\"chosen_name\":\"", lf);
+            na_write_escaped(lf, Tech[tech_id].name);
+            fprintf(lf, "\",\"tech_accumulated\":%d", plr.tech_accumulated);
+            fputs(",\"tier\":\"llm\",\"applied\":\"llm\"}\n", lf);
+            fflush(lf);
+        }
+        return;
+    }
+
+    /*
+    "apply-se <faction_id> <field> <model>" — change one social-engineering value.
+
+    Legality comes from society_avail, the engine's own test, NOT from the checks the
+    observation's action space happens to make. Those two are supposed to agree and this is the
+    one that binds: an order can only do what the engine would have allowed.
+
+    The upheaval cost is charged exactly as faction.cpp does it — compute against the proposed
+    category, refuse if the faction cannot afford it, then debit and commit through social_set.
+    Reimplementing the debit would be how a faction ends up with free social change.
+
+    "se:none" is a legal answer and means keep the current values. It is recorded rather than
+    ignored, because a decision to hold is still a decision and coverage counts what fired.
+    */
+    if (strncmp(line, "apply-se ", 9) == 0) {
+        int fid = -1;
+        int field = -1;
+        int model = -1;
+        const bool hold = (sscanf(line + 9, "%d se:none", &fid) == 1);
+        if (!hold && (sscanf(line + 9, "%d se:%d:%d", &fid, &field, &model) != 3)) {
+            na_cmd_result("apply-se",
+                          "expected: apply-se <faction_id> se:<field>:<model> | se:none", false);
+            return;
+        }
+        if (fid <= 0 || fid >= MaxPlayerNum) {
+            na_cmd_result("apply-se", "need 0 < faction_id < 8", false);
+            return;
+        }
+        Faction& plr = Factions[fid];
+
+        if (hold) {
+            na_cmd_result("apply-se", "no change", true);
+            FILE* lf = na_log_open();
+            if (lf) {
+                fprintf(lf, "{\"surface_id\":\"faction.se\",\"engine\":\"thinker\"");
+                fprintf(lf, ",\"turn\":%d,\"faction_id\":%d", *CurrentTurn, fid);
+                fputs(",\"chosen\":\"se:none\",\"chosen_name\":\"No change\"", lf);
+                fputs(",\"tier\":\"llm\",\"applied\":\"llm\"}\n", lf);
+                fflush(lf);
+            }
+            return;
+        }
+
+        if (field < 0 || field >= MaxSocialCatNum || model < 0 || model >= MaxSocialModelNum
+        || !society_avail(field, model, fid)) {
+            na_cmd_result("apply-se", "social model not available to this faction", false);
+            return;
+        }
+
+        CSocialCategory soc;
+        memcpy(&soc, &plr.SE_Politics, sizeof(soc));
+        soc.models[field] = model;
+        const int cost = social_upheaval(fid, &soc);
+        if (plr.energy_credits <= cost) {
+            char detail[128];
+            snprintf(detail, sizeof(detail), "upheaval costs %d, reserves %d",
+                     cost, plr.energy_credits);
+            na_cmd_result("apply-se", detail, false);
+            return;
+        }
+
+        auto pending = (CSocialCategory*)&plr.SE_Politics_pending;
+        pending->models[field] = model;
+        plr.energy_credits -= cost;
+        plr.SE_upheaval_cost_paid += cost;
+        social_set(fid);
+
+        char detail[192];
+        snprintf(detail, sizeof(detail), "faction=%d %s -> %s cost=%d reserves=%d",
+                 fid, SocialField[field].field_name, SocialField[field].soc_name[model],
+                 cost, plr.energy_credits);
+        na_cmd_result("apply-se", detail, true);
+
+        FILE* lf = na_log_open();
+        if (lf) {
+            fprintf(lf, "{\"surface_id\":\"faction.se\",\"engine\":\"thinker\"");
+            fprintf(lf, ",\"turn\":%d,\"faction_id\":%d", *CurrentTurn, fid);
+            fputs(",\"faction\":\"", lf);
+            na_write_escaped(lf, MFactions[fid].noun_faction);
+            fprintf(lf, "\",\"chosen\":\"se:%d:%d\"", field, model);
+            fputs(",\"chosen_name\":\"", lf);
+            na_write_escaped(lf, SocialField[field].soc_name[model]);
+            fprintf(lf, "\",\"upheaval_cost\":%d", cost);
+            fputs(",\"tier\":\"llm\",\"applied\":\"llm\"}\n", lf);
+            fflush(lf);
+        }
+        return;
+    }
+
+    /*
+    "apply-hurry <base_id> <hurry|none>" — spend energy credits to finish production early.
+
+    The first apply path that can lose something irreversibly, so it is the strictest. Three
+    checks, all the engine's own: can_hurry_item (the engine's rule about what may be rushed),
+    a positive hurry_cost, and enough reserves to pay it. An unaffordable order is refused with
+    the numbers rather than partially applied.
+
+    hurry_item does the debit and the mineral credit together; doing either by hand would be
+    how a faction gets free production.
+    */
+    if (strncmp(line, "apply-hurry ", 12) == 0) {
+        int base_id = -1;
+        char what[16] = {};
+        if (sscanf(line + 12, "%d hurry:%15s", &base_id, what) != 2
+        || base_id < 0 || base_id >= *BaseCount || base_id >= MaxBaseNum) {
+            na_cmd_result("apply-hurry",
+                          "expected: apply-hurry <base_id> hurry:now|hurry:none", false);
+            return;
+        }
+        BASE& base = Bases[base_id];
+        Faction& plr = Factions[base.faction_id];
+
+        if (strcmp(what, "none") == 0) {
+            na_cmd_result("apply-hurry", "did not hurry", true);
+            FILE* lf = na_log_open();
+            if (lf) {
+                fprintf(lf, "{\"surface_id\":\"base.hurry\",\"engine\":\"thinker\"");
+                fprintf(lf, ",\"turn\":%d,\"base_id\":%d", *CurrentTurn, base_id);
+                fputs(",\"chosen\":\"hurry:none\",\"chosen_name\":\"Do not hurry\"", lf);
+                fputs(",\"tier\":\"llm\",\"applied\":\"llm\"}\n", lf);
+                fflush(lf);
+            }
+            return;
+        }
+        if (strcmp(what, "now") != 0) {
+            na_cmd_result("apply-hurry", "expected hurry:now or hurry:none", false);
+            return;
+        }
+
+        const int item = base.item();
+        const int total = mineral_cost(base_id, item);
+        int remaining = total - base.minerals_accumulated;
+        if (remaining < 0) { remaining = 0; }
+        const int cost = hurry_cost(base_id, item, remaining);
+
+        if (!base.can_hurry_item() || cost <= 0 || cost > plr.energy_credits) {
+            char detail[160];
+            snprintf(detail, sizeof(detail), "cannot hurry: cost=%d reserves=%d remaining=%d",
+                     cost, plr.energy_credits, remaining);
+            na_cmd_result("apply-hurry", detail, false);
+            return;
+        }
+
+        const int credits_before = plr.energy_credits;
+        hurry_item(base_id, remaining, cost);
+
+        char detail[192];
+        snprintf(detail, sizeof(detail), "base=%d item=%s cost=%d reserves %d -> %d",
+                 base_id, prod_name(item), cost, credits_before, plr.energy_credits);
+        na_cmd_result("apply-hurry", detail, true);
+
+        FILE* lf = na_log_open();
+        if (lf) {
+            fprintf(lf, "{\"surface_id\":\"base.hurry\",\"engine\":\"thinker\"");
+            fprintf(lf, ",\"turn\":%d,\"base_id\":%d", *CurrentTurn, base_id);
+            fputs(",\"base\":\"", lf);
+            na_write_escaped(lf, base.name);
+            fputs("\",\"chosen\":\"hurry:now\",\"chosen_name\":\"", lf);
+            na_write_escaped(lf, prod_name(item));
+            fprintf(lf, "\",\"credits_spent\":%d,\"energy_reserves\":%d",
+                    cost, plr.energy_credits);
+            fputs(",\"tier\":\"llm\",\"applied\":\"llm\"}\n", lf);
+            fflush(lf);
+        }
+        return;
+    }
+
+    /*
     "observe-hurry <base_id>" — the base.hurry probe.
 
     Serialiser only: reports the current numbers with native_hurried = 0, so it never spends
