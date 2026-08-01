@@ -251,6 +251,97 @@ static void na_write_action_space(FILE* fp, int base_id) {
 }
 
 /*
+Recent build history per base — `WorldView.history` in the contract.
+
+Production is re-decided every turn, and several times per turn at the engine level. A brain
+with no memory of its own last answer re-argues the case from nothing each time, so every
+individual choice can be defensible while the sequence accumulates nothing: a base that
+switches target every few turns finishes neither, and switching away from a partly built item
+usually forfeits the progress.
+
+A short ring buffer per base is the cheapest thing that makes a stable choice possible, and it
+is nearly free — 512 bases by four entries, no allocation, no bookkeeping anywhere else.
+
+Two details carry the weight:
+
+**One entry per turn, last write wins.** mod_base_reset is hooked at eleven call sites and each
+one applies its own answer, so a turn produces several choices for the same base and only the
+last is what the base actually builds. Appending per call would fill the window with one turn of
+churn and hide the very thing it exists to show.
+
+**The tier travels with the item.** A decision re-reading its own earlier reasoning is in a
+different position from one reading the deterministic tier's default: the first can ask whether
+it still believes the argument, the second has no argument to weigh. Collapsing them would have
+the brain defer to a choice nobody made.
+*/
+static const int NA_HISTORY = 4;
+
+struct NaChoice {
+    int turn;
+    char item[48];
+    const char* tier;
+};
+
+static NaChoice na_history[MaxBaseNum][NA_HISTORY];
+static int na_history_len[MaxBaseNum];
+static bool na_history_init = false;
+
+static void na_record_choice(int base_id, const char* item, const char* tier) {
+    if (base_id < 0 || base_id >= MaxBaseNum) {
+        return;
+    }
+    if (!na_history_init) {
+        for (int i = 0; i < MaxBaseNum; i++) {
+            na_history_len[i] = 0;
+        }
+        na_history_init = true;
+    }
+    NaChoice entry;
+    entry.turn = *CurrentTurn;
+    entry.tier = tier;
+    snprintf(entry.item, sizeof(entry.item), "%s", item ? item : "");
+
+    int& len = na_history_len[base_id];
+    if (len > 0 && na_history[base_id][len - 1].turn == entry.turn) {
+        na_history[base_id][len - 1] = entry;   // same turn: replace, do not append
+        return;
+    }
+    if (len == NA_HISTORY) {
+        for (int i = 1; i < NA_HISTORY; i++) {
+            na_history[base_id][i - 1] = na_history[base_id][i];
+        }
+        len--;
+    }
+    na_history[base_id][len++] = entry;
+}
+
+// Oldest first, which is the order the contract specifies and the order a reader expects.
+// The CURRENT turn's entry is excluded: this decision is being made now, and showing the
+// engine's provisional answer for this same turn as "history" would invite the brain to
+// ratify a default it was asked to replace.
+static void na_write_history(FILE* fp, int base_id) {
+    if (base_id < 0 || base_id >= MaxBaseNum || !na_history_init) {
+        return;
+    }
+    fputs(",\"history\":[", fp);
+    int written = 0;
+    for (int i = 0; i < na_history_len[base_id]; i++) {
+        const NaChoice& c = na_history[base_id][i];
+        if (c.turn >= *CurrentTurn) {
+            continue;
+        }
+        if (written++) {
+            fputs(",", fp);
+        }
+        fprintf(fp, "{\"turn\":%d,\"item\":\"", c.turn);
+        na_write_escaped(fp, c.item);
+        fprintf(fp, "\",\"tier\":\"%s\"}", c.tier);
+    }
+    fputs("]", fp);
+}
+
+
+/*
 The measured economy, on every surface. This is `WorldView.metrics` in the contract.
 
 A base deciding whether to spend 81 of 82 energy credits cannot judge that from the price
@@ -393,8 +484,13 @@ void na_observe_base_production(int base_id, int native_choice, int has_gov) {
     fputs("\"", fp);
     na_write_base_state(fp, base_id);
     na_write_metrics(fp, faction_id, base_id, -1, -1);
+    // Written BEFORE recording this turn's answer, so the block the brain reads is strictly
+    // the past. Recording first would show it the engine's provisional pick for the very
+    // turn it is being asked to decide.
+    na_write_history(fp, base_id);
     na_write_action_space(fp, base_id);
     fputs(",\"tier\":\"deterministic\",\"applied\":\"native\"}\n", fp);
+    na_record_choice(base_id, prod_name(native_choice), "deterministic");
 
     // Flushed per line: a crash mid-turn is exactly when we most want the log,
     // and terranx.exe crashing is not hypothetical.
@@ -1226,6 +1322,9 @@ void na_command_tick(void* hwnd_raw) {
             fputs("\",\"tier\":\"llm\",\"applied\":\"llm\"}\n", lf);
             fflush(lf);
         }
+        // Supersedes any deterministic entry logged for this turn — same-turn writes replace,
+        // and this is the choice the base actually ends up building.
+        na_record_choice(base_id, prod_name(item), "llm");
         return;
     }
 
