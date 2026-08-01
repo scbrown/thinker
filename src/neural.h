@@ -88,6 +88,25 @@ surface_id is "faction.tech", matching the frozen registry in surfaces.py. Not
 void na_observe_faction_tech(int faction_id, int native_choice);
 
 /*
+Decide which technology to research next: post the world view, apply the answer.
+
+Returns the tech id to research. `native_choice` unchanged on every failure —
+unreachable orchestrator, timeout, malformed reply, unparseable or illegal id —
+so a broken model costs a research choice and never a turn (invariant 9).
+
+Unlike base.production this needs no per-turn cache. mod_tech_selection fires
+only while tech_research_id < 0 (tech.cpp:233), so the engine asks once per
+research cycle rather than repeatedly per turn, and one question yields one
+record by construction.
+
+The decision also binds for longer than a build does: research commits the
+faction until the tech completes, which is why the world view carries
+research_state and turns_to_complete and why this surface is worth deciding at
+all.
+*/
+int na_decide_faction_tech(int faction_id, int native_choice);
+
+/*
 Emit one faction.se observation: the social-engineering choice.
 
 Low frequency, high leverage, and a strong LLM fit — it is a values trade-off with faction

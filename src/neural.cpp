@@ -947,14 +947,19 @@ static void na_write_tech_action_space(NaBuf* w, int faction_id) {
     na_buf_printf(w, "],\"action_space_size\":%d", count);
 }
 
-void na_observe_faction_tech(int faction_id, int native_choice) {
-    if (faction_id <= 0 || faction_id >= MaxPlayerNum) {
-        return;
-    }
+/*
+The faction.tech world view, up to but not including the outcome fields.
+
+Split out of na_observe_faction_tech for the same reason na_build_base_production is split
+out: the observe path and the decide path must send byte-identical world views, or a record
+written by one is not comparable with a record written by the other. One builder, two callers,
+and the only difference between their records is the tier/applied tail each appends.
+
+Leaves the JSON object OPEN. The caller closes it, because the decide path sends the open
+buffer as a request body and then reopens it to append what came back.
+*/
+static void na_build_faction_tech(NaBuf* w, int faction_id, int native_choice) {
     Faction& plr = Factions[faction_id];
-    NaBuf wb;
-    NaBuf* w = &wb;
-    na_buf_init(w);
     na_write_head(w, "faction.tech", "turn", faction_id);
 
     // Faction research and economic state - categories 1 and 4 of the input checklist.
@@ -1003,9 +1008,123 @@ void na_observe_faction_tech(int faction_id, int native_choice) {
     na_buf_puts(w, "\"");
 
     na_write_tech_action_space(w, faction_id);
+}
+
+void na_observe_faction_tech(int faction_id, int native_choice) {
+    if (faction_id <= 0 || faction_id >= MaxPlayerNum) {
+        return;
+    }
+    NaBuf wb;
+    NaBuf* w = &wb;
+    na_buf_init(w);
+    na_build_faction_tech(w, faction_id, native_choice);
     na_buf_puts(w, ",\"tier\":\"deterministic\",\"applied\":\"native\"}");
     na_log_record(w);
     na_buf_free(w);
+}
+
+/*
+Is `tech_id` actually in this faction's action space?
+
+tech_avail is the same call na_write_tech_action_space filters on, so this asks the engine the
+same question that produced the options — the invariant-1 backstop, not a reconstruction of it.
+*/
+static bool na_tech_is_legal(int faction_id, int tech_id) {
+    return tech_id >= 0 && tech_id < MaxTechnologyNum && tech_avail(tech_id, faction_id);
+}
+
+static bool na_parse_tech_id(const char* id, int* tech) {
+    int n = 0;
+    if (id && sscanf(id, "tech:%d", &n) == 1 && n >= 0 && n < MaxTechnologyNum) {
+        *tech = n;
+        return true;
+    }
+    return false;
+}
+
+/*
+faction.tech, decided rather than observed.
+
+Same three gates as base.production, and they are the whole of what makes this safe: the reply
+must parse as an id this adapter mints, the tech must pass the engine's OWN availability test,
+and the exchange is bounded by llm_timeout_ms. Every failure applies the deterministic tier's
+answer and records why, so an unreachable orchestrator costs a research choice, never a turn
+(invariant 9).
+
+No call-seq cache here, unlike base.production, and that is a real difference rather than an
+omission. The engine asks a base for production several times per turn, so that path needs a
+cache to keep one decision from becoming several records. mod_tech_selection fires only when
+tech_research_id < 0 (tech.cpp:233) — once per research cycle, not once per turn — so the
+question is asked once and answered once by construction.
+
+That same fact is why this decision is worth more than a production pick: it COMMITS the
+faction until the tech completes. The world view says so via research_state and
+turns_to_complete, and this is the call that makes the commitment real.
+*/
+int na_decide_faction_tech(int faction_id, int native_choice) {
+    if (faction_id <= 0 || faction_id >= MaxPlayerNum) {
+        return native_choice;
+    }
+
+    NaBuf w;
+    na_buf_init(&w);
+    na_build_faction_tech(&w, faction_id, native_choice);
+
+    int applied = native_choice;
+    const char* tier = "deterministic";
+    const char* how = "native";
+    char detail[192];
+    detail[0] = '\0';
+
+    if (w.failed) {
+        snprintf(detail, sizeof(detail), "world view could not be built");
+    } else {
+        // Closed in place, sent, then reopened by rewinding the length — the record and the
+        // request body are the same bytes and differ only by the tail appended after the call.
+        const size_t open_len = w.len;
+        na_buf_puts(&w, "}");
+        NaBuf body;
+        if (!w.failed && na_http_post(llm_endpoint.c_str(), "/decide", w.data,
+                                      conf.llm_timeout_ms, &body)) {
+            char action_id[64];
+            int tech_id = 0;
+            if (!na_json_string(body.data, "action_id", action_id, sizeof(action_id))) {
+                snprintf(detail, sizeof(detail), "no action_id in reply");
+            } else if (!na_parse_tech_id(action_id, &tech_id)) {
+                snprintf(detail, sizeof(detail), "unparseable action_id %.48s", action_id);
+            } else if (!na_tech_is_legal(faction_id, tech_id)) {
+                snprintf(detail, sizeof(detail), "illegal action_id %.48s", action_id);
+            } else {
+                applied = tech_id;
+                tier = "llm";
+                how = na_json_true(body.data, "degraded") ? "llm_degraded" : "llm";
+            }
+            na_buf_free(&body);
+        } else {
+            snprintf(detail, sizeof(detail), "orchestrator unreachable or slow");
+        }
+        if (!w.failed) {
+            w.len = open_len;
+            w.data[w.len] = '\0';
+        }
+    }
+
+    na_buf_printf(&w, ",\"tier\":\"%s\",\"applied\":\"%s\"", tier, how);
+    na_buf_printf(&w, ",\"applied_item\":%d", applied);
+    na_buf_puts(&w, ",\"applied_item_name\":\"");
+    if (applied >= 0 && applied < MaxTechnologyNum) {
+        na_buf_escaped(&w, Tech[applied].name);
+    }
+    na_buf_puts(&w, "\"");
+    if (detail[0]) {
+        na_buf_puts(&w, ",\"fallback_reason\":\"");
+        na_buf_escaped(&w, detail);
+        na_buf_puts(&w, "\"");
+    }
+    na_buf_puts(&w, "}");
+    na_log_record(&w);
+    na_buf_free(&w);
+    return applied;
 }
 
 /*

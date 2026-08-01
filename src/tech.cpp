@@ -257,16 +257,22 @@ int __cdecl mod_tech_selection(int faction_id) {
         tech_id = plr.tech_research_id;
     } else {
         tech_id = mod_tech_pick(faction_id, 0, -1, 0);
-        plr.tech_research_id = tech_id;
         /*
-        Neural Amplifier: observe the research choice. Gated on llm_enabled, so a stock
+        Neural Amplifier: decide the research choice. Gated on llm_enabled, so a stock
         build never reaches it. Placed after tech_id is settled and before any of the
         multiplayer synchronisation below, which is the point where the decision is both
         complete and still attributable to this faction.
+
+        Ahead of the tech_research_id assignment, not after it as the observe call was.
+        The world view reports research_state from that field, and setting it first would
+        make every decision read "in_progress" against the choice being made right now —
+        the brain would be told the question was already settled. Idle is the truth at the
+        moment of asking, and the assignment below is what settles it.
         */
         if (llm_enabled(faction_id)) {
-            na_observe_faction_tech(faction_id, tech_id);
+            tech_id = na_decide_faction_tech(faction_id, tech_id);
         }
+        plr.tech_research_id = tech_id;
         if (*MultiplayerActive && is_human(faction_id)) {
             synch_researching(faction_id);
             plr.tech_research_id = -1;
