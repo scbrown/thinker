@@ -57,6 +57,26 @@ Does nothing for a base the LLM tier did not decide this turn.
 void na_verify_base_production(int base_id);
 
 /*
+Audit every offered option against the gate that would apply it, for one
+faction and all its bases. Returns the total mismatch count; 0 means every
+surface agrees with itself.
+
+The proactive counterpart to na_verify_base_production, which only notices a
+dropped choice after a real decision rode on one. This walks the whole action
+space and finds the options that WOULD be refused, before that happens.
+
+Applies nothing and spends nothing — every check is a predicate, which is what
+makes auditing every option affordable. Attempting them would cost credits,
+research and production, and would still only test whichever option the engine
+accepted first.
+
+Writes one `"event":"audit"` record per surface into the observation log,
+listing the mismatching ids rather than only counting them (capped, and the
+record says when the cap bit).
+*/
+int na_audit(int faction_id);
+
+/*
 Emit one base.production world view without deciding anything.
 
 The `observe <base_id>` command-channel probe. Side-effect free by construction:

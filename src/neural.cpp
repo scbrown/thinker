@@ -913,6 +913,7 @@ void na_verify_base_production(int base_id) {
     na_history_put(base_id, actual, 'd');
 }
 
+
 /*
 The menu-to-session transition, found by disassembling terranx.exe.
 
@@ -1500,14 +1501,53 @@ to report. It passes < 0 and native_choice is omitted rather than defaulted, bec
 it to "hurry:none" would put a fabricated answer in front of the brain — absent reads as "not
 determined", false reads as "the engine decided not to".
 */
+/*
+The hurry terms, derived in exactly one place.
+
+What may be rushed and what it costs was worked out independently in three functions — the
+emitter that offers the option, the gate that accepts it, and briefly an audit that compared
+the two. They were not even written the same way: the emitter measured from the caller's
+`minerals_before`, the gate from the live `minerals_accumulated`. Those agree at the instant a
+decision is made and there is no reason they had to.
+
+Auditing for that drift was the wrong instinct. A check that the two agree can only ever fail
+after someone has already introduced the bug, and only if the audit happens to run; deriving it
+once means they cannot disagree. Prefer the version with no failure mode over the version with
+a detector.
+
+`remaining` comes back clamped at zero. Every caller guards on it being positive anyway, and a
+negative "minerals still needed" is not a quantity anyone should have to reason about.
+*/
+static bool na_hurry_terms(int base_id, int item, int minerals, int credits,
+                           int* total_out, int* remaining_out, int* cost_out) {
+    const int total = mineral_cost(base_id, item);
+    int remaining = total - minerals;
+    if (remaining < 0) {
+        remaining = 0;
+    }
+    const int cost = hurry_cost(base_id, item, remaining);
+    if (total_out) {
+        *total_out = total;
+    }
+    if (remaining_out) {
+        *remaining_out = remaining;
+    }
+    if (cost_out) {
+        *cost_out = cost;
+    }
+    return Bases[base_id].can_hurry_item() && cost > 0 && cost <= credits;
+}
+
 static void na_build_base_hurry(NaBuf* w, int base_id, int item, int minerals_before,
                                 int credits_before, int native_hurried) {
     BASE& base = Bases[base_id];
     const int faction_id = base.faction_id;
 
-    const int total = mineral_cost(base_id, item);
-    const int remaining = total - minerals_before;
-    const int cost = hurry_cost(base_id, item, remaining > 0 ? remaining : 0);
+    int total = 0;
+    int remaining = 0;
+    int cost = 0;
+    const bool affordable_terms = na_hurry_terms(base_id, item, minerals_before,
+                                                 credits_before, &total, &remaining, &cost);
     const int surplus = base.mineral_surplus;
     const int turns_if_waiting =
         surplus > 0 && remaining > 0 ? (remaining + surplus - 1) / surplus : 0;
@@ -1551,7 +1591,7 @@ static void na_build_base_hurry(NaBuf* w, int base_id, int item, int minerals_be
     should not be offered: the engine would refuse it, and offering it invites the brain to
     "decide" something that was never available.
     */
-    const bool affordable = base.can_hurry_item() && cost > 0 && cost <= credits_before;
+    const bool affordable = affordable_terms;
     na_buf_puts(w, ",\"action_space\":[{\"id\":\"hurry:none\",\"action\":\"Do not hurry\"");
     na_buf_puts(w, ",\"cost\":0,\"cost_unit\":\"credits\"}");
     if (affordable) {
@@ -1648,11 +1688,13 @@ int na_decide_base_hurry(int base_id, int item, int minerals_before, int credits
             } else if (strcmp(action_id, "hurry:now") != 0) {
                 snprintf(detail, sizeof(detail), "unparseable action_id %.48s", action_id);
             } else {
-                const int total = mineral_cost(base_id, item);
-                int remaining = total - base.minerals_accumulated;
-                if (remaining < 0) { remaining = 0; }
-                const int cost = hurry_cost(base_id, item, remaining);
-                if (!base.can_hurry_item() || cost <= 0 || cost > plr.energy_credits) {
+                int remaining = 0;
+                int cost = 0;
+                // Same derivation the action space used, because it is the same function —
+                // an option offered and then refused on a re-derived number would be a
+                // divergence invented by us rather than one the engine caused.
+                if (!na_hurry_terms(base_id, item, base.minerals_accumulated,
+                                    plr.energy_credits, NULL, &remaining, &cost)) {
                     snprintf(detail, sizeof(detail),
                              "cannot hurry: cost=%d reserves=%d remaining=%d",
                              cost, plr.energy_credits, remaining);
@@ -1697,6 +1739,223 @@ int na_decide_base_hurry(int base_id, int item, int minerals_before, int credits
     na_log_record(&w);
     na_buf_free(&w);
     return rc;
+}
+
+/*
+The action-space audit: does every option we offer survive the path a real answer takes?
+
+An offered id goes emitter -> string -> parser -> apply gate. Each audit below walks that whole
+path for every option on a surface, rather than asking one predicate about itself.
+
+Mismatches are listed, not just counted, and the list is capped — an audit that printed four
+hundred broken ids would be as unreadable as one that printed none. When the cap bites it says
+so in the record, because a truncated list that looks complete is worse than an obvious one.
+*/
+static const int NA_AUDIT_LIST_CAP = 12;
+
+struct NaAudit {
+    int offered;
+    int rejected;      // offered, but the gate that applies it would refuse
+    int hidden;        // the gate would accept it, but it was never offered
+};
+
+static void na_audit_open(NaBuf* w, const char* surface_id, int faction_id) {
+    na_buf_printf(w, "{\"surface_id\":\"%s\",\"engine\":\"thinker\"", surface_id);
+    na_buf_printf(w, ",\"event\":\"audit\",\"turn\":%d,\"faction_id\":%d", *CurrentTurn, faction_id);
+}
+
+static void na_audit_close(NaBuf* w, const NaAudit* a) {
+    na_buf_printf(w, ",\"offered\":%d,\"rejected\":%d,\"hidden\":%d}",
+                  a->offered, a->rejected, a->hidden);
+    na_log_record(w);
+}
+
+/*
+base.production. The predicates match by construction, so what this really exercises is the id
+encoding — in particular the facility negation, where the emitter writes a positive id and the
+parser stores it negated. A sign error there offers the brain an id that parses to a different
+item entirely, and every predicate on both sides would still agree.
+*/
+static int na_audit_base_production(int base_id) {
+    BASE& base = Bases[base_id];
+    const int faction_id = base.faction_id;
+    NaAudit a = {0, 0, 0};
+    NaBuf w;
+    na_buf_init(&w);
+    na_audit_open(&w, "base.production", faction_id);
+    na_buf_printf(&w, ",\"base_id\":%d", base_id);
+    na_buf_puts(&w, ",\"rejected_ids\":[");
+    int listed = 0;
+
+    for (int pass = 0; pass < 2; pass++) {
+        const int last = pass == 0 ? MaxProtoNum - 1 : SP_ID_Last;
+        for (int id = pass == 0 ? 0 : 1; id <= last; id++) {
+            const bool offered = pass == 0
+                ? (mod_veh_avail(id, faction_id, base_id) && can_build_unit(base_id, id))
+                : (mod_facility_avail((FacilityId)id, faction_id, base_id, 0)
+                   && can_build(base_id, id));
+            char action_id[64];
+            snprintf(action_id, sizeof(action_id), pass == 0 ? "unit:%d" : "facility:%d", id);
+            int item = 0;
+            const bool parses = na_parse_item_id(action_id, &item);
+            const bool accepted = parses && na_item_is_legal(base_id, item);
+
+            if (offered) {
+                a.offered++;
+                if (!accepted) {
+                    a.rejected++;
+                    if (listed < NA_AUDIT_LIST_CAP) {
+                        if (listed++) { na_buf_puts(&w, ","); }
+                        na_buf_printf(&w, "\"%s\"", action_id);
+                    }
+                }
+            } else if (accepted) {
+                a.hidden++;
+            }
+        }
+    }
+    na_buf_puts(&w, "]");
+    if (a.rejected > listed) {
+        na_buf_printf(&w, ",\"rejected_ids_truncated\":%d", a.rejected - listed);
+    }
+    na_audit_close(&w, &a);
+    na_buf_free(&w);
+    return a.rejected + a.hidden;
+}
+
+static int na_audit_faction_tech(int faction_id) {
+    NaAudit a = {0, 0, 0};
+    NaBuf w;
+    na_buf_init(&w);
+    na_audit_open(&w, "faction.tech", faction_id);
+    na_buf_puts(&w, ",\"rejected_ids\":[");
+    int listed = 0;
+
+    for (int id = 0; id < MaxTechnologyNum; id++) {
+        const bool offered = tech_avail(id, faction_id);
+        char action_id[64];
+        snprintf(action_id, sizeof(action_id), "tech:%d", id);
+        int tech_id = 0;
+        const bool accepted = na_parse_tech_id(action_id, &tech_id)
+                              && na_tech_is_legal(faction_id, tech_id);
+        if (offered) {
+            a.offered++;
+            if (!accepted) {
+                a.rejected++;
+                if (listed < NA_AUDIT_LIST_CAP) {
+                    if (listed++) { na_buf_puts(&w, ","); }
+                    na_buf_printf(&w, "\"%s\"", action_id);
+                }
+            }
+        } else if (accepted) {
+            a.hidden++;
+        }
+    }
+    na_buf_puts(&w, "]");
+    if (a.rejected > listed) {
+        na_buf_printf(&w, ",\"rejected_ids_truncated\":%d", a.rejected - listed);
+    }
+    na_audit_close(&w, &a);
+    na_buf_free(&w);
+    return a.rejected + a.hidden;
+}
+
+/*
+faction.se — the audit that can actually find something.
+
+The action space and the apply gate reason about legality differently here, and the difference
+is not a refactor away: the action space filters on the model in force, the prerequisite tech
+and the faction's forbidden value, while society_avail is the engine's own answer to the same
+question. Any disagreement is a real defect in one of them, and which one is not obvious from
+here — so both directions are reported separately rather than summed.
+*/
+static int na_audit_faction_se(int faction_id) {
+    const int* current = &Factions[faction_id].SE_Politics;
+    NaAudit a = {0, 0, 0};
+    NaBuf w;
+    na_buf_init(&w);
+    na_audit_open(&w, "faction.se", faction_id);
+    na_buf_puts(&w, ",\"rejected_ids\":[");
+    int listed = 0;
+    int hidden_listed = 0;
+    char hidden_ids[512];
+    hidden_ids[0] = '\0';
+
+    for (int f = 0; f < MaxSocialCatNum; f++) {
+        for (int m = 0; m < MaxSocialModelNum; m++) {
+            // The action space's own three exclusions, in the order na_build_faction_se applies
+            // them. Kept literal rather than factored out: the point is to compare what that
+            // emitter actually does against the engine, and a shared helper would make the two
+            // agree by construction and test nothing.
+            const int preq = SocialField[f].soc_preq_tech[m];
+            const bool offered =
+                m != current[f]
+                && (preq < 0 || has_tech(preq, faction_id))
+                && !(MFactions[faction_id].soc_opposition_category == f
+                     && MFactions[faction_id].soc_opposition_model == m);
+
+            char action_id[64];
+            snprintf(action_id, sizeof(action_id), "se:%d:%d", f, m);
+            int pf = -1;
+            int pm = -1;
+            const bool accepted = na_parse_se_id(action_id, &pf, &pm)
+                                  && society_avail(pf, pm, faction_id);
+
+            if (offered) {
+                a.offered++;
+                if (!accepted) {
+                    a.rejected++;
+                    if (listed < NA_AUDIT_LIST_CAP) {
+                        if (listed++) { na_buf_puts(&w, ","); }
+                        na_buf_printf(&w, "\"%s\"", action_id);
+                    }
+                }
+            } else if (accepted) {
+                a.hidden++;
+                if (hidden_listed < NA_AUDIT_LIST_CAP) {
+                    const size_t used = strlen(hidden_ids);
+                    snprintf(hidden_ids + used, sizeof(hidden_ids) - used, "%s\"%s\"",
+                             hidden_listed ? "," : "", action_id);
+                    hidden_listed++;
+                }
+            }
+        }
+    }
+    na_buf_puts(&w, "]");
+    if (a.rejected > listed) {
+        na_buf_printf(&w, ",\"rejected_ids_truncated\":%d", a.rejected - listed);
+    }
+    // Reported separately from `rejected`: an offered option the engine refuses is an illegal
+    // move waiting to happen, a legal option never offered is a choice the brain cannot make.
+    // Same count, opposite defects.
+    na_buf_printf(&w, ",\"hidden_ids\":[%s]", hidden_ids);
+    if (a.hidden > hidden_listed) {
+        na_buf_printf(&w, ",\"hidden_ids_truncated\":%d", a.hidden - hidden_listed);
+    }
+    na_audit_close(&w, &a);
+    na_buf_free(&w);
+    return a.rejected + a.hidden;
+}
+
+
+int na_audit(int faction_id) {
+    if (faction_id <= 0 || faction_id >= MaxPlayerNum) {
+        return 0;
+    }
+    int bad = 0;
+    bad += na_audit_faction_tech(faction_id);
+    bad += na_audit_faction_se(faction_id);
+    for (int i = 0; i < *BaseCount && i < MaxBaseNum; i++) {
+        if (Bases[i].faction_id != faction_id) {
+            continue;
+        }
+        bad += na_audit_base_production(i);
+        // base.hurry is deliberately absent. Its action space and its apply gate now call one
+        // function (na_hurry_terms), so they cannot disagree and a check would be a check that
+        // can never fail — which reads as coverage while testing nothing. The surfaces audited
+        // here are the ones where two pieces of code independently decide what is legal.
+    }
+    return bad;
 }
 
 /*
@@ -2048,6 +2307,46 @@ void na_command_tick(void* hwnd_raw) {
         snprintf(detail, sizeof(detail), "args=%d,%d rc=%d halted_after=%d",
                  a, b, rc, *GameHalted);
         na_cmd_result("enter", detail, *GameHalted == 0);
+        return;
+    }
+
+    /*
+    "audit <faction_id>" — check every offered option against the gate that would apply it.
+
+    The divergence check (na_verify_base_production) is reactive: it notices after a choice was
+    dropped, in a real game, once. This is the proactive half — walk the whole action space now
+    and find the options that WOULD be refused, before a decision rides on one.
+
+    Deliberately does not apply anything. Attempting each option would spend credits, retarget
+    research and hurry production, so an audit would cost more than the bug it was looking for;
+    and it would only ever test the option the engine happened to accept first. Every check here
+    is a predicate, so the audit is free and total rather than expensive and partial.
+
+    What it actually tests is the PIPELINE, not one predicate against itself. For three surfaces
+    the action space and the apply gate call the same engine function, so comparing them is a
+    tautology — but the id makes a round trip in between, formatted into a string by the emitter
+    and read back by the parser, and those are separate code. An emitter that writes
+    "facility:%d" where the parser negates, an off-by-one in a bound, a range the parser rejects:
+    all of that lives between two identical predicates and none of it shows up in either.
+
+    faction.se is the one where the predicates genuinely differ. The action space hand-rolls
+    three exclusions — the model already in force, an unresearched prerequisite, the faction's
+    forbidden value — while the apply gate binds on society_avail. game-surface.md says those
+    "are supposed to agree", which is an assumption, and this is the only thing that checks it.
+    Both directions matter and mean different things: offered-but-refused is an illegal move
+    waiting to happen, refused-but-offered is a legal option being hidden from the brain.
+    */
+    if (strncmp(line, "audit ", 6) == 0) {
+        int fid = -1;
+        if (sscanf(line + 6, "%d", &fid) != 1 || fid <= 0 || fid >= MaxPlayerNum) {
+            na_cmd_result("audit", "expected: audit <faction_id>", false);
+            return;
+        }
+        const int bad = na_audit(fid);
+        char detail[160];
+        snprintf(detail, sizeof(detail), "faction=%d mismatches=%d (see %s)",
+                 fid, bad, NA_LOG_PATH);
+        na_cmd_result("audit", detail, bad == 0);
         return;
     }
 
