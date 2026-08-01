@@ -251,32 +251,77 @@ static void na_write_action_space(FILE* fp, int base_id) {
 }
 
 /*
-Faction-level economy, on every surface.
+The measured economy, on every surface. This is `WorldView.metrics` in the contract.
 
 A base deciding whether to spend 81 of 82 energy credits cannot judge that from the price
 alone: the question is what else that energy buys and whether it comes back. Measured, this
 was the whole gap on base.hurry - the surface split 6/4 across ten identical prompts until
 the faction's standing plan and its economy were in front of it.
 
-These names are the orchestrator's metric vocabulary (orchestrator/src/neural_amplifier/
-metrics.py), not engine field names, because a directive may only be written against a name
-the world view actually reports. Shipping them under the engine's own names would leave every
-faction-scope directive permanently unmeasurable - which reads in a record as compliance
-rather than as a gap.
+Three things about this block are load-bearing:
 
-Only fields the engine maintains directly are shipped. Anything needing a sweep over all
-bases is left out rather than approximated: a metric that is quietly wrong is worse than one
-that is absent, because absent reads as "cannot be checked" and wrong reads as fact.
+**The key is "metrics", not "faction_state".** The orchestrator reads measurements by name
+from exactly one place (contract.py, WorldView.metrics) and directives.py evaluates every
+standing plan against it. Shipping the same numbers under any other key leaves every
+directive permanently UNMEASURABLE - which reads in a record as a plan being served rather
+than as the plan never having been checked at all.
+
+**The names are the orchestrator's vocabulary** (orchestrator/src/neural_amplifier/
+metrics.py), not engine field names. A directive may only be written against a name the
+world view actually reports, so a name we emit under the engine's spelling is a name no
+directive can use.
+
+**Every number lives here and nowhere else.** The engine blocks alongside this one carry
+what the vocabulary has no name for. Two copies of one measurement is not a token cost, it
+is a correctness one: base.hurry observes *after* mod_base_hurry() has run, so the faction's
+live energy_credits is already the post-purchase figure while the hook's snapshot is the
+pre-decision truth. Emitting both produced a record that disagreed with itself about what
+the decision was made on.
+
+That is what the two override parameters are for. Pass -1 to read the live engine field;
+pass the hook's own snapshot where the engine has already moved on. `base_id` < 0 emits the
+faction half only, for the faction-scope surfaces.
 */
-static void na_write_faction_state(FILE* fp, int faction_id) {
+static void na_write_metrics(FILE* fp, int faction_id, int base_id,
+                             int energy_reserves_at_hook, int minerals_remaining_at_hook) {
     Faction& plr = Factions[faction_id];
-    fputs(",\"faction_state\":{", fp);
-    fprintf(fp, "\"energy_reserves\":%d", plr.energy_credits);
+    fputs(",\"metrics\":{", fp);
+
+    fprintf(fp, "\"energy_reserves\":%d",
+            energy_reserves_at_hook >= 0 ? energy_reserves_at_hook : plr.energy_credits);
     fprintf(fp, ",\"energy_income\":%d", plr.energy_surplus_total);
     fprintf(fp, ",\"labs_output\":%d", plr.labs_total);
     fprintf(fp, ",\"base_count\":%d", plr.base_count);
     fprintf(fp, ",\"pop_total\":%d", plr.pop_total);
     fprintf(fp, ",\"military_units\":%d", plr.total_combat_units);
+
+    /*
+    The one metric the engine does not maintain at faction level: drones and superdrones are
+    per-base counters, so this is a sweep. A sweep is not the approximation this file
+    otherwise refuses - it is the exact figure, and *BaseCount is small. What was refused,
+    and still is, is inventing a number the engine does not have.
+    */
+    int drones = 0;
+    for (int i = 0; i < *BaseCount && i < MaxBaseNum; i++) {
+        BASE& b = Bases[i];
+        if (b.faction_id == faction_id) {
+            drones += b.drone_total + b.superdrone_total;
+        }
+    }
+    fprintf(fp, ",\"drone_total\":%d", drones);
+
+    if (base_id >= 0 && base_id < *BaseCount && base_id < MaxBaseNum) {
+        BASE& b = Bases[base_id];
+        fprintf(fp, ",\"pop_size\":%d", (int)b.pop_size);
+        fprintf(fp, ",\"mineral_surplus\":%d", b.mineral_surplus);
+
+        int remaining = minerals_remaining_at_hook;
+        if (remaining < 0) {
+            remaining = mineral_cost(base_id, b.item()) - b.minerals_accumulated;
+        }
+        fprintf(fp, ",\"minerals_remaining\":%d", remaining > 0 ? remaining : 0);
+    }
+
     fputs("}", fp);
 }
 
@@ -284,16 +329,17 @@ static void na_write_faction_state(FILE* fp, int faction_id) {
 /*
 The base's own state — category 1 of the input checklist.
 
-Ships accumulated minerals and surplus separately rather than a pre-computed
-"turns remaining". A partially built item makes that arithmetic subtly wrong, and a
-number that is quietly wrong is worse than two numbers the brain can divide.
+What the vocabulary has a name for (pop_size, mineral_surplus, minerals_remaining) is in
+`metrics` and deliberately not repeated here. This block is the remainder: the engine's own
+reading of the base, for the model to read as prose.
+
+Still no pre-computed "turns remaining". A partially built item makes that arithmetic subtly
+wrong, and a number that is quietly wrong is worse than two numbers the brain can divide.
 */
 static void na_write_base_state(FILE* fp, int base_id) {
     BASE& b = Bases[base_id];
     fputs(",\"base_state\":{", fp);
-    fprintf(fp, "\"pop_size\":%d", (int)b.pop_size);
-    fprintf(fp, ",\"minerals_accumulated\":%d", b.minerals_accumulated);
-    fprintf(fp, ",\"mineral_surplus\":%d", b.mineral_surplus);
+    fprintf(fp, "\"minerals_accumulated\":%d", b.minerals_accumulated);
     fprintf(fp, ",\"nutrient_intake\":%d", b.nutrient_intake);
     fprintf(fp, ",\"mineral_intake\":%d", b.mineral_intake);
     fprintf(fp, ",\"energy_intake\":%d", b.energy_intake);
@@ -346,7 +392,7 @@ void na_observe_base_production(int base_id, int native_choice, int has_gov) {
     na_write_escaped(fp, prod_name(native_choice));
     fputs("\"", fp);
     na_write_base_state(fp, base_id);
-    na_write_faction_state(fp, faction_id);
+    na_write_metrics(fp, faction_id, base_id, -1, -1);
     na_write_action_space(fp, base_id);
     fputs(",\"tier\":\"deterministic\",\"applied\":\"native\"}\n", fp);
 
@@ -453,7 +499,7 @@ void na_observe_faction_tech(int faction_id, int native_choice) {
     fputs("\"", fp);
 
     // Faction research and economic state - categories 1 and 4 of the input checklist.
-    na_write_faction_state(fp, faction_id);
+    na_write_metrics(fp, faction_id, -1, -1, -1);
     fprintf(fp, ",\"tech_accumulated\":%d", plr.tech_accumulated);
     fprintf(fp, ",\"tech_rate\":%d", mod_tech_rate(faction_id));
 
@@ -507,7 +553,7 @@ void na_observe_faction_se(int faction_id, int field, int model, int cost) {
     }
     fputs("}", fp);
 
-    na_write_faction_state(fp, faction_id);
+    na_write_metrics(fp, faction_id, -1, -1, -1);
 
     /*
     The action space: every (field, model) the faction may legally adopt.
@@ -671,13 +717,14 @@ void na_observe_base_hurry(int base_id, int item, int minerals_before, int credi
     fputs(",\"base_state\":{", fp);
     fprintf(fp, "\"minerals_accumulated\":%d", minerals_before);
     fprintf(fp, ",\"mineral_cost_total\":%d", total);
-    fprintf(fp, ",\"minerals_remaining\":%d", remaining > 0 ? remaining : 0);
-    fprintf(fp, ",\"mineral_surplus\":%d", surplus);
     fprintf(fp, ",\"turns_if_waiting\":%d", turns_if_waiting);
-    fprintf(fp, ",\"energy_reserves\":%d", credits_before);
-    fprintf(fp, ",\"pop_size\":%d", (int)base.pop_size);
     fputs("}", fp);
-    na_write_faction_state(fp, faction_id);
+    /*
+    Snapshots, not live fields: this hook runs after mod_base_hurry(), so the faction's
+    energy_credits and the base's minerals_accumulated may already reflect a purchase the
+    brain is being asked to decide on.
+    */
+    na_write_metrics(fp, faction_id, base_id, credits_before, remaining > 0 ? remaining : 0);
 
     /*
     Affordability is part of the action space, not advice. An option the faction cannot pay for
