@@ -1548,6 +1548,31 @@ int __cdecl mod_social_ai(int faction_id, int a2, int a3, int a4, int a5, CSocia
             }
         }
     }
+    /*
+    Neural Amplifier: decide the social-engineering choice.
+
+    Ahead of the apply block below, not after it as the observe call was. The observation could
+    sit at the end because it only watched; a decision cannot, because by that point the
+    upheaval has already been debited and pending already set. Deciding there would mean undoing
+    a paid-for change and applying another, and a refund path is how a faction ends up with free
+    social engineering.
+
+    So the scan above still produces the deterministic tier's candidate, this may replace it,
+    and the single apply block below acts on whichever survived. `sf < 0` means "no change" and
+    is a real answer from either tier.
+
+    `soc` is rebuilt for the chosen pair because the scan only filled it for its own candidate,
+    and social_upheaval costs the WHOLE proposed category set rather than the one field — so a
+    different choice is a different price, and the block below must cost what it is about to
+    apply rather than what the scan happened to leave behind.
+    */
+    if (llm_enabled(faction_id)) {
+        na_decide_faction_se(faction_id, &sf, &sm2);
+        if (sf >= 0) {
+            memcpy(&soc, &f->SE_Politics, sizeof(soc));
+            soc.models[sf] = sm2;
+        }
+    }
     int cost;
     if (sf >= 0 && f->energy_credits > (cost = social_upheaval(faction_id, &soc))) {
         int sm1 = current->models[sf];
@@ -1557,14 +1582,6 @@ int __cdecl mod_social_ai(int faction_id, int a2, int a3, int a4, int a5, CSocia
         debug("social_change %d %d %8s cost: %d score: %d %s -> %s\n",
             *CurrentTurn, faction_id, m->filename,
             cost, score_diff, SocialField[sf].soc_name[sm1], SocialField[sf].soc_name[sm2]);
-    }
-    /*
-    Neural Amplifier: observe the social-engineering choice. Placed after the decision is
-    settled and after any upheaval has been paid for, so cost reflects what was actually
-    spent. sf < 0 means "no change", which is recorded as a decision rather than skipped.
-    */
-    if (llm_enabled(faction_id)) {
-        na_observe_faction_se(faction_id, sf, sf >= 0 ? sm2 : -1, sf >= 0 ? cost : 0);
     }
     social_set(faction_id);
     design_units(faction_id);

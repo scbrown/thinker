@@ -1132,15 +1132,9 @@ Social engineering. field/model describe the change the deterministic tier settl
 field < 0 for "no change this turn" — which is a real decision and is recorded as one
 rather than as an absence.
 */
-void na_observe_faction_se(int faction_id, int field, int model, int cost) {
-    if (faction_id <= 0 || faction_id >= MaxPlayerNum) {
-        return;
-    }
+static void na_build_faction_se(NaBuf* w, int faction_id, int field, int model, int cost) {
     Faction& plr = Factions[faction_id];
     const int* current = &plr.SE_Politics;
-    NaBuf wb;
-    NaBuf* w = &wb;
-    na_buf_init(w);
     na_write_head(w, "faction.se", "turn", faction_id);
 
     // Current settings, by name rather than index — an index means nothing in a prompt.
@@ -1267,10 +1261,161 @@ void na_observe_faction_se(int faction_id, int field, int model, int cost) {
         na_buf_puts(w, ",\"native_choice\":\"se:none\",\"native_choice_name\":\"No change\"");
         na_buf_puts(w, ",\"upheaval_cost\":0");
     }
+}
 
+void na_observe_faction_se(int faction_id, int field, int model, int cost) {
+    if (faction_id <= 0 || faction_id >= MaxPlayerNum) {
+        return;
+    }
+    NaBuf wb;
+    NaBuf* w = &wb;
+    na_buf_init(w);
+    na_build_faction_se(w, faction_id, field, model, cost);
     na_buf_puts(w, ",\"tier\":\"deterministic\",\"applied\":\"native\"}");
     na_log_record(w);
     na_buf_free(w);
+}
+
+static bool na_parse_se_id(const char* id, int* field, int* model) {
+    if (!id) {
+        return false;
+    }
+    if (strcmp(id, "se:none") == 0) {
+        *field = -1;
+        *model = -1;
+        return true;
+    }
+    int f = 0;
+    int m = 0;
+    if (sscanf(id, "se:%d:%d", &f, &m) == 2
+    && f >= 0 && f < MaxSocialCatNum && m >= 0 && m < MaxSocialModelNum) {
+        *field = f;
+        *model = m;
+        return true;
+    }
+    return false;
+}
+
+/*
+faction.se, decided rather than observed.
+
+Four gates here rather than base.production's three, because this surface SPENDS.
+
+Parse, then society_avail — the engine's own test, and deliberately not the checks the action
+space makes for itself. Those two are supposed to agree; this is the one that binds, so an
+order can only do what the engine would have allowed.
+
+Then affordability, which is the gate the other surfaces do not need. social_upheaval is
+computed against the WHOLE proposed category set rather than the single field being changed,
+so it has to be asked about the brain's choice specifically — the cost of the deterministic
+tier's candidate says nothing about the cost of a different one. A change the faction cannot
+afford is one the engine would refuse, and letting it through would produce a record saying
+"llm chose X, applied X" while the faction quietly changed nothing. That divergence is exactly
+what base.production's re-verification exists to catch, and it is cheaper to prevent here.
+
+The caller applies. This function decides and records; it does not touch energy_credits or
+pending. Debiting in two places is how a faction ends up paying twice or paying nothing, and
+faction.cpp already does it correctly for whatever choice it is handed.
+
+"se:none" is a legal answer and a real decision, not an absence — a brain that judges the
+upheaval not worth paying this turn has decided something, and coverage counts what fired.
+*/
+void na_decide_faction_se(int faction_id, int* field, int* model) {
+    if (faction_id <= 0 || faction_id >= MaxPlayerNum || !field || !model) {
+        return;
+    }
+    Faction& plr = Factions[faction_id];
+
+    const int native_field = *field;
+    const int native_model = *model;
+    int native_cost = 0;
+    if (native_field >= 0 && native_field < MaxSocialCatNum) {
+        CSocialCategory native_soc;
+        memcpy(&native_soc, &plr.SE_Politics, sizeof(native_soc));
+        native_soc.models[native_field] = native_model;
+        native_cost = social_upheaval(faction_id, &native_soc);
+    }
+
+    NaBuf w;
+    na_buf_init(&w);
+    na_build_faction_se(&w, faction_id, native_field, native_model, native_cost);
+
+    int applied_field = native_field;
+    int applied_model = native_model;
+    const char* tier = "deterministic";
+    const char* how = "native";
+    char detail[192];
+    detail[0] = '\0';
+
+    if (w.failed) {
+        snprintf(detail, sizeof(detail), "world view could not be built");
+    } else {
+        const size_t open_len = w.len;
+        na_buf_puts(&w, "}");
+        NaBuf body;
+        if (!w.failed && na_http_post(llm_endpoint.c_str(), "/decide", w.data,
+                                      conf.llm_timeout_ms, &body)) {
+            char action_id[64];
+            int f = -1;
+            int m = -1;
+            if (!na_json_string(body.data, "action_id", action_id, sizeof(action_id))) {
+                snprintf(detail, sizeof(detail), "no action_id in reply");
+            } else if (!na_parse_se_id(action_id, &f, &m)) {
+                snprintf(detail, sizeof(detail), "unparseable action_id %.48s", action_id);
+            } else if (f >= 0 && !society_avail(f, m, faction_id)) {
+                snprintf(detail, sizeof(detail), "illegal action_id %.48s", action_id);
+            } else {
+                bool ok = true;
+                if (f >= 0) {
+                    CSocialCategory soc;
+                    memcpy(&soc, &plr.SE_Politics, sizeof(soc));
+                    soc.models[f] = m;
+                    const int cost = social_upheaval(faction_id, &soc);
+                    if (plr.energy_credits <= cost) {
+                        ok = false;
+                        snprintf(detail, sizeof(detail),
+                                 "upheaval costs %d, reserves %d", cost, plr.energy_credits);
+                    }
+                }
+                if (ok) {
+                    applied_field = f;
+                    applied_model = m;
+                    tier = "llm";
+                    how = na_json_true(body.data, "degraded") ? "llm_degraded" : "llm";
+                }
+            }
+            na_buf_free(&body);
+        } else {
+            snprintf(detail, sizeof(detail), "orchestrator unreachable or slow");
+        }
+        if (!w.failed) {
+            w.len = open_len;
+            w.data[w.len] = '\0';
+        }
+    }
+
+    na_buf_printf(&w, ",\"tier\":\"%s\",\"applied\":\"%s\"", tier, how);
+    if (applied_field >= 0 && applied_field < MaxSocialCatNum) {
+        na_buf_printf(&w, ",\"applied_item\":\"se:%d:%d\"", applied_field, applied_model);
+        na_buf_puts(&w, ",\"applied_item_name\":\"");
+        na_buf_escaped(&w, SocialField[applied_field].field_name);
+        na_buf_puts(&w, " -> ");
+        na_buf_escaped(&w, SocialField[applied_field].soc_name[applied_model]);
+        na_buf_puts(&w, "\"");
+    } else {
+        na_buf_puts(&w, ",\"applied_item\":\"se:none\",\"applied_item_name\":\"No change\"");
+    }
+    if (detail[0]) {
+        na_buf_puts(&w, ",\"fallback_reason\":\"");
+        na_buf_escaped(&w, detail);
+        na_buf_puts(&w, "\"");
+    }
+    na_buf_puts(&w, "}");
+    na_log_record(&w);
+    na_buf_free(&w);
+
+    *field = applied_field;
+    *model = applied_model;
 }
 
 /*
@@ -1285,16 +1430,18 @@ Cost is recomputed from the PRE-decision minerals, passed in by the caller. Reco
 fact would be wrong whenever the item was actually hurried: hurry_item() moves
 minerals_accumulated, so the cost of a purchase already made would come back as zero.
 */
-void na_observe_base_hurry(int base_id, int item, int minerals_before, int credits_before,
-                           int native_hurried) {
-    if (base_id < 0 || base_id >= *BaseCount || base_id >= MaxBaseNum) {
-        return;
-    }
+/*
+`native_hurried` is a tri-state here: > 0 hurried, 0 declined, and < 0 "not yet asked".
+
+The decide path runs BEFORE the deterministic tier, so at that point there is no native choice
+to report. It passes < 0 and native_choice is omitted rather than defaulted, because defaulting
+it to "hurry:none" would put a fabricated answer in front of the brain — absent reads as "not
+determined", false reads as "the engine decided not to".
+*/
+static void na_build_base_hurry(NaBuf* w, int base_id, int item, int minerals_before,
+                                int credits_before, int native_hurried) {
     BASE& base = Bases[base_id];
     const int faction_id = base.faction_id;
-    NaBuf wb;
-    NaBuf* w = &wb;
-    na_buf_init(w);
 
     const int total = mineral_cost(base_id, item);
     const int remaining = total - minerals_before;
@@ -1356,10 +1503,138 @@ void na_observe_base_hurry(int base_id, int item, int minerals_before, int credi
     }
     na_buf_printf(w, "],\"action_space_size\":%d", affordable ? 2 : 1);
 
-    na_buf_printf(w, ",\"native_choice\":\"%s\"", native_hurried ? "hurry:now" : "hurry:none");
+    if (native_hurried >= 0) {
+        na_buf_printf(w, ",\"native_choice\":\"%s\"", native_hurried ? "hurry:now" : "hurry:none");
+    }
+}
+
+void na_observe_base_hurry(int base_id, int item, int minerals_before, int credits_before,
+                           int native_hurried) {
+    if (base_id < 0 || base_id >= *BaseCount || base_id >= MaxBaseNum) {
+        return;
+    }
+    NaBuf wb;
+    NaBuf* w = &wb;
+    na_buf_init(w);
+    na_build_base_hurry(w, base_id, item, minerals_before, credits_before,
+                        native_hurried ? 1 : 0);
     na_buf_puts(w, ",\"tier\":\"deterministic\",\"applied\":\"native\"}");
     na_log_record(w);
     na_buf_free(w);
+}
+
+/*
+base.hurry, decided rather than observed.
+
+The strictest of the four, because it is the one that can lose something irreversibly, and the
+only one where deciding meant moving the hook rather than assigning a return value.
+mod_base_hurry both decides AND spends on its way out through hurry_item, so there is no point
+after it at which a different answer can still be given. This runs first instead, and calls the
+deterministic tier only when it is standing down.
+
+Three engine checks before any purchase, all the engine's own: can_hurry_item, a positive
+hurry_cost, and enough reserves to pay it. hurry_item does the credit debit and the mineral
+credit together — doing either half here would be how a faction gets free production.
+
+Returns what the engine hook should return: 1 hurried, 0 did not.
+
+Exactly one record on every path, which is why this owns the fallback rather than letting the
+caller handle it. Falling back means running mod_base_hurry and reporting what IT did, and a
+caller that wrote its own record for that case would either duplicate this one or build the
+world view twice to avoid it.
+
+"hurry:none" is a real decision, not an absence. A brain that judges the credits better kept is
+answering the question, and the deterministic tier is deliberately NOT consulted afterwards —
+asking it to second-guess a considered "no" would make the surface unfalsifiable.
+*/
+int na_decide_base_hurry(int base_id, int item, int minerals_before, int credits_before) {
+    if (base_id < 0 || base_id >= *BaseCount || base_id >= MaxBaseNum) {
+        return mod_base_hurry();
+    }
+    BASE& base = Bases[base_id];
+    Faction& plr = Factions[base.faction_id];
+
+    NaBuf w;
+    na_buf_init(&w);
+    na_build_base_hurry(&w, base_id, item, minerals_before, credits_before, -1);
+
+    int rc = 0;
+    bool decided = false;
+    const char* tier = "deterministic";
+    const char* how = "native";
+    const char* chosen = "hurry:none";
+    int spent = 0;
+    char detail[192];
+    detail[0] = '\0';
+
+    if (w.failed) {
+        snprintf(detail, sizeof(detail), "world view could not be built");
+    } else {
+        const size_t open_len = w.len;
+        na_buf_puts(&w, "}");
+        NaBuf body;
+        if (!w.failed && na_http_post(llm_endpoint.c_str(), "/decide", w.data,
+                                      conf.llm_timeout_ms, &body)) {
+            char action_id[64];
+            if (!na_json_string(body.data, "action_id", action_id, sizeof(action_id))) {
+                snprintf(detail, sizeof(detail), "no action_id in reply");
+            } else if (strcmp(action_id, "hurry:none") == 0) {
+                decided = true;
+                rc = 0;
+                tier = "llm";
+                how = na_json_true(body.data, "degraded") ? "llm_degraded" : "llm";
+            } else if (strcmp(action_id, "hurry:now") != 0) {
+                snprintf(detail, sizeof(detail), "unparseable action_id %.48s", action_id);
+            } else {
+                const int total = mineral_cost(base_id, item);
+                int remaining = total - base.minerals_accumulated;
+                if (remaining < 0) { remaining = 0; }
+                const int cost = hurry_cost(base_id, item, remaining);
+                if (!base.can_hurry_item() || cost <= 0 || cost > plr.energy_credits) {
+                    snprintf(detail, sizeof(detail),
+                             "cannot hurry: cost=%d reserves=%d remaining=%d",
+                             cost, plr.energy_credits, remaining);
+                } else {
+                    hurry_item(base_id, remaining, cost);
+                    decided = true;
+                    rc = 1;
+                    spent = cost;
+                    chosen = "hurry:now";
+                    tier = "llm";
+                    how = na_json_true(body.data, "degraded") ? "llm_degraded" : "llm";
+                }
+            }
+            na_buf_free(&body);
+        } else {
+            snprintf(detail, sizeof(detail), "orchestrator unreachable or slow");
+        }
+        if (!w.failed) {
+            w.len = open_len;
+            w.data[w.len] = '\0';
+        }
+    }
+
+    if (!decided) {
+        // Standing down: the deterministic tier decides and spends, and the record reports
+        // what it did rather than what was asked for.
+        rc = mod_base_hurry();
+        chosen = rc ? "hurry:now" : "hurry:none";
+        spent = rc ? credits_before - plr.energy_credits : 0;
+    }
+
+    na_buf_printf(&w, ",\"tier\":\"%s\",\"applied\":\"%s\"", tier, how);
+    na_buf_printf(&w, ",\"applied_item\":\"%s\"", chosen);
+    na_buf_printf(&w, ",\"credits_spent\":%d", spent);
+    na_buf_printf(&w, ",\"energy_reserves\":%d", plr.energy_credits);
+    if (detail[0]) {
+        na_buf_puts(&w, ",\"fallback_reason\":\"");
+        na_buf_escaped(&w, detail);
+        na_buf_puts(&w, "\"");
+    }
+    na_buf_puts(&w, "}");
+    na_log_record(&w);
+    na_buf_free(&w);
+    return rc;
 }
 
 /*

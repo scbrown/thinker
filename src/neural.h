@@ -126,6 +126,27 @@ different hook — the choice is made through the UI, not here.
 void na_observe_faction_se(int faction_id, int field, int model, int cost);
 
 /*
+Decide one social-engineering change: post the world view, apply the answer.
+
+In/out. `field` and `model` carry the deterministic tier's choice in and the
+decision out — `field < 0` means "no change", which is a real answer both ways.
+On any failure they come back exactly as they went in, so a broken model costs a
+social choice and never a turn (invariant 9).
+
+Decides and records only. It does NOT debit energy_credits or touch
+SE_Politics_pending: the caller applies, because faction.cpp already does that
+correctly for whatever choice it is handed, and debiting in two places is how a
+faction pays twice or pays nothing.
+
+Must be called BEFORE the caller applies anything. The upheaval cost is computed
+against the whole proposed category set, so the brain's choice has to be costed
+as its own candidate rather than inheriting the deterministic tier's figure —
+and affordability is checked here so the record cannot claim a change the
+faction could not pay for.
+*/
+void na_decide_faction_se(int faction_id, int* field, int* model);
+
+/*
 Emit one base.hurry observation: whether to spend energy credits to finish production now.
 
 A binary decision with a price, which makes it a good fit for the LLM tier — the question is not
@@ -138,6 +159,26 @@ place both the decision AND the pre-decision numbers are available is outside it
 */
 void na_observe_base_hurry(int base_id, int item, int minerals_before, int credits_before,
                            int native_hurried);
+
+/*
+Decide whether to hurry: post the world view, spend or hold, return what the
+engine hook should return (1 hurried, 0 did not).
+
+Unlike the other three this OWNS the fallback. mod_base_hurry decides and spends
+in one pass, so there is no point after it at which a different answer can still
+be given — this runs first and calls it only when standing down. That also keeps
+the one-record-per-decision invariant: a caller handling the fallback itself
+would either write a second record or build the world view twice to avoid it.
+
+Purchases go through hurry_item, which does the credit debit and the mineral
+credit together. Gated on the engine's own can_hurry_item, a positive
+hurry_cost, and sufficient reserves, so an unaffordable order is refused rather
+than partially applied.
+
+`minerals_before` and `credits_before` are the PRE-decision numbers, captured by
+the caller before anything is spent.
+*/
+int na_decide_base_hurry(int base_id, int item, int minerals_before, int credits_before);
 
 void na_autoload_tick();
 
