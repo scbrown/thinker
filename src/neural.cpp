@@ -1,4 +1,6 @@
 
+#include <time.h>
+
 #include "neural.h"
 #include "savegame.h"
 #include "veh.h"
@@ -342,6 +344,62 @@ static void na_write_history(FILE* fp, int base_id) {
 
 
 /*
+Telemetry: the adapter's whole observability job (docs/observability.md section 4).
+
+Two fields, and the DLL does nothing else with them — export lives in the orchestrator because
+the game's message pump must never block on a network write.
+
+**traceparent** makes the adapter the trace root, because the game is the root of the causality:
+a decision exists because the engine asked. W3C format, and the ids are derived rather than
+random on purpose — the engine's RNG is the *game's* RNG, and drawing from it would perturb a
+seeded game just by observing it. Turn, faction, base and the per-turn call sequence already
+identify a decision uniquely within a run, which is what correlating a record to its observation
+needs; the session salt separates two runs of the same save.
+
+**fairness** stamps only what the engine knows: which slot this faction is, and the difficulty.
+The ledger itself is derived in the orchestrator (fairness.py) because three of its entries
+change which side they favour as difficulty moves and two are inert under the fork's shipped
+defaults — a static list hardcoded here would declare handicaps that are not in force and
+mislabel ones that are. Reporting the inputs and deriving the rules in one place is the division
+that keeps the ledger honest.
+*/
+static unsigned int na_session_salt() {
+    // Fixed per process, varying between runs. Wall-clock at first use: this separates two
+    // runs of the same save, which is all it has to do — it is a correlation id, not a secret,
+    // and deliberately not drawn from the engine's RNG, which is the *game's* RNG.
+    static unsigned int salt = 0;
+    if (salt == 0) {
+        salt = (unsigned int)time(NULL);
+    }
+    return salt;
+}
+
+static void na_write_trace(FILE* fp, int faction_id, int base_id, int seq) {
+    const unsigned int salt = na_session_salt();
+    fputs(",\"trace\":{\"traceparent\":\"00-", fp);
+    fprintf(fp, "%08x%08x%08x%08x",
+            salt, (unsigned int)*CurrentTurn,
+            (unsigned int)((faction_id << 16) | (base_id & 0xffff)), (unsigned int)seq);
+    fprintf(fp, "-%08x%08x-01\"}", salt ^ (unsigned int)*CurrentTurn, (unsigned int)seq);
+}
+
+static void na_write_fairness(FILE* fp, int faction_id) {
+    static const char* levels[] = {
+        "citizen", "specialist", "talent", "librarian", "thinker", "transcend"
+    };
+    const int level = *DiffLevel;
+    fputs(",\"fairness\":{\"slot\":\"", fp);
+    fputs(is_human(faction_id) ? "human" : "ai", fp);
+    fputs("\",\"difficulty\":\"", fp);
+    fputs(level >= 0 && level < 6 ? levels[level] : "unknown", fp);
+    // handicaps is deliberately EMPTY, not absent: the orchestrator derives the ledger from
+    // these two inputs. An adapter that knows asymmetries the ledger does not model may stamp
+    // its own entries instead, and fairness.drift checks those rather than replacing them.
+    fputs("\",\"handicaps\":[]}", fp);
+}
+
+
+/*
 The measured economy, on every surface. This is `WorldView.metrics` in the contract.
 
 A base deciding whether to spend 81 of 82 energy credits cannot judge that from the price
@@ -482,6 +540,8 @@ void na_observe_base_production(int base_id, int native_choice, int has_gov) {
     fputs(",\"native_choice_name\":\"", fp);
     na_write_escaped(fp, prod_name(native_choice));
     fputs("\"", fp);
+    na_write_trace(fp, faction_id, base_id, na_seq_count[base_id]);
+    na_write_fairness(fp, faction_id);
     na_write_base_state(fp, base_id);
     na_write_metrics(fp, faction_id, base_id, -1, -1);
     // Written BEFORE recording this turn's answer, so the block the brain reads is strictly
@@ -594,6 +654,8 @@ void na_observe_faction_tech(int faction_id, int native_choice) {
     na_write_escaped(fp, MFactions[faction_id].noun_faction);
     fputs("\"", fp);
 
+    na_write_trace(fp, faction_id, -1, 0);
+    na_write_fairness(fp, faction_id);
     // Faction research and economic state - categories 1 and 4 of the input checklist.
     na_write_metrics(fp, faction_id, -1, -1, -1);
     fprintf(fp, ",\"tech_accumulated\":%d", plr.tech_accumulated);
@@ -649,6 +711,8 @@ void na_observe_faction_se(int faction_id, int field, int model, int cost) {
     }
     fputs("}", fp);
 
+    na_write_trace(fp, faction_id, -1, 0);
+    na_write_fairness(fp, faction_id);
     na_write_metrics(fp, faction_id, -1, -1, -1);
 
     /*
@@ -836,6 +900,8 @@ void na_observe_base_hurry(int base_id, int item, int minerals_before, int credi
     energy_credits and the base's minerals_accumulated may already reflect a purchase the
     brain is being asked to decide on.
     */
+    na_write_trace(fp, faction_id, base_id, 0);
+    na_write_fairness(fp, faction_id);
     na_write_metrics(fp, faction_id, base_id, credits_before, remaining > 0 ? remaining : 0);
 
     /*
