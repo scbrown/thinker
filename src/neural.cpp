@@ -810,6 +810,22 @@ void na_observe_base_hurry(int base_id, int item, int minerals_before, int credi
     fputs(",\"item\":\"", fp);
     na_write_escaped(fp, prod_name(item));
     fputs("\"", fp);
+
+    /*
+    WorldView.subjects — what this decision is ABOUT, as distinct from what it chooses BETWEEN.
+
+    Retrieval keys off action labels, which is right for a surface that picks among named things:
+    base.production offers "Colony Pod" and the datalinks has a node called "Colony Pod". This
+    surface offers "Hurry production" and "Do not hurry", and neither is in any datalinks — so
+    without this it retrieves ZERO facts and the brain decides it on state alone. Measured at
+    0.60 stability, the least stable surface we have.
+
+    Every option here concerns the same item, so naming it cannot bias the choice between them —
+    which is what makes a subject safe to ground when an option would not be.
+    */
+    fputs(",\"subjects\":[\"", fp);
+    na_write_escaped(fp, prod_name(item));
+    fputs("\"]", fp);
     fputs(",\"base_state\":{", fp);
     fprintf(fp, "\"minerals_accumulated\":%d", minerals_before);
     fprintf(fp, ",\"mineral_cost_total\":%d", total);
