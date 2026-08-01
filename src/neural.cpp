@@ -852,6 +852,68 @@ int na_decide_base_production(int base_id, int native_choice, int has_gov) {
 }
 
 /*
+Did the engine actually keep what we handed it?
+
+Every gate in this file is a check we thought to write: the id parses, tech_avail says yes,
+society_avail says yes, the faction can afford it. That catches the failures we anticipated. It
+cannot catch the ones we did not — a rule nobody encoded here, an engine path that overwrites
+queue_items[0] after mod_base_change, a retool interaction, a later hook with its own opinion.
+Those are exactly the cases where the record says "llm chose X, applied X" while the base builds
+something else, and nothing anywhere can tell you.
+
+So this asks a different question from all the gates: not "should the engine accept this" but
+"did it". Read the state back after the apply and compare it against what was decided. That
+needs no knowledge of WHY a choice was dropped, which is the point — it is the one check that
+covers rules we have not learned yet.
+
+Silent when they agree, which is almost always. A divergence gets its own compact record rather
+than being folded into the decision record, because by the time this runs that record is already
+written and sent — and because a divergence genuinely is a second event: the decision happened,
+then something undid it.
+
+The cache is updated to what the engine actually has, so the remaining calls this base-turn do
+not each rediscover and re-report the same divergence. mod_base_reset is hooked at eleven call
+sites; without that, one dropped choice would be eleven identical records.
+*/
+void na_verify_base_production(int base_id) {
+    if (base_id < 0 || base_id >= *BaseCount || base_id >= MaxBaseNum) {
+        return;
+    }
+    int intended = 0;
+    if (!na_cache_get(base_id, &intended)) {
+        // Nothing was decided for this base this turn, so there is nothing to have diverged
+        // from. A base the LLM tier never touched is not this function's business.
+        return;
+    }
+    BASE& base = Bases[base_id];
+    const int actual = base.item();
+    if (actual == intended) {
+        return;
+    }
+
+    FILE* lf = na_log_open();
+    if (lf) {
+        fprintf(lf, "{\"surface_id\":\"base.production\",\"engine\":\"thinker\"");
+        fprintf(lf, ",\"scope\":\"base\",\"turn\":%d,\"base_id\":%d", *CurrentTurn, base_id);
+        fputs(",\"base\":\"", lf);
+        na_write_escaped(lf, base.name);
+        fprintf(lf, "\",\"event\":\"divergence\",\"intended_item\":%d", intended);
+        fputs(",\"intended_item_name\":\"", lf);
+        na_write_escaped(lf, prod_name(intended));
+        fprintf(lf, "\",\"applied_item\":%d", actual);
+        fputs(",\"applied_item_name\":\"", lf);
+        na_write_escaped(lf, prod_name(actual));
+        // Deliberately not a "reason": we do not know one. Naming a cause we have not
+        // established is how a guess becomes a fact in someone's analysis three months later.
+        fputs("\",\"fallback_reason\":\"engine did not keep the applied item\"}\n", lf);
+        fflush(lf);
+    }
+
+    na_cache_put(base_id, actual);
+    na_history_put(base_id, actual, 'd');
+}
+
+/*
 The menu-to-session transition, found by disassembling terranx.exe.
 
 GameHalted (0x68F21C) is written in seven places; only 0x58F4D8 and 0x5ADCE4 clear

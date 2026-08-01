@@ -41,6 +41,22 @@ and the last caller would silently win.
 int na_decide_base_production(int base_id, int native_choice, int has_gov);
 
 /*
+Check that the engine kept the item that was applied, after it has been applied.
+
+Call once per base-turn, immediately after mod_base_change. Silent when the
+engine agrees, which is the normal case; on disagreement it writes a compact
+`"event":"divergence"` record naming both items.
+
+This is deliberately NOT another legality gate. The gates test what we thought
+to check; this tests what actually happened, so it is the only mechanism that
+catches a rule nobody encoded — the case where the decision record claims a
+choice the base is not building and nothing else can tell you.
+
+Does nothing for a base the LLM tier did not decide this turn.
+*/
+void na_verify_base_production(int base_id);
+
+/*
 Emit one base.production world view without deciding anything.
 
 The `observe <base_id>` command-channel probe. Side-effect free by construction:

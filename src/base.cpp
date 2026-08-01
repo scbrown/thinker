@@ -998,6 +998,14 @@ void __cdecl mod_base_reset(int base_id, int has_gov) {
     } else {
         int choice = mod_base_build(base_id, has_gov);
         mod_base_change(base_id, choice);
+        /*
+        Neural Amplifier: confirm the engine kept it. mod_base_change writes queue_items[0]
+        without re-validating, and this runs at eleven call sites per turn, so a choice can be
+        overwritten between here and the base actually building. Silent unless they disagree.
+        */
+        if (llm_enabled(base.faction_id)) {
+            na_verify_base_production(base_id);
+        }
     }
 }
 
