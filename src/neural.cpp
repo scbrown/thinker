@@ -413,6 +413,107 @@ static void na_write_base_state(NaBuf* w, int base_id) {
     na_buf_puts(w, "\"}");
 }
 
+/*
+What this base has recently been told to build, and who decided it.
+
+Production is re-evaluated from scratch every turn. Nothing in the world view said what the
+base was building last turn or why, so a brain reasoning only from the current snapshot will
+flip between two defensible options turn after turn and accumulate nothing — each individual
+choice arguable, the sequence useless. Half-built Recycling Tanks abandoned for a Scout Patrol
+abandoned for Recycling Tanks is a decision process working exactly as designed and playing
+badly.
+
+An agent has a session and could in principle remember. It must not be asked to. Sessions
+compact, reconnect, and get swapped for a different harness entirely, and the whole discipline
+elsewhere in this adapter is that the payload wins over anything the brain believes it recalls.
+History belongs in the world view for the same reason the board does.
+
+`tier` on each entry is what lets the brain tell its own past reasoning from Thinker's — a
+run that mixes both is otherwise a sequence of choices with no attribution, and "why did I
+pick that" has no answer.
+
+A ring buffer per base, eight deep: enough to show a pattern, small enough that 512 bases cost
+about 25 KB and no allocation. Oldest is overwritten, which is the right end to lose.
+*/
+static const int NA_HISTORY = 8;
+
+struct NaBuilt {
+    int turn;
+    int item;
+    char tier;  // 'l' llm, 'd' deterministic, 'p' probe — one byte beats a pointer per entry
+};
+
+static NaBuilt na_built[MaxBaseNum][NA_HISTORY];
+static int na_built_next[MaxBaseNum];
+static bool na_built_init = false;
+
+static void na_history_reset() {
+    for (int b = 0; b < MaxBaseNum; b++) {
+        na_built_next[b] = 0;
+        for (int i = 0; i < NA_HISTORY; i++) {
+            na_built[b][i].turn = -1;
+            na_built[b][i].item = 0;
+            na_built[b][i].tier = '?';
+        }
+    }
+    na_built_init = true;
+}
+
+/*
+Record one base-turn's applied choice.
+
+Called once per base-turn, from the same place the per-turn cache is written, so the engine's
+several calls per base cannot inflate the history into a row of duplicates.
+
+Loading a savegame is the case that needs guarding: base ids are reused, so a fresh game would
+inherit the previous one's history and show the brain a past that never happened for these
+bases. A recorded turn at or beyond the current one can only mean the clock went backwards, so
+the whole buffer is dropped rather than partially trusted.
+*/
+static void na_history_put(int base_id, int item, char tier) {
+    if (!na_built_init) {
+        na_history_reset();
+    }
+    if (base_id < 0 || base_id >= MaxBaseNum) {
+        return;
+    }
+    for (int i = 0; i < NA_HISTORY; i++) {
+        if (na_built[base_id][i].turn >= *CurrentTurn) {
+            na_history_reset();
+            break;
+        }
+    }
+    int slot = na_built_next[base_id];
+    na_built[base_id][slot].turn = *CurrentTurn;
+    na_built[base_id][slot].item = item;
+    na_built[base_id][slot].tier = tier;
+    na_built_next[base_id] = (slot + 1) % NA_HISTORY;
+}
+
+// Newest first, because a brain reading top-down should meet the most relevant entry first.
+static void na_write_history(NaBuf* w, int base_id) {
+    if (!na_built_init) {
+        na_history_reset();
+    }
+    na_buf_puts(w, ",\"recent_builds\":[");
+    int written = 0;
+    for (int back = 1; back <= NA_HISTORY; back++) {
+        int slot = (na_built_next[base_id] - back + NA_HISTORY * 2) % NA_HISTORY;
+        const NaBuilt& e = na_built[base_id][slot];
+        if (e.turn < 0) {
+            continue;
+        }
+        if (written++) {
+            na_buf_puts(w, ",");
+        }
+        na_buf_printf(w, "{\"turn\":%d,\"item\":%d,\"action\":\"", e.turn, e.item);
+        na_buf_escaped(w, prod_name(e.item));
+        na_buf_printf(w, "\",\"tier\":\"%s\"}",
+            e.tier == 'l' ? "llm" : (e.tier == 'p' ? "probe" : "deterministic"));
+    }
+    na_buf_puts(w, "]");
+}
+
 // Build the contract world view for one base's production decision.
 static void na_build_base_production(NaBuf* w, int base_id, int native_choice,
                                      int has_gov, int call_seq) {
@@ -445,6 +546,7 @@ static void na_build_base_production(NaBuf* w, int base_id, int native_choice,
     na_buf_puts(w, "\"");
     na_write_base_state(w, base_id);
     na_write_metrics(w, faction_id, base_id);
+    na_write_history(w, base_id);
     na_write_action_space(w, base_id);
 }
 
@@ -606,6 +708,7 @@ int na_decide_base_production(int base_id, int native_choice, int has_gov) {
         // Forget it, so the remaining calls this turn do not each re-discover and
         // re-report the same divergence.
         na_cache_put(base_id, native_choice);
+        na_history_put(base_id, native_choice, 'd');
         return native_choice;
     }
 
@@ -660,6 +763,7 @@ int na_decide_base_production(int base_id, int native_choice, int has_gov) {
     }
 
     na_cache_put(base_id, applied);
+    na_history_put(base_id, applied, tier[0] == 'l' ? 'l' : 'd');
 
     na_buf_printf(&w, ",\"tier\":\"%s\",\"applied\":\"%s\"", tier, how);
     na_buf_printf(&w, ",\"applied_item\":%d", applied);
