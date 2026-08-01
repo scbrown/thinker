@@ -341,9 +341,11 @@ the world view actually reports. Shipping them under the engine's own names woul
 faction-scope directive permanently unmeasurable - which reads in a record as compliance
 rather than as a gap.
 
-Only fields the engine maintains directly are shipped. Anything needing a sweep over all
-bases is left out rather than approximated: a metric that is quietly wrong is worse than one
-that is absent, because absent reads as "cannot be checked" and wrong reads as fact.
+What is excluded is *approximation*, not aggregation. A metric that is quietly wrong is worse
+than one that is absent, because absent reads as "cannot be checked" and wrong reads as fact —
+so nothing here is estimated. Summing a field the engine maintains per base is not an estimate,
+it is arithmetic, and drone_total is exactly that: the engine keeps no faction-level count, so
+the only honest way to report a name the vocabulary already contains is to add the bases up.
 
 Emitted under the contract's `metrics` key, which is the one place the orchestrator reads
 numbers by name (contract.py: WorldView.metrics). It used to be `faction_state`, which meant
@@ -359,6 +361,29 @@ static void na_write_metrics(NaBuf* w, int faction_id, int base_id) {
     na_buf_printf(w, ",\"base_count\":%d", plr.base_count);
     na_buf_printf(w, ",\"pop_total\":%d", plr.pop_total);
     na_buf_printf(w, ",\"military_units\":%d", plr.total_combat_units);
+
+    /*
+    Drones, sweept from the bases because the engine keeps no faction-level total.
+
+    metrics.py has carried this name since before anything reported it, which is the failure
+    that vocabulary is supposed to prevent: a directive written against an unreported name is
+    accepted at issue time and then reads UNMEASURABLE forever, which in a record looks like
+    compliance rather than a gap. That mattered little while directives were hand-written; an
+    agent can now issue one through issue_directive, so the name had to start meaning something
+    or stop existing.
+
+    Superdrones counted alongside drones, matching the vocabulary's own wording. They are
+    separate citizens in separate engine fields, so this is a count of unhappy citizens rather
+    than the weighted number the riot check uses (drone_riots compares drone_total against
+    talent_total per base) — worth knowing when reading a directive written against it.
+    */
+    int drones = 0;
+    for (int i = 0; i < *BaseCount && i < MaxBaseNum; i++) {
+        if (Bases[i].faction_id == faction_id) {
+            drones += Bases[i].drone_total + Bases[i].superdrone_total;
+        }
+    }
+    na_buf_printf(w, ",\"drone_total\":%d", drones);
     /*
     Base-scope metrics on base-scope surfaces only.
 
