@@ -333,23 +333,58 @@ keeping raw engine numbers out of the contract as opaque ints.
 */
 
 /*
-What choosing this item immediately costs, in the metric vocabulary.
+Why a build option declares no `effects` — and why the honest answer is nothing.
 
-The contract computes a directive trade-off from `Action.effects` and nothing
-else (contract.py: Tradeoff), so an effect that is not declared here cannot be
-weighed against a standing plan — it just silently does not appear. Deriving it
-downstream from `cost` plus `cost_unit` was the previous arrangement and it put
-this adapter's field names inside the orchestrator, which invariant 2 forbids.
+`Action.effects` is `{metric: delta}`: an action's IMMEDIATE, KNOWN change to a
+name in the orchestrator's metric vocabulary (contract.py: Action.effects). It is
+the only input to a directive trade-off, so leaving it out costs something real —
+which is why this used to emit one, and why what it emitted was wrong.
 
-Only the immediate, known cost. What the item goes on to be worth is a prediction,
-and predictions do not belong in a field the orchestrator does arithmetic on.
+It emitted {"minerals_remaining": -cost}: the item's full price as a withdrawal.
+minerals_remaining is a SHORTFALL — minerals still owed on the current item — so
+that declared a debt being paid down by the size of a bill. StateGuard read it the
+only way the words allow, as spending 33 out of an available 6, and denied every
+option on every base that had banked a single mineral (na-co2, measured turn 42:
+Colony Pod 27/33, one turn from done, denied). A wrong effect is not a smaller
+version of a missing one; it is arithmetic the orchestrator presents as fact.
+
+The right number is not a better guess at the cost. It is that a build order in
+this engine SPENDS NOTHING WHEN GIVEN. Minerals are paid over turns out of
+mineral_surplus, so choosing an item is a commitment, not a purchase, and the two
+cases are:
+
+  continuing   the item already in production — minerals_remaining does not move
+               at all. cost and minerals_accumulated are both unchanged, so the
+               delta is exactly zero. Nothing to declare.
+  switching    minerals_remaining is retargeted to the new item, by an amount that
+               depends on the engine's retool rules (Rules->retool_strictness,
+               retool_penalty_prod_change, retool_exemption, is_human, and a
+               comparison against production_id_last rather than the item on
+               screen). The engine's own prospective helper, mod_base_lose_minerals,
+               ignores the candidate item it is passed — so there is no engine
+               function to ask, only its arithmetic to copy, and a copy that drifts
+               is how a number gets quietly wrong.
+
+And even computed exactly, a switch delta is not a cost. Abandoning a 220-mineral
+project for a Scout Patrol would declare minerals_remaining -209 — an improvement,
+because lower is better on a shortfall. There is no delta on this metric that reads
+as "what this build costs", because the metric that would carry that does not exist
+in the vocabulary: there is no per-base mineral pool (minerals_accumulated is base
+state, not a measurement metrics.py names). That gap is the real finding, recorded
+here and in docs/directives.md rather than papered over with a plausible number.
+
+What this costs, stated so nobody discovers it by surprise: base.production actions
+seed no hop-0 directive retrieval and produce no Tradeoff rows. Directives still
+reach the surface through `subjects` and the survival-priority floor, and every
+option still carries `cost` and both turn estimates, so the BRAIN can still weigh
+price — it is the orchestrator's computed trade-off that is empty, and empty
+because nothing true was available to put in it.
+
+Contrast base.hurry below, which does declare both of its effects and means them:
+hurrying spends energy_reserves now and drives minerals_remaining to zero now. That
+surface is the one this field was designed for, and it is the reason the field is
+not the problem here.
 */
-static void na_write_effects(NaBuf* w, int minerals) {
-    if (minerals <= 0) {
-        return;
-    }
-    na_buf_printf(w, ",\"effects\":{\"minerals_remaining\":%d}", -minerals);
-}
 
 // Emit the two turn estimates for one candidate item. surplus <= 0 means never, which is
 // real: a base with no mineral surplus genuinely cannot finish anything.
@@ -430,7 +465,7 @@ static void na_write_action_space(NaBuf* w, int base_id) {
         na_buf_escaped(w, Units[id].name);
         int rows = mod_veh_cost(id, base_id, NULL);
         na_buf_printf(w, "\",\"cost\":%d,\"category\":\"unit\"", rows * mineral_factor);
-        na_write_effects(w, rows * mineral_factor);
+        // No `effects`. Deliberate, and the reasoning is above na_write_turns.
         /*
         A one-line role, because facilities carry CFacility.effect and units carried nothing
         — so a unit's purpose had to come from the model's own recollection of a 1999 game.
@@ -479,7 +514,7 @@ static void na_write_action_space(NaBuf* w, int base_id) {
         na_buf_printf(w, "\",\"cost\":%d,\"maint\":%d,\"category\":\"%s\"",
             Facility[id].cost * mineral_factor, Facility[id].maint,
             id >= SP_ID_First ? "project" : "facility");
-        na_write_effects(w, Facility[id].cost * mineral_factor);
+        // No `effects`. Deliberate, and the reasoning is above na_write_turns.
         na_write_turns(w, Facility[id].cost * mineral_factor, surplus, banked,
                        current_item == -id);
         na_buf_puts(w, "}");
@@ -1985,6 +2020,14 @@ static void na_build_base_hurry(NaBuf* w, int base_id, int item, int minerals_be
         // Spends credits and completes the item, so it moves two metrics. Both are
         // declared: the orchestrator computes a directive trade-off from `effects`
         // and nothing else, so an undeclared effect is an invisible one.
+        //
+        // Both are also true *this turn*, which is what earns them the field and what
+        // the build options in na_write_action_space cannot claim. energy_reserves is
+        // a pool and hurrying draws it down. minerals_remaining is a shortfall and
+        // hurrying takes it to exactly zero — which is why the delta is -remaining,
+        // the debt itself, and NOT the item's price. Do not "make base.production
+        // consistent" by giving its options -cost: that is the na-co2 defect, and the
+        // difference is that these two things happen now and a build order does not.
         na_buf_printf(w, ",\"effects\":{\"energy_reserves\":%d,\"minerals_remaining\":%d}}",
                       -cost, -(remaining > 0 ? remaining : 0));
     }
