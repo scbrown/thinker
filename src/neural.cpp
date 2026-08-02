@@ -2785,10 +2785,55 @@ void na_auto_turn_tick() {
     log and starves the pump it is running on.
     */
     since = now;
-    na_autoload_log("auto_end_turn", "Console_end_my_turn", 1);
+
+    /*
+    Clear the units that would raise the confirmation, BEFORE asking to end the turn.
+
+    MEASURED 2026-08-01, by photographing the frozen Xvfb display: the thing that
+    hung the run is the engine's own OPERATIONS DIRECTOR dialog -- "Some of our
+    units have not yet moved this turn. Do you really want to end the turn now?"
+    with Cancel / Yes, end the turn. It is drawn by the game, runs its own nested
+    pump (terranx sat at ~55% CPU, not blocked), and ModWinProc is not called
+    while it is up -- so Console_end_my_turn never returns and nothing of ours
+    ever runs again.
+
+    It cannot be answered, from inside or outside. In-process posting is out
+    because we are not running; an external xdotool click onto the dialog was
+    tried against a live frozen instance and CHANGED NOTHING, which extends
+    headless-harness.md 3.0.2 (measured there on the file picker) to the game's
+    own dialogs. So the only strategy left is the one 3.0.2 names: never open a
+    modal.
+
+    Hence skipping rather than answering. Console_skip is the engine's own "this
+    unit is done", the same action the human would use, so the unmoved-unit
+    condition is false by the time we ask and the dialog has no reason to appear.
+
+    This IS a gameplay decision and is deliberately tied to -na-auto-turn rather
+    than done unconditionally: a run that ends its own turns has, by construction,
+    nobody to move units, so skipping them is what "unattended" already meant. An
+    attended session never reaches this code.
+    */
+    int skipped = 0;
+    for (int i = 0; i < *VehCount; i++) {
+        VEH* v = &Vehs[i];
+        if (v->faction_id != *CurrentPlayerFaction) {
+            continue;
+        }
+        // veh_speed is in the same road-move units as moves_spent, so this is the
+        // engine's own notion of "has movement left", not a re-derived one.
+        if (v->moves_spent < veh_speed(i, 0)) {
+            Console_skip(MapWin, i);
+            skipped++;
+        }
+    }
+    char detail[96];
+    snprintf(detail, sizeof(detail), "Console_end_my_turn after skipping %d unit(s)", skipped);
+    na_autoload_log("auto_end_turn", detail, 1);
     in_call = true;
     Console_end_my_turn(MapWin);
     in_call = false;
+    // Reached only if the call returned, which before the skip loop it did not.
+    na_autoload_log("auto_end_turn_returned", "", 1);
 }
 
 void na_exit_turn_check() {
