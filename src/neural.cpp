@@ -552,7 +552,34 @@ static void na_write_metrics(NaBuf* w, int faction_id, int base_id) {
     Faction& plr = Factions[faction_id];
     na_buf_puts(w, ",\"metrics\":{");
     na_buf_printf(w, "\"energy_reserves\":%d", plr.energy_credits);
-    na_buf_printf(w, ",\"energy_income\":%d", plr.energy_surplus_total);
+    /*
+    NET energy income, not gross. energy_surplus_total alone is the wrong number under this
+    name, and the name is the one that matters: the orchestrator uses energy_income as the RATE
+    OF CHANGE of energy_reserves (directives.py RATE_OF), dividing a one-off cost by it to
+    report setback_turns. Reserves move by NET income per turn, so a gross denominator makes
+    every setback figure systematically optimistic — and _setback's own docstring says a setback
+    figure with a bad denominator is worse than no figure, because it looks like the one piece
+    of hard arithmetic in the block.
+
+    Three ways energy_surplus_total is not income (base.cpp / game.cpp, read 2026-08-02):
+      - per-base contribution is clamp(base->energy_surplus, 0, 99999), so a base running a
+        deficit contributes 0 rather than a negative. It is not even a true sum, and the value
+        can never be <= 0 — so "net income is negative, this never recovers" was previously
+        unrepresentable.
+      - commerce is excluded.
+      - facility maintenance is never subtracted.
+
+    The expression below is the ENGINE'S OWN, from game.cpp:1851
+        f->unk_17 = f->energy_surplus_total + f->turn_commerce_income - f->facility_maint_total;
+    which is the engine computing true net separately — proof that the gross field was never
+    meant to be read as income. Recomputed here from the three live fields rather than reading
+    unk_17, because unk_17 is only refreshed at that one point in turn upkeep and metrics are
+    emitted at decision time; the components are what is current when we are asked.
+
+    This stays arithmetic, not estimation, which is what this function's contract requires.
+    */
+    na_buf_printf(w, ",\"energy_income\":%d",
+                  plr.energy_surplus_total + plr.turn_commerce_income - plr.facility_maint_total);
     na_buf_printf(w, ",\"labs_output\":%d", plr.labs_total);
     na_buf_printf(w, ",\"base_count\":%d", plr.base_count);
     na_buf_printf(w, ",\"pop_total\":%d", plr.pop_total);
