@@ -56,6 +56,8 @@ int option_handler(void* user, const char* section, const char* name, const char
         cf->na_governor_policy = atoi(value);
     } else if (MATCH("na_abandon_policy")) {
         cf->na_abandon_policy = atoi(value);
+    } else if (MATCH("na_hq_escape_policy")) {
+        cf->na_hq_escape_policy = atoi(value);
     } else if (MATCH("llm_endpoint")) {
         char* p = strtrim(buf);
         if (strlen(p)) {

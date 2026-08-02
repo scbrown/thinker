@@ -18,6 +18,11 @@ base.cpp) so the observe-abandon probe reports the real verdict instead of a
 reimplementation of it — two copies of a rule is how they come to disagree.
 */
 bool na_should_abandon_base(int base_id);
+/*
+Neural Amplifier base.hq_escape probe. Reports what the surface would decide for
+this base, using the same chooser the live capture path uses, and applies nothing.
+*/
+void na_probe_base_hq_escape(int base_id);
 void __cdecl base_first(int base_id);
 void __cdecl set_base(int base_id);
 void __cdecl base_compute(int update_prev);

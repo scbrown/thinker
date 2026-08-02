@@ -198,6 +198,16 @@ struct Config {
     always no, and why saying no silently is the actual defect.
     */
     int na_abandon_policy = 0;
+    /*
+    Neural Amplifier: deterministic tier for base.hq_escape, the third of the 21
+    surfaces the native AI never decides (surfaces.NO_AI_PATH). 0 keeps stock
+    behaviour, so an unconfigured build is unchanged.
+
+    Unlike the other two this does NOT change the answer — see na_should_escape_hq()
+    in base.cpp. It names the answer, records it, and repairs an asymmetry that
+    penalised player-owned bases receiving the relocated headquarters.
+    */
+    int na_hq_escape_policy = 0;
     int social_ai = 1;
     int social_ai_bias = 10;
     int tech_balance = 0;

@@ -117,6 +117,18 @@ Observation only — na_should_abandon_base (base.cpp) decides.
 void na_observe_base_abandon(int base_id, int abandon, int item_id);
 
 /*
+Emit one base.hq_escape observation: the headquarters base is being captured and
+the HQ can move to another base for 1000 energy credits.
+
+`dest_base_id` is the destination the engine already scored and chose; `relocate`
+is the tier's answer. Records the reserve and base count because those are what
+make the answer arguable at all, even though the tier currently always says yes.
+
+Observation only — na_should_escape_hq (base.cpp) decides.
+*/
+void na_observe_base_hq_escape(int base_id, int dest_base_id, int relocate);
+
+/*
 Load the -na-autoload savegame, once, as soon as the game is idle at the menu.
 
 Called from the GUI timer (mod_blink_timer) because that is the only thing that

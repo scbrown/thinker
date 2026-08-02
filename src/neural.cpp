@@ -832,6 +832,61 @@ void na_observe_base_abandon(int base_id, int abandon, int item_id) {
 }
 
 /*
+base.hq_escape — the headquarters is being captured; move it or lose it.
+
+Fires at most once per base loss, so no dedup guard. The 1000-credit cost is a
+constant in the engine and is emitted as one, so a reader does not have to know it.
+
+Records the reserve and base_count even though the answer is currently
+unconditional: they are the inputs any future LLM tier would argue from, and a
+baseline with no inputs recorded cannot be A/B'd against one that has them.
+*/
+static int na_hq_probing = 0;
+
+void na_observe_base_hq_escape(int base_id, int dest_base_id, int relocate) {
+    if (base_id < 0 || base_id >= *BaseCount || base_id >= MaxBaseNum) {
+        return;
+    }
+    BASE& b = Bases[base_id];
+    if (!na_hq_probing && !conf.na_hq_escape_policy && !llm_enabled(b.faction_id)) {
+        return;
+    }
+    Faction& plr = Factions[b.faction_id];
+
+    NaBuf w;
+    na_buf_init(&w);
+    na_write_head(&w, "base.hq_escape", "base", b.faction_id);
+    na_buf_printf(&w, ",\"base_id\":%d", base_id);
+    na_buf_puts(&w, ",\"base\":\"");
+    na_buf_escaped(&w, b.name);
+    na_buf_puts(&w, "\"");
+
+    na_write_base_state(&w, base_id);
+    na_write_metrics(&w, b.faction_id, base_id);
+
+    na_buf_printf(&w, ",\"dest_base_id\":%d", dest_base_id);
+    na_buf_puts(&w, ",\"dest_base\":\"");
+    if (dest_base_id >= 0 && dest_base_id < *BaseCount) {
+        na_buf_escaped(&w, Bases[dest_base_id].name);
+    }
+    na_buf_puts(&w, "\"");
+
+    na_buf_puts(&w, ",\"inputs\":{");
+    na_buf_printf(&w, "\"cost\":%d", 1000);
+    na_buf_printf(&w, ",\"energy_reserves\":%d", plr.energy_credits);
+    na_buf_printf(&w, ",\"base_count\":%d", plr.base_count);
+    na_buf_puts(&w, "}");
+
+    na_buf_printf(&w, ",\"relocate\":%d", relocate ? 1 : 0);
+    // The probe captures nothing and pays nothing, so it must not claim otherwise.
+    na_buf_puts(&w, ",\"tier\":\"deterministic\",\"applied\":\"");
+    na_buf_puts(&w, na_hq_probing ? "none" : "native");
+    na_buf_puts(&w, "\"}");
+    na_log_record(&w);
+    na_buf_free(&w);
+}
+
+/*
 The side-effect-free probe: emit a world view for one base and decide nothing.
 
 Kept as a separate entry point from na_decide_base_production rather than a flag
@@ -3012,6 +3067,37 @@ void na_command_tick(void* hwnd_raw) {
             char detail[96];
             snprintf(detail, sizeof(detail), "need 0 <= base_id < %d", *BaseCount);
             na_cmd_result("observe-abandon", detail, false);
+        }
+        return;
+    }
+
+    /*
+    "observe-hq-escape <base_id>" — the base.hq_escape probe.
+
+    Answers "if this base fell right now, would the HQ move, and where" without
+    capturing or spending. Uses the capture path's own chooser, so the destination
+    it names is the one the game would actually pick.
+
+    Does not require base_id to hold the headquarters: the surface is rare enough
+    that waiting for a real HQ capture is exactly the unverifiability probes exist
+    to fix. A base that is not the HQ still reports a truthful destination for the
+    hypothetical.
+    */
+    if (strncmp(line, "observe-hq-escape ", 18) == 0) {
+        int base_id = -1;
+        if (sscanf(line + 18, "%d", &base_id) == 1
+        && base_id >= 0 && base_id < *BaseCount) {
+            na_hq_probing = 1;
+            na_probe_base_hq_escape(base_id);
+            na_hq_probing = 0;
+            char detail[96];
+            snprintf(detail, sizeof(detail), "base_id=%d is_hq=%d", base_id,
+                has_fac_built(FAC_HEADQUARTERS, base_id) ? 1 : 0);
+            na_cmd_result("observe-hq-escape", detail, true);
+        } else {
+            char detail[96];
+            snprintf(detail, sizeof(detail), "need 0 <= base_id < %d", *BaseCount);
+            na_cmd_result("observe-hq-escape", detail, false);
         }
         return;
     }

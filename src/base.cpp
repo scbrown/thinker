@@ -397,6 +397,101 @@ Manage base captures using normal attacks or probe team mind control.
 Custom game mechanics are controlled by several options such as
 auto_relocate_hq, facility_capture_fix, base_capture_fix (most important).
 */
+/*
+Neural Amplifier deterministic tier for base.hq_escape (surfaces.NO_AI_PATH).
+
+THE SURFACE. The headquarters base is being captured, and the engine offers to move
+the HQ to another of the faction's bases for 1000 energy credits. In mod_capture_base
+below the answer is the literal `bool relocate = true`, overridden only for a
+single-player human, who gets the ESCAPE popup. So an AI faction — and a Mode B+
+player slot, which is not asked either — always relocates. The decision is not
+absent so much as unexamined: nothing computes it and nothing records it.
+
+THIS TIER DELIBERATELY DOES NOT CHANGE THE ANSWER, and that is the finding rather
+than a shortcut. Relocating is right in essentially every position:
+
+  - Affordability is already settled upstream (base.cpp:484 gates the whole block on
+    energy_credits >= 1000), so this is never a choice between the HQ and solvency.
+  - The headquarters removes distance-based inefficiency for the WHOLE faction, so
+    its value scales with the empire; losing it outright costs more than 1000 credits
+    at any point where a faction has bases worth relocating between.
+  - The engine has already chosen the destination by a distance-and-size score
+    (the loop above), so the alternative is not "relocate somewhere better", it is
+    "do not relocate at all".
+
+Inventing a threshold here — decline when 1000 credits is some fraction of reserves,
+say — would be a number I cannot derive from anything in the engine, and a fabricated
+threshold in a deterministic tier is worse than an honest constant: it looks like
+reasoning. So the native answer is stated, not improved.
+
+What this DOES buy, which is the point for na-2mn: the answer becomes a named
+function with its rationale attached, so the LLM tier has something to fall back to
+and something to be scored against, and the surface starts emitting a record.
+*/
+static bool na_should_escape_hq(int base_id, int best_base_id) {
+    return base_id >= 0 && best_base_id > 0;
+}
+
+/*
+Where the headquarters would escape to if base_id were lost, or -1 for nowhere.
+
+Lifted verbatim out of mod_capture_base so the probe and the live decision share
+one chooser. This is NOT the same selection as find_relocate_base above, and the
+difference matters: that one is the FREE relocation taken when a faction already
+has no headquarters (gated on conf.auto_relocate_hq) and it MAXIMISES
+64*pop_size - 32*assimilation - avg_range. This one is the paid escape taken as
+the HQ base falls, and it MINIMISES a distance score divided by regional base
+count and population. The two are mutually exclusive — the escape block runs only
+when conf.auto_relocate_hq is off — so a probe that borrowed the other one would
+confidently report a destination the game would never pick.
+
+Behaviour-preserving extraction: same scores, same tie-breaks, same initial
+best_score of 9999, which is why a faction whose every candidate scores worse than
+that gets -1 and does not relocate at all.
+*/
+static int na_hq_escape_dest(int base_id) {
+    if (base_id < 0 || base_id >= *BaseCount) {
+        return -1;
+    }
+    int faction_id = Bases[base_id].faction_id;
+    Faction* plr_def = &Factions[faction_id];
+    int best_base_id = -1;
+    int best_score = 9999;
+    for (int i = 0; i < *BaseCount; i++) {
+        if (i == base_id || Bases[i].faction_id != faction_id) {
+            continue;
+        }
+        BASE* cur = &Bases[i];
+        int region = mapsq(cur->x, cur->y)->region;
+        int score = 1;
+        for (int j = 0; j < *BaseCount; j++) {
+            if (j == i || j == base_id || Bases[j].faction_id != faction_id) {
+                continue;
+            }
+            BASE* b = &Bases[j];
+            score += (vector_dist(cur->x, cur->y, b->x, b->y)
+                * (region == mapsq(b->x, b->y)->region ? 1 : 2));
+        }
+        int region_bases = plr_def->region_total_bases[region];
+        int final_score = (score << 8) / (region_bases + (2 * cur->pop_size));
+        if (final_score < best_score) {
+            best_score = final_score;
+            best_base_id = i;
+        }
+    }
+    return best_base_id;
+}
+
+/*
+Probe entry point: what base.hq_escape would decide for this base right now,
+without capturing anything or spending anything. Returns the destination and
+writes the record; relocate is reported, never applied.
+*/
+void na_probe_base_hq_escape(int base_id) {
+    int dest = na_hq_escape_dest(base_id);
+    na_observe_base_hq_escape(base_id, dest, na_should_escape_hq(base_id, dest) ? 1 : 0);
+}
+
 void __cdecl mod_capture_base(int base_id, int faction_id_atk, int is_probe) {
     if (base_id < 0 || base_id >= *BaseCount
     || faction_id_atk < 0 || faction_id_atk >= MaxPlayerNum) {
@@ -482,30 +577,7 @@ void __cdecl mod_capture_base(int base_id, int faction_id_atk, int is_probe) {
     int energy_taken = steal_energy(base_id);
     if (!conf.auto_relocate_hq) {
         if (has_fac_built(FAC_HEADQUARTERS, base_id) && plr_def->energy_credits >= 1000) {
-            int best_base_id = -1;
-            int best_score = 9999;
-            for (int i = 0; i < *BaseCount; i++) {
-                if (i == base_id || Bases[i].faction_id != faction_id) {
-                    continue;
-                }
-                BASE* cur = &Bases[i];
-                int region = mapsq(cur->x, cur->y)->region;
-                int score = 1;
-                for (int j = 0; j < *BaseCount; j++) {
-                    if (j == i || j == base_id || Bases[j].faction_id != faction_id) {
-                        continue;
-                    }
-                    BASE* b = &Bases[j];
-                    score += (vector_dist(cur->x, cur->y, b->x, b->y)
-                        * (region == mapsq(b->x, b->y)->region ? 1 : 2));
-                }
-                int region_bases = plr_def->region_total_bases[region];
-                int final_score = (score << 8) / (region_bases + (2 * cur->pop_size));
-                if (final_score < best_score) {
-                    best_score = final_score;
-                    best_base_id = i;
-                }
-            }
+            int best_base_id = na_hq_escape_dest(base_id);
             if (best_base_id > 0) {
                 parse_num(0, 1000); // Fix: added correct number
                 parse_says(0, old_name, -1, -1);
@@ -514,6 +586,12 @@ void __cdecl mod_capture_base(int base_id, int faction_id_atk, int is_probe) {
                 bool relocate = true;
                 if (!*MultiplayerActive && faction_id == player_id) {
                     relocate = X_pop("ESCAPE", 0);
+                } else if (conf.na_hq_escape_policy) {
+                    // Everyone who is NOT asked: the deterministic tier answers
+                    // instead of the bare literal, and the surface is recorded.
+                    // Same answer as stock — see na_should_escape_hq.
+                    relocate = na_should_escape_hq(base_id, best_base_id);
+                    na_observe_base_hq_escape(base_id, best_base_id, relocate ? 1 : 0);
                 }
                 if (relocate) {
                     plr_def->energy_credits -= 1000;
@@ -529,7 +607,22 @@ void __cdecl mod_capture_base(int base_id, int faction_id_atk, int is_probe) {
                         parse_says(2, MFactions[faction_id].noun_faction, -1, -1);
                         NetMsg_pop(NetMsg, "ESCAPED", 5000, 0, 0);
                     }
-                    if (!is_human(faction_id)) {
+                    /*
+                    Re-plan the base that just became the headquarters.
+
+                    Stock does this for AI factions only. A player-owned base whose
+                    production Thinker manages is in exactly the same position — it
+                    has just become the faction's efficiency centre and should
+                    reconsider what it is building — but was skipped because the test
+                    is is_human rather than "who plans this base". That is the same
+                    asymmetry class as base.staple being skipped for player bases,
+                    and it penalises the Mode B+ configuration the adapter recommends.
+
+                    Left alone for a player base nobody is managing: resetting that
+                    would overwrite a choice the player made by hand.
+                    */
+                    if (!is_human(faction_id)
+                    || (conf.na_hq_escape_policy && conf.manage_player_bases)) {
                         mod_base_reset(best_base_id, 0);
                     }
                 }
