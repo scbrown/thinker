@@ -510,7 +510,10 @@ static const int NA_HISTORY = 8;
 struct NaBuilt {
     int turn;
     int item;
-    char tier;  // 'l' llm, 'd' deterministic, 'p' probe — one byte beats a pointer per entry
+    // 'l' llm, 'd' deterministic, anything else unattributed — one byte beats a pointer per
+    // entry. No 'p' probe value: the observe probe reads history and never writes it, and the
+    // contract has no "probe" tier to receive one.
+    char tier;
 };
 
 static NaBuilt na_built[MaxBaseNum][NA_HISTORY];
@@ -560,26 +563,75 @@ static void na_history_put(int base_id, int item, char tier) {
     na_built_next[base_id] = (slot + 1) % NA_HISTORY;
 }
 
-// Newest first, because a brain reading top-down should meet the most relevant entry first.
+/*
+The contract's `history` (WorldView.history / PriorChoice), OLDEST FIRST.
+
+This block used to be emitted as `recent_builds`, newest first, on the reasoning that a brain
+reading top-down should meet the most relevant entry first. Both halves of that were wrong in
+the same way, and it cost the whole feature rather than merely some of it:
+
+  - The orchestrator declares `history` and the system prompt explains `history`. Nothing ever
+    mapped `recent_builds` onto it, so `WorldView.history` was None on every real decision and
+    the prompt's continuity guidance gated on a field that was never present. The measured
+    three-arm result behind that guidance (docs/decision-inputs.md §2) was obtained by setting
+    `history` directly on a synthetic world view, so none of it reached a live game.
+  - The payload still arrived, because WorldView allows extras and the whole object is dumped
+    into the prompt. So the model was reading an unexplained block newest-first while holding a
+    documented mental model that said oldest-first — which is worse than not sending it. A model
+    applying the documented reading to the undocumented field takes the OLDEST entry for the most
+    recent choice, and that is the na-eaa failure exactly: state handed over correctly and misread.
+
+`item` is the action-space id ("unit:0" / "facility:4"), not the raw engine int it used to be.
+The contract types it as a string, and the point of the field is that the brain can match a past
+choice against an option in front of it exactly rather than by comparing display names.
+
+The display name still rides along as `action`, matching what the action space calls it.
+*/
 static void na_write_history(NaBuf* w, int base_id) {
     if (!na_built_init) {
         na_history_reset();
     }
-    na_buf_puts(w, ",\"recent_builds\":[");
+    na_buf_puts(w, ",\"history\":[");
     int written = 0;
-    for (int back = 1; back <= NA_HISTORY; back++) {
+    // Oldest first: walk the ring from the far end back to the newest entry.
+    for (int back = NA_HISTORY; back >= 1; back--) {
         int slot = (na_built_next[base_id] - back + NA_HISTORY * 2) % NA_HISTORY;
         const NaBuilt& e = na_built[base_id][slot];
         if (e.turn < 0) {
             continue;
         }
+        /*
+        History is the PAST. mod_base_build fires several times per base-turn, and the first
+        call records this turn's choice before the later ones serialise their own world view —
+        so without this guard call_seq >= 2 emits a history containing the answer to the
+        question it is asking. Measured: Zoloto-Gold turn 36 seq 2 carried a turn-36 entry.
+
+        The decision path never saw it, because seq >= 2 is served from the per-turn cache and
+        never reaches the brain. The emitted record is the problem: decision_stability.py takes
+        the LAST row for a surface and re-decides it, which would hand the brain its own prior
+        answer as history and report the resulting agreement as stability.
+        */
+        if (e.turn >= *CurrentTurn) {
+            continue;
+        }
         if (written++) {
             na_buf_puts(w, ",");
         }
-        na_buf_printf(w, "{\"turn\":%d,\"item\":%d,\"action\":\"", e.turn, e.item);
+        na_buf_printf(w, "{\"turn\":%d,\"item\":\"%s:%d\",\"action\":\"", e.turn,
+            e.item >= 0 ? "unit" : "facility", e.item >= 0 ? e.item : -e.item);
         na_buf_escaped(w, prod_name(e.item));
-        na_buf_printf(w, "\",\"tier\":\"%s\"}",
-            e.tier == 'l' ? "llm" : (e.tier == 'p' ? "probe" : "deterministic"));
+        /*
+        PriorChoice.tier is llm | deterministic | null, and null means "this adapter does not
+        track authorship" — so anything we cannot attribute is emitted as null rather than
+        flattened into "deterministic". The old code emitted "probe" here, which no call site
+        ever writes and which the contract would have rejected outright, failing the whole
+        world view rather than one field.
+        */
+        if (e.tier == 'l' || e.tier == 'd') {
+            na_buf_printf(w, "\",\"tier\":\"%s\"}", e.tier == 'l' ? "llm" : "deterministic");
+        } else {
+            na_buf_puts(w, "\",\"tier\":null}");
+        }
     }
     na_buf_puts(w, "]");
 }
