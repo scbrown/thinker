@@ -712,6 +712,74 @@ void na_observe_base_governor_config(int base_id, int applied, int growth,
 }
 
 /*
+base.abandon — the size-1 base whose colony pod would destroy it.
+
+No dedup guard here, unlike base.governor_config: this fires only when a paid-for
+pod is sitting in a size-1 base, which is rare, and the answer is acted on
+immediately. Turn-stamping a decision that CHANGES the base would suppress the
+record of a second, genuinely different decision after a reset.
+
+Carries the growth numbers the verdict turns on — nutrient surplus and box, pop
+size, whether this is the HQ, whether expansion is allowed — because "abandon: no"
+is only checkable against the reason it was no.
+*/
+static int na_abandon_probing = 0;
+
+void na_observe_base_abandon(int base_id, int abandon, int item_id) {
+    if (base_id < 0 || base_id >= *BaseCount || base_id >= MaxBaseNum) {
+        return;
+    }
+    BASE& b = Bases[base_id];
+    if (!na_abandon_probing && !conf.na_abandon_policy && !llm_enabled(b.faction_id)) {
+        return;
+    }
+    NaBuf w;
+    na_buf_init(&w);
+    na_write_head(&w, "base.abandon", "base", b.faction_id);
+    na_buf_printf(&w, ",\"base_id\":%d", base_id);
+    na_buf_puts(&w, ",\"base\":\"");
+    na_buf_escaped(&w, b.name);
+    na_buf_puts(&w, "\"");
+
+    na_write_base_state(&w, base_id);
+    na_write_metrics(&w, b.faction_id, base_id);
+
+    na_buf_printf(&w, ",\"item_id\":%d", item_id);
+    na_buf_puts(&w, ",\"item_name\":\"");
+    na_buf_escaped(&w, prod_name(item_id));
+    na_buf_puts(&w, "\"");
+
+    // The inputs the verdict actually turns on.
+    na_buf_puts(&w, ",\"inputs\":{");
+    na_buf_printf(&w, "\"pop_size\":%d", (int)b.pop_size);
+    na_buf_printf(&w, ",\"nutrient_surplus\":%d", b.nutrient_surplus);
+    na_buf_printf(&w, ",\"nutrients_accumulated\":%d", b.nutrients_accumulated);
+    na_buf_printf(&w, ",\"is_headquarters\":%d",
+        has_fac_built(FAC_HEADQUARTERS, base_id) ? 1 : 0);
+    na_buf_printf(&w, ",\"allow_expand\":%d", allow_expand(b.faction_id) ? 1 : 0);
+    na_buf_puts(&w, "}");
+
+    na_buf_printf(&w, ",\"abandon\":%d", abandon ? 1 : 0);
+    /*
+    outcome reports what was DONE, which is not the same as what was decided. The
+    probe takes no action at all, so it must not claim the reset or the spend — a
+    record that says kept_and_reselected when nothing was reselected is exactly the
+    kind of line that gets believed later.
+    */
+    na_buf_puts(&w, ",\"outcome\":\"");
+    if (na_abandon_probing) {
+        na_buf_puts(&w, "none_probe");
+    } else {
+        na_buf_puts(&w, abandon ? "base_spent" : "kept_and_reselected");
+    }
+    na_buf_puts(&w, "\",\"tier\":\"deterministic\",\"applied\":\"");
+    na_buf_puts(&w, na_abandon_probing ? "none" : "native");
+    na_buf_puts(&w, "\"}");
+    na_log_record(&w);
+    na_buf_free(&w);
+}
+
+/*
 The side-effect-free probe: emit a world view for one base and decide nothing.
 
 Kept as a separate entry point from na_decide_base_production rather than a flag
@@ -2857,6 +2925,41 @@ void na_command_tick(void* hwnd_raw) {
             char detail[96];
             snprintf(detail, sizeof(detail), "need 0 <= base_id < %d", *BaseCount);
             na_cmd_result("observe-gov", detail, false);
+        }
+        return;
+    }
+
+    /*
+    "observe-abandon <base_id>" — the base.abandon probe.
+
+    Serialiser only: it asks na_should_abandon_base what the tier WOULD answer and
+    records that, without resetting production and without completing any pod. The
+    verdict comes from the real function rather than a copy of the rule.
+
+    Unlike the in-game hook this does not require a colony pod to be queued, and
+    that is deliberate — the surface fires so rarely that waiting for the natural
+    conditions is exactly the unverifiability the probes exist to fix. It reports
+    item_id -1 when nothing is queued, so a reader can tell a hypothetical from a
+    live decision.
+    */
+    if (strncmp(line, "observe-abandon ", 16) == 0) {
+        int base_id = -1;
+        if (sscanf(line + 16, "%d", &base_id) == 1
+        && base_id >= 0 && base_id < *BaseCount) {
+            BASE& b = Bases[base_id];
+            int item = b.item();
+            int pod = (item >= 0 && item < MaxProtoNum
+                && Units[item].plan == PLAN_COLONY) ? item : -1;
+            na_abandon_probing = 1;
+            na_observe_base_abandon(base_id, na_should_abandon_base(base_id) ? 1 : 0, pod);
+            na_abandon_probing = 0;
+            char detail[96];
+            snprintf(detail, sizeof(detail), "base_id=%d pod=%d", base_id, pod);
+            na_cmd_result("observe-abandon", detail, true);
+        } else {
+            char detail[96];
+            snprintf(detail, sizeof(detail), "need 0 <= base_id < %d", *BaseCount);
+            na_cmd_result("observe-abandon", detail, false);
         }
         return;
     }

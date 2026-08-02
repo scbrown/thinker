@@ -12,6 +12,12 @@ void __cdecl mod_base_reset(int base_id, int has_gov);
 void __cdecl mod_bases_reset(int region, int faction_id, int defend_only);
 void __cdecl mod_base_change(int base_id, int item_id);
 int __cdecl mod_base_build(int base_id, int has_gov);
+/*
+Neural Amplifier base.abandon deterministic tier. Exposed (rather than static in
+base.cpp) so the observe-abandon probe reports the real verdict instead of a
+reimplementation of it — two copies of a rule is how they come to disagree.
+*/
+bool na_should_abandon_base(int base_id);
 void __cdecl base_first(int base_id);
 void __cdecl set_base(int base_id);
 void __cdecl base_compute(int update_prev);

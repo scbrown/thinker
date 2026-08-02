@@ -3286,6 +3286,54 @@ void __cdecl mod_base_ecology() {
     }
 }
 
+/*
+Neural Amplifier deterministic tier for base.abandon (surfaces.NO_AI_PATH).
+
+WHAT THE SURFACE ACTUALLY IS. Not "give up a base" in general — it is the one
+question the engine asks at mod_base_production below: this base is size 1 and its
+colony pod is paid for, and completing the pod spends the last population point and
+destroys the base. A human gets the ABANDONBASE popup. An AI faction returns 0 and,
+above difficulty 3, is handed free nutrients instead (a handicap, ledger-worthy).
+
+WHY THE ANSWER IS ESSENTIALLY ALWAYS NO — and this is derived from the selector,
+not asserted. build.cpp:876 gates pod selection on
+
+    allow_pods = allow_expand(faction_id) && (pop_size > 1 || nutrient_surplus > 0)
+
+so the ONLY size-1 base Thinker will ever queue a pod in is one with a nutrient
+surplus — that is, a base that is growing and will shortly not be size 1 at all.
+Abandoning a base because it is temporarily small, when its own food box says it is
+about to grow, is strictly wrong. Every case the native selector can produce is a no.
+
+SO THE REAL DEFECT IS THE SHAPE OF THE NO, NOT THE NO. The engine returns 0 and
+leaves the pod queued with its minerals already accumulated, so the base offers the
+same unbuildable item again next turn and every turn after. The refusal is silent
+and it does not converge. This function makes the no ACTIVE: decline, then hand the
+base back to the engine's own chooser (mod_base_reset) so it picks something it can
+actually finish.
+
+THE NARROW YES. A queue is not only written by select_build — a human can set one
+before handing the base to the governor, and that path can leave a pod in a base
+with no nutrient surplus at all. Such a base is a genuine dead end: it cannot grow,
+so it will hold that population point forever. Converting it into a pod that can
+found somewhere better is the right answer, provided it is not the headquarters
+(losing the HQ relocates it and eats the faction's energy) and provided expansion is
+allowed at all, because a pod with nowhere to go is worse than a small base.
+
+Returns true only for that dead-end case. Conservative by construction: the default
+is to keep the base.
+*/
+bool na_should_abandon_base(int base_id) {
+    BASE* base = &Bases[base_id];
+    if (has_fac_built(FAC_HEADQUARTERS, base_id)) {
+        return false;
+    }
+    if (base->nutrient_surplus > 0) {
+        return false;
+    }
+    return allow_expand(base->faction_id);
+}
+
 int __cdecl mod_base_production() {
     BASE*& base = *CurrentBase; // pointer reference
     const int player_id = *CurrentPlayerFaction;
@@ -3352,41 +3400,65 @@ int __cdecl mod_base_production() {
                     return 0;
                 }
                 if (gov_manage_production()) {
-                    return 0;
-                }
-                if (!full_game_turn()) {
-                    return 0;
-                }
-                parse_says(0, base->name, -1, -1);
-                parse_says(1, Units[item_id].name, -1, -1);
-                const char* label;
-                if (base->nutrient_surplus > 0) {
-                    int nut_cost = clamp(((base->pop_size + 1)
-                        * mod_cost_factor(faction_id, RSC_NUTRIENT, *CurrentBaseID)
-                        - base->nutrients_accumulated) / base->nutrient_surplus, 0, 9999);
-                    parse_num(2, nut_cost);
-                    label = "ABANDONBASE1";
-                } else {
-                    label = "ABANDONBASE";
-                }
-                int popval;
-                if (!plr_alien) {
-                    if (*MultiplayerActive) {
+                    /*
+                    Neural Amplifier base.abandon deterministic tier. Off by
+                    default, so the bare `return 0` below is the stock path and
+                    this block does not exist for an unconfigured build.
+
+                    The decision is taken before the observation so the record
+                    reports what was actually done, and the "keep" branch resets
+                    production rather than returning silently — an unbuildable
+                    item left in the queue is re-offered every turn, which is the
+                    defect this surface actually has.
+                    */
+                    if (conf.na_abandon_policy) {
+                        bool abandon = na_should_abandon_base(*CurrentBaseID);
+                        na_observe_base_abandon(*CurrentBaseID, abandon ? 1 : 0, item_id);
+                        if (!abandon) {
+                            mod_base_reset(*CurrentBaseID, 0);
+                            return 0;
+                        }
+                        // Fall through and complete the pod: the base is spent
+                        // deliberately, which is the whole point of a yes.
+                    } else {
                         return 0;
                     }
-                    // Fix: this popup always used ABANDONBASE instead of proper label
-                    popval = popp(ScriptFile, label, 0, "talent_sm.pcx", 0);
                 } else {
-                    if (*MultiplayerActive) {
+                    // The human path, unchanged: ask, and abide by the answer.
+                    if (!full_game_turn()) {
                         return 0;
                     }
-                    popval = popp(ScriptFile, label, 0, "Alopdir.pcx", 0);
-                }
-                if (*MultiplayerActive || popval < 2) {
-                    if (popval) {
-                        *BaseUpkeepFlag = 1;
+                    parse_says(0, base->name, -1, -1);
+                    parse_says(1, Units[item_id].name, -1, -1);
+                    const char* label;
+                    if (base->nutrient_surplus > 0) {
+                        int nut_cost = clamp(((base->pop_size + 1)
+                            * mod_cost_factor(faction_id, RSC_NUTRIENT, *CurrentBaseID)
+                            - base->nutrients_accumulated) / base->nutrient_surplus, 0, 9999);
+                        parse_num(2, nut_cost);
+                        label = "ABANDONBASE1";
+                    } else {
+                        label = "ABANDONBASE";
                     }
-                    return 0;
+                    int popval;
+                    if (!plr_alien) {
+                        if (*MultiplayerActive) {
+                            return 0;
+                        }
+                        // Fix: this popup always used ABANDONBASE instead of proper label
+                        popval = popp(ScriptFile, label, 0, "talent_sm.pcx", 0);
+                    } else {
+                        if (*MultiplayerActive) {
+                            return 0;
+                        }
+                        popval = popp(ScriptFile, label, 0, "Alopdir.pcx", 0);
+                    }
+                    if (*MultiplayerActive || popval < 2) {
+                        if (popval) {
+                            *BaseUpkeepFlag = 1;
+                        }
+                        return 0;
+                    }
                 }
             }
             if (item_id < MaxProtoFactionNum) {

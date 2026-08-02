@@ -104,6 +104,19 @@ void na_observe_base_governor_config(int base_id, int applied, int growth,
                                      int tech, int wealth, int power, int fight);
 
 /*
+Emit one base.abandon observation: a size-1 base holding a finished colony pod,
+where completing it spends the last population and destroys the base.
+
+`abandon` is the deterministic tier's answer (1 = spend the base, 0 = keep it and
+re-select production). `item_id` is the pod that prompted the question. Records
+the growth numbers the answer turns on, so a reader can check the reasoning
+rather than take the verdict.
+
+Observation only — na_should_abandon_base (base.cpp) decides.
+*/
+void na_observe_base_abandon(int base_id, int abandon, int item_id);
+
+/*
 Load the -na-autoload savegame, once, as soon as the game is idle at the menu.
 
 Called from the GUI timer (mod_blink_timer) because that is the only thing that

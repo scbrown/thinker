@@ -187,6 +187,17 @@ struct Config {
     see na_governor_policy() in plan.cpp for why that is the whole point.
     */
     int na_governor_policy = 0;
+    /*
+    Neural Amplifier: deterministic tier for base.abandon, the second of the 21
+    surfaces the native AI never decides (surfaces.NO_AI_PATH). 0 keeps stock
+    behaviour, so an unconfigured build is unchanged.
+
+    The surface is narrower than its name: it is the size-1 base that has a colony
+    pod ready, where completing the pod spends the last population and destroys the
+    base. See na_should_abandon_base() in base.cpp for why the answer is almost
+    always no, and why saying no silently is the actual defect.
+    */
+    int na_abandon_policy = 0;
     int social_ai = 1;
     int social_ai_bias = 10;
     int tech_balance = 0;
