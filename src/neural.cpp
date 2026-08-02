@@ -2428,8 +2428,26 @@ enum NaAutoState {
     NA_AS_DONE,
 };
 
+/*
+Hoisted out of na_autoload_tick so na_auto_turn_tick can ask whether the autoload
+sequence has finished. The two run from the same window procedure and both act on
+a live session, so "has the other one stopped?" has to be answerable — otherwise
+auto-turn can end a turn in the wasted QUICK START game during the seconds
+between the session going live and the savegame replacing it, which would look
+exactly like the harness working while the run it produced was of the wrong game.
+*/
+static int na_autoload_state = NA_AS_WAIT_STARTUP;
+
+/*
+True once -na-autoload has finished, either by loading or by giving up, and
+trivially true when no autoload was asked for.
+*/
+bool na_autoload_settled() {
+    return na_autoload.empty() || na_autoload_state == NA_AS_DONE;
+}
+
 void na_autoload_tick() {
-    static int state = NA_AS_WAIT_STARTUP;
+    int& state = na_autoload_state;
     static DWORD first_tick = 0;
     static DWORD state_since = 0;
     static bool announced = false;
@@ -2704,6 +2722,75 @@ The sites that look more natural are each wrong for their own reason:
 Zero and negative limits mean "no limit", so the flag is absent by default and an
 operator cannot end a run before it starts by fat-fingering the value.
 */
+/*
+End our own turn when nothing else is going to.
+
+The gap this closes: -na-autoload reaches a live session and then the run stops
+dead, because a loaded save resumes at the PLAYER's turn and the engine waits for
+the player. mod_turn_upkeep is only reached by ending a turn, so without this
+na_exit_turn_check never runs either, and -na-exit-turn cannot terminate the run
+it was passed to. Measured 2026-08-01 before this existed: a headless session sat
+at turn 44 for seven minutes and produced no autosave, no decision record and no
+exit record. It looked like a hang and was in fact a game politely waiting.
+
+WHY A STALL TIMER. The condition is "the turn number has not changed in N
+seconds", not "N seconds have passed". The engine legitimately spends a long time
+not accepting input — the other factions' turns, combat animations, the council.
+A periodic timer would fire into all of that; a stall timer re-arms every time
+*CurrentTurn moves, so it only ever speaks when the game has genuinely settled and
+the thing it settled on is us.
+
+WHY Console_end_my_turn AND NOT A KEYSTROKE. headless-harness.md §3.0.2 measured
+that the in-game map UI reads the mouse through DirectInput and ignores posted
+window messages, so the trick that works on the startup screen does not work here.
+This is the same move -na-autoload makes with mod_load_daemon: call the engine's
+own function rather than synthesise the input a human would have used.
+
+THE KNOWN HAZARD, AND WHY THIS IS STILL THE RIGHT SHAPE. §3.0.2 also measured that
+a modal dialog freezes every thread we have, so if ending a turn raises one — "you
+have units with moves remaining" is the obvious candidate — nothing of ours runs
+again and the run hangs. That is precisely why NA_TIMEOUT exists at the harness
+layer and why this logs immediately BEFORE the call rather than after: if the call
+never returns, the last line in the log is the attempt, which is the difference
+between diagnosing this in a minute and bisecting it. Do not move that write.
+*/
+void na_auto_turn_tick() {
+    static int last_turn = -1;
+    static DWORD since = 0;
+    static bool in_call = false;
+
+    if (na_auto_turn <= 0 || in_call) {
+        return;
+    }
+    // No session, or the autoload sequence still owns the game. Reset rather than
+    // accumulate: time spent at the main menu is not the turn failing to advance.
+    if (*GameHalted || !na_autoload_settled() || !MapWin) {
+        last_turn = -1;
+        return;
+    }
+    DWORD now = GetTickCount();
+    if (*CurrentTurn != last_turn) {
+        last_turn = *CurrentTurn;
+        since = now;
+        return;
+    }
+    if (now - since < (DWORD)na_auto_turn * 1000) {
+        return;
+    }
+    /*
+    Re-arm BEFORE the call, not after. If ending the turn does not advance
+    *CurrentTurn — a rejected end, or a turn that ends into another prompt — the
+    next attempt is then one full interval away instead of one window message
+    away, so a refusal costs a wait rather than becoming a spin that floods the
+    log and starves the pump it is running on.
+    */
+    since = now;
+    na_autoload_log("auto_end_turn", "Console_end_my_turn", 1);
+    in_call = true;
+    Console_end_my_turn(MapWin);
+    in_call = false;
+}
+
 void na_exit_turn_check() {
     if (na_exit_turn <= 0 || *CurrentTurn < na_exit_turn) {
         return;

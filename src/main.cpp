@@ -10,6 +10,7 @@ set_str_t movedlabels;
 std::string llm_endpoint = "http://127.0.0.1:8000";
 std::string na_autoload;
 int na_exit_turn = 0;
+int na_auto_turn = 0;
 int na_enter_arg = 0;
 map_str_t musiclabels;
 
@@ -473,6 +474,24 @@ int cmd_parse(Config* cf) {
             harness reporting a broken game.
             */
             na_exit_turn = _wtoi(argv[i+1]);
+            i++;
+        } else if (wcscmp(argv[i], L"-na-auto-turn") == 0 && i + 1 < argc) {
+            /*
+            Neural Amplifier: end our own turn after this many seconds of a live
+            session in which the turn number has not moved. See na_auto_turn_tick.
+
+            Seconds rather than milliseconds because the value is a patience, not
+            a timing: it has to be longer than the engine's slowest legitimate
+            pause, which is other factions' turns, and nobody tuning that is
+            thinking in milliseconds.
+
+            Same _wtoi and the same failure direction as -na-exit-turn: a
+            malformed value yields 0, which means "never end my turn". A run that
+            does not advance is a visibly stalled run the harness timeout will
+            kill; a run that ended turns every 0 seconds would fire continuously
+            and look like the game playing itself.
+            */
+            na_auto_turn = _wtoi(argv[i+1]);
             i++;
         } else if (wcscmp(argv[i], L"-na-headless") == 0) {
             /*

@@ -289,6 +289,21 @@ site is what makes the resulting artifacts trustworthy.
 void na_exit_turn_check();
 
 /*
+True once the -na-autoload sequence has finished, however it finished, and when
+no autoload was requested at all.
+*/
+bool na_autoload_settled();
+
+/*
+End our own turn when the turn number has not moved for -na-auto-turn seconds of
+a live session, so an unattended run advances at all. No-op unless the flag is
+set. Called from the window procedure beside na_autoload_tick — see neural.cpp for
+why a stall timer, why the engine's own Console_end_my_turn, and what happens if
+ending a turn raises a modal.
+*/
+void na_auto_turn_tick();
+
+/*
 Poll the command channel and act on it. Called from the window procedure.
 
 Why a file and not input injection: terranx.exe reads the mouse through DirectInput

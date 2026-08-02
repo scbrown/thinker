@@ -462,6 +462,26 @@ thinker.ini would make an unattended run's terminating condition survive into th
 next interactive one.
 */
 extern int na_exit_turn;
+/*
+Neural Amplifier: seconds of a live session with no turn change after which the
+run ends its own turn, from -na-auto-turn. Zero — the default — never does.
+
+This is the OTHER thing the human at the keyboard was doing. -na-autoload
+replaces the human who starts the game and -na-headless the human who dismisses
+its errors, but a loaded save resumes at the player's turn and simply waits, so
+an unattended run without this advances no turns at all — which also means
+mod_turn_upkeep never runs and -na-exit-turn can never fire. Measured 2026-08-01:
+a 7-minute headless session at turn 44 produced no autosave, no decision record
+and no exit record, because nothing ever ended turn 44.
+
+A STALL threshold rather than a period, because "the turn has not changed in N
+seconds" is an observation about the game and "end a turn every N seconds" is an
+assumption about it. The engine spends real time on the other factions' turns and
+on its own animations; a periodic timer would fire during those, whereas a stall
+timer re-arms whenever the turn number moves and so only ever speaks when nothing
+else is happening.
+*/
+extern int na_auto_turn;
 extern int na_enter_arg;
 extern map_str_t musiclabels;
 

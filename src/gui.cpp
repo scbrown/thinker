@@ -568,6 +568,10 @@ LRESULT WINAPI ModWinProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     installed, so an autoload hung off it silently never fires.
     */
     na_autoload_tick();
+    // -na-auto-turn, for the same reason and in the same place: this is the one
+    // hook that keeps running while the engine sits waiting for a player who is
+    // not there. It self-gates on the flag and on na_autoload_tick being finished.
+    na_auto_turn_tick();
     na_command_tick((void*)hwnd);
     na_input_start((void*)hwnd);
     const bool debug_cmd = DEBUG && !*GameHalted && msg == WM_CHAR;
