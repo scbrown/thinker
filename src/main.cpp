@@ -1,5 +1,6 @@
 
 #include "main.h"
+#include "neural.h"
 #include "lib/ini.h"
 
 FILE* debug_log = NULL;
@@ -8,6 +9,7 @@ AIPlans plans[MaxPlayerNum];
 set_str_t movedlabels;
 std::string llm_endpoint = "http://127.0.0.1:8000";
 std::string na_autoload;
+int na_exit_turn = 0;
 int na_enter_arg = 0;
 map_str_t musiclabels;
 
@@ -403,7 +405,10 @@ int opt_handle_error(const char* section, const char* name) {
             "Header: %s\n"
             "Option: %s\n",
             section, name);
-        MessageBoxA(0, msg, MOD_VERSION, MB_OK | MB_ICONWARNING);
+        // Advisory, not fatal: the option is skipped and the game runs on, so under
+        // -na-headless this becomes a log line and the run continues exactly as an
+        // operator clicking OK would have made it continue.
+        na_message_box(0, msg, MOD_VERSION, MB_OK | MB_ICONWARNING);
     }
     unknown_option = true;
     return 0;
@@ -451,6 +456,37 @@ int cmd_parse(Config* cf) {
                 na_autoload = buf;
             }
             i++;
+        } else if (wcscmp(argv[i], L"-na-exit-turn") == 0 && i + 1 < argc) {
+            /*
+            Neural Amplifier: end the process cleanly once this many turns have
+            been played, so an unattended run terminates on its own instead of
+            being killed by the harness timeout. The check itself is
+            na_exit_turn_check, called from mod_turn_upkeep — see neural.cpp for
+            why that site and not one of the three more obvious ones.
+
+            _wtoi rather than the WideCharToMultiByte dance -na-autoload needs: a
+            turn count is digits, so there is no encoding to get wrong, and a
+            malformed value yields 0, which na_exit_turn_check reads as "no
+            limit". That is the right way for this to fail — a run that does not
+            stop is recoverable by the harness timeout, whereas a run that stops
+            at turn 0 because the argument was mistyped looks like a working
+            harness reporting a broken game.
+            */
+            na_exit_turn = _wtoi(argv[i+1]);
+            i++;
+        } else if (wcscmp(argv[i], L"-na-headless") == 0) {
+            /*
+            Neural Amplifier: assert that nobody is watching, so Thinker's modal
+            error boxes are routed to stderr and the observation log rather than
+            waiting under Xvfb for an OK that never comes.
+
+            Parsed here only so that the flag is documented alongside its
+            siblings and does not read as an unknown argument. The gate that acts
+            on it is na_headless(), which re-reads the command line itself,
+            because four of the dialogs it covers fire before this function runs.
+            -na-autoload implies it; see na_headless() for why -na-exit-turn does
+            not.
+            */
         } else if (wcscmp(argv[i], L"-na-enter-arg") == 0 && i + 1 < argc) {
             // Second argument to the 0x58F450 transition. Sweepable from the command
             // line because its meaning is unknown and each candidate needs a restart.
@@ -471,7 +507,10 @@ void exit_fail(int32_t addr) {
     snprintf(buf, sizeof(buf),
         "Error while patching address %08X in the game binary.\n"
         "This mod requires Alien Crossfire v2.0 terranx.exe in the same folder.", addr);
-    MessageBoxA(0, buf, MOD_VERSION, MB_OK | MB_ICONSTOP);
+    // Fatal. The exit below is what makes the headless path safe: suppressing the
+    // box does not suppress the failure, it only changes where the failure is
+    // reported. A patch that did not apply must never be played through.
+    na_message_box(0, buf, MOD_VERSION, MB_OK | MB_ICONSTOP);
     exit(EXIT_FAILURE);
 }
 
@@ -487,24 +526,35 @@ DLL_EXPORT BOOL APIENTRY DllMain(HINSTANCE UNUSED(hinstDLL), DWORD fdwReason, LP
     size_t seed;
     switch (fdwReason) {
         case DLL_PROCESS_ATTACH:
+            /*
+            All four of these are fatal, and all four run BEFORE cmd_parse — which
+            is why na_headless() reads the command line for itself rather than
+            waiting to be told. Under Xvfb these were the worst dialogs in the mod:
+            they fire before a window exists, so the failure looked like a process
+            that started and then did nothing at all, with no box to read even if
+            somebody had attached a viewer.
+
+            Each still calls exit_fail() immediately, headless or not. Suppression
+            changes only where the message is written.
+            */
             if (DEBUG && !(debug_log = fopen("debug.txt", "w"))) {
-                MessageBoxA(0, "Error while opening debug.txt file.",
+                na_message_box(0, "Error while opening debug.txt file.",
                     MOD_VERSION, MB_OK | MB_ICONSTOP);
                 exit_fail();
             }
             if (ini_parse("thinker.ini", option_handler, &conf) < 0) {
-                MessageBoxA(0, "Error while opening thinker.ini file.",
+                na_message_box(0, "Error while opening thinker.ini file.",
                     MOD_VERSION, MB_OK | MB_ICONSTOP);
                 exit_fail();
             }
             if (FileExists("thinker_user.ini")
             && ini_parse("thinker_user.ini", option_handler, &conf) < 0) {
-                MessageBoxA(0, "Error while opening thinker_user.ini file.",
+                na_message_box(0, "Error while opening thinker_user.ini file.",
                     MOD_VERSION, MB_OK | MB_ICONSTOP);
                 exit_fail();
             }
             if (!cmd_parse(&conf) || !patch_setup(&conf)) {
-                MessageBoxA(0, "Error while loading the game.",
+                na_message_box(0, "Error while loading the game.",
                     MOD_VERSION, MB_OK | MB_ICONSTOP);
                 exit_fail();
             }

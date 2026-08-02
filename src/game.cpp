@@ -1,5 +1,6 @@
 
 #include "game.h"
+#include "neural.h"
 
 static uint32_t custom_game_rules = 0;
 static uint32_t custom_more_rules = 0;
@@ -1008,6 +1009,23 @@ void __cdecl mod_random_events(int flag) {
 }
 
 void __cdecl mod_turn_upkeep() {
+    /*
+    Neural Amplifier: -na-exit-turn ends the run here, and the position of this
+    line inside the function is the reason it is trustworthy.
+
+    It is FIRST — before the debug line, before init_world_config, and crucially
+    before *CurrentTurn is incremented forty lines down. On entry *CurrentTurn is
+    the turn that just finished, with all of its faction upkeep run, all of its
+    observation records flushed, and its autosave already written by
+    mod_faction_upkeep. So the run stops holding exactly N complete turns rather
+    than N-and-a-fragment, and re-running the same save produces a comparable set
+    of artifacts instead of one that depends on where inside a turn we stopped.
+
+    No-op unless -na-exit-turn was passed. neural.cpp carries the argument for
+    this site over mod_auto_save, the tail of mod_faction_upkeep, and the window
+    procedure — each of which is reachable and each of which is wrong.
+    */
+    na_exit_turn_check();
     debug("turn_upkeep %d bases: %d vehs: %d\n", (*CurrentTurn)+1, *BaseCount, *VehCount);
     snprintf(ThinkerVars->build_date, 12, MOD_DATE);
     if (*CurrentTurn == 0) {

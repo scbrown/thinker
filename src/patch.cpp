@@ -2,6 +2,7 @@
 #include "patch.h"
 #include "patchdata.h"
 #include "patchveh.h"
+#include "neural.h"
 #include <mutex>
 
 static std::mutex FileLock;
@@ -366,7 +367,20 @@ static void init_video_config(Config* cf) {
             found = true;
         }
         if (!found) {
-            int value = MessageBoxA(0,
+            /*
+            Not fatal, and not an OK box either: this is the one dialog in the mod
+            that asks a genuine question, and both answers are persisted to
+            Alpha Centauri.ini. Under -na-headless na_message_box therefore does
+            not answer it — it logs the question and stops the run, because
+            picking a side here would be a configuration change made silently on
+            the operator's behalf, in a file that outlives the run.
+
+            That is a deliberate cost: it turns a misconfigured MoviePlayerPath
+            into a failed headless run rather than a hung one. Fix it in
+            Alpha Centauri.ini (or set DisableOpeningMovie) and the question
+            never arises.
+            */
+            int value = na_message_box(0,
                 "Video player not found from MoviePlayerPath in Alpha Centauri.ini.\n"\
                 "Select YES to reset game to the default video player.\n"\
                 "Select NO to skip video playback temporarily.",
@@ -385,7 +399,10 @@ static void init_video_config(Config* cf) {
         prefs_put2("MovieExtension", extn);
     }
     if (!FileExists("modmenu.txt")) {
-        MessageBoxA(0, "Error while opening modmenu.txt. Game might not work as intended.",
+        // Advisory, not fatal — nothing follows it, the game runs without the mod
+        // menu. Under -na-headless it becomes a log line and the run continues,
+        // which is exactly what clicking OK does.
+        na_message_box(0, "Error while opening modmenu.txt. Game might not work as intended.",
             MOD_VERSION, MB_OK | MB_ICONWARNING);
     }
 }
@@ -1480,7 +1497,10 @@ bool patch_setup(Config* cf) {
         || !FileExists(ModHelpTxtFile)
         || !FileExists(ModTutorTxtFile)
         || !FileExists(ModConceptsTxtFile)) {
-            MessageBoxA(0, "Error while opening smac_mod folder. Unable to start smac_only mode.",
+            // Fatal — the exit_fail() below is the classification. -smac was asked
+            // for and cannot be delivered, so the alternative to stopping is
+            // playing a different game than the one the run was configured for.
+            na_message_box(0, "Error while opening smac_mod folder. Unable to start smac_only mode.",
                 MOD_VERSION, MB_OK | MB_ICONSTOP);
             exit_fail();
         }

@@ -108,6 +108,23 @@ enum VideoMode {
     VM_Window = 2,
 };
 
+/*
+Neural Amplifier: process exit codes for an unattended run.
+
+The harness has to distinguish three outcomes without parsing anything, because
+the run it is grading may have produced no parseable output at all. EXIT_FAILURE
+is left to exit_fail(), which every fatal path in the mod already uses, so a
+distinct code is only needed for the two outcomes this fork adds.
+
+NA_EXIT_UNANSWERABLE is deliberately not EXIT_FAILURE: "the run asked a question"
+is an operator-fixable configuration problem, not a broken engine, and a harness
+that cannot tell them apart will retry the one that can never succeed.
+*/
+enum NaExitCode {
+    NA_EXIT_TURN_LIMIT = 0,     // -na-exit-turn reached; the run did what it was asked
+    NA_EXIT_UNANSWERABLE = 3,   // a dialog asked something no unattended run may answer
+};
+
 struct LMConfig {
     int crater = 1;
     int volcano = 1;
@@ -433,6 +450,18 @@ A path rather than a save slot because the file we want is Thinker's own
 saves/auto/Autosave_<year>.sav, which is not addressable as a slot.
 */
 extern std::string na_autoload;
+/*
+Neural Amplifier: stop the process once this many turns have been played, from
+-na-exit-turn. Zero — the default — means play until somebody quits, which is the
+only sane default for a game and the reason an unattended run needs the flag at
+all.
+
+An int rather than a Config member for the same reason as the two above: these
+are properties of one launch, not of the mod's configuration, and putting them in
+thinker.ini would make an unattended run's terminating condition survive into the
+next interactive one.
+*/
+extern int na_exit_turn;
 extern int na_enter_arg;
 extern map_str_t musiclabels;
 

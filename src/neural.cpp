@@ -27,6 +27,22 @@ static FILE* na_log_open() {
 }
 
 /*
+Release the sink on the way out of the process.
+
+Only the paths that call exit() deliberately need this — na_log_record flushes
+every committed line already, so nothing that reached the file can be lost by
+skipping it. It exists so that the ordering is written down rather than assumed:
+the next person to add a buffered destination alongside this FILE* should have a
+place to close it, instead of trusting exit() to have opinions about their sink.
+*/
+static void na_log_close() {
+    if (na_log) {
+        fclose(na_log);
+        na_log = NULL;
+    }
+}
+
+/*
 Commit one finished record to the log.
 
 Records are built in memory rather than printed straight to the file because A1
@@ -2392,6 +2408,216 @@ void na_autoload_tick() {
         state = NA_AS_DONE;
         return;
     }
+}
+
+/*
+=============================================================================
+Unattended runs: the two ways a run never ends by itself
+=============================================================================
+
+Under Xvfb both of them present as the same symptom — a live process, drawing
+nothing anybody can see, producing no new log lines — and neither is a crash, so
+a harness that only watches for exit codes waits forever.
+
+  1. Nothing tells the game to stop. terranx.exe plays until somebody quits it,
+     and there is no somebody.
+  2. A modal MessageBoxA blocks on an OK that no one is there to click. That is a
+     process hung forever, not a failed run (docs/headless-harness.md §3.3).
+
+Both are answered below, both behind the same predicate, and the predicate is
+false for every ordinary session — an interactive run reaches none of this code
+beyond one comparison.
+*/
+
+/*
+Is anybody driving?
+
+Reads the raw command line rather than consulting `na_autoload`, which is what
+the obvious implementation would do, and the reason is a sequencing detail that
+is easy to miss: FOUR of the message boxes that need gating fire from DllMain
+BEFORE cmd_parse has run at all. The debug.txt, thinker.ini and thinker_user.ini
+failures, and exit_fail() reached from patch_setup, all precede or sit inside the
+`!cmd_parse(&conf) || !patch_setup(&conf)` line in main.cpp. At that moment
+na_autoload is still an empty string, so a gate that consulted it would report
+"interactive" for precisely the earliest dialogs — the ones that fire before a
+window exists, which are the worst ones to hang on because there is nothing on
+screen to explain the hang.
+
+Once the command line is being read anyway, an explicit `-na-headless` token
+costs no more than inferring one and says what it means. It is not the only
+signal: `-na-autoload` is on its own conclusive, because it exists to replace the
+human who would otherwise be clicking through the main menu, and requiring a
+second flag to restate that would mean one forgotten flag silently reinstates the
+hang this code exists to remove.
+
+`-na-exit-turn` is deliberately NOT in the set, though it is the third flag of
+the same family. It bounds a run's LENGTH, which an attended session can
+reasonably want while still wanting to see an error dialog; it is not evidence
+that the seat is empty. Suppression should follow from "nobody is here", never
+from "this run is finite".
+
+This deliberately only asks WHETHER a token is present and never parses a value.
+The values belong to cmd_parse; a second parser that read them would be a second
+parser that could disagree with the first, and the disagreement would show up as
+a run that autoloads but does not suppress, or the reverse.
+
+Computed once — a process's command line does not change, and this is consulted
+from paths where being cheap is part of being safe.
+*/
+bool na_headless() {
+    static int cached = -1;
+    if (cached >= 0) {
+        return cached != 0;
+    }
+    cached = 0;
+    int argc = 0;
+    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (!argv) {
+        return false;
+    }
+    for (int i = 1; i < argc; i++) {
+        if (!wcscmp(argv[i], L"-na-headless") || !wcscmp(argv[i], L"-na-autoload")) {
+            cached = 1;
+            break;
+        }
+    }
+    LocalFree(argv);
+    return cached != 0;
+}
+
+/*
+Record a dialog that was never shown.
+
+Written into the observation log as well as stderr, because stderr is not a
+channel we can rely on here: terranx.exe is a GUI-subsystem binary, so whether
+its stderr reaches the terminal depends on how Wine was invoked, and the earliest
+of these fires from DllMain before any harness has attached to anything. The
+JSONL file is on disk, flushed per line, and is already the artifact the run is
+collecting — so the authoritative account of a suppressed dialog ends up sitting
+next to the records of the turns that led to it, which is where somebody reading
+the run backwards will look. stderr is written too, because when it does work it
+is the first thing a human watching the run sees.
+
+No game state is stamped on these records, unlike na_autoload_log which reports
+*GameHalted and *CurrentTurn. Three of the callers run before the engine has
+initialised those globals, so the values would be whatever the mapped image
+happened to contain — a number that reads as a measurement and is not one.
+*/
+static void na_dialog_log(const char* event, const char* text, const char* caption, UINT type) {
+    FILE* fp = na_log_open();
+    if (fp) {
+        fprintf(fp, "{\"surface_id\":\"na.headless\",\"engine\":\"thinker\",\"event\":\"%s\"", event);
+        fputs(",\"text\":\"", fp);
+        na_write_escaped(fp, text ? text : "");
+        fputs("\",\"caption\":\"", fp);
+        na_write_escaped(fp, caption ? caption : "");
+        fprintf(fp, "\",\"mb_type\":%u}\n", (unsigned)type);
+        fflush(fp);
+    }
+    fprintf(stderr, "[thinker] %s: %s\n", caption ? caption : MOD_VERSION, text ? text : "");
+    fflush(stderr);
+}
+
+/*
+MessageBoxA for a run that may have nobody watching it.
+
+A drop-in replacement, and drop-in is the entire design. The alternative — an
+`na_fatal()` helper called from the fatal sites only — would force THIS function
+to hold an opinion about which sites are fatal, and that judgement already exists
+at every call site, encoded in whether the next statement is exit_fail(). Two
+copies of one judgement is how the copies drift, and the drift would be silent:
+somebody adds a message box, forgets to classify it here, and a fatal error is
+either suppressed-and-continued or a warning kills the run.
+
+So this function decides nothing about severity. It suppresses the *rendering*
+and returns; the caller's own next statement still decides whether the process
+dies. That gets AGENTS.md invariant 7's posture for free — a fatal site still
+calls exit_fail() immediately afterwards, so a suppressed fatal error terminates.
+It is never swallowed and carried past, which would be strictly worse than the
+hang it replaced: a hung run produces no data, whereas a run continuing from a
+knowingly broken engine produces data that looks exactly like the good kind.
+
+The one real judgement here is MB_TYPEMASK, and it is a narrow one. An MB_OK box
+offers exactly one answer, so returning IDOK is not a decision taken on the
+operator's behalf — it is the only thing OK could ever have meant. Anything else
+(MB_YESNO and relatives) is a question whose answer changes what the game does,
+and silently picking one would be exactly the blanket suppression invariant 7
+forbids. There is no correct silent answer, so we decline to invent one and stop
+the run, with the question itself in the log so it can be settled in
+configuration and the run repeated. The asymmetry is what makes that the right
+way round: refusing costs one run, guessing costs the credibility of every run
+that does not visibly fail.
+
+An interactive session never reaches any of that — na_headless() is false and
+this is a forwarding call with the original arguments.
+*/
+int na_message_box(HWND hwnd, const char* text, const char* caption, UINT type) {
+    if (!na_headless()) {
+        return MessageBoxA(hwnd, text, caption, type);
+    }
+    if ((type & MB_TYPEMASK) == MB_OK) {
+        na_dialog_log("dialog_suppressed", text, caption, type);
+        return IDOK;
+    }
+    na_dialog_log("dialog_unanswerable", text, caption, type);
+    na_log_close();
+    exit(NA_EXIT_UNANSWERABLE);
+}
+
+/*
+End the process once -na-exit-turn turns have been played.
+
+WHERE this is called from is the whole of the design, so it is worth stating
+plainly: the first statement of mod_turn_upkeep (game.cpp), before that function
+advances the turn counter.
+
+mod_turn_upkeep is the engine's between-turns seam — hooked into control_turn and
+net_control_turn (patch.cpp:669-670), and the place *CurrentTurn is incremented
+(game.cpp, `*CurrentMissionYear = game_year(++(*CurrentTurn))`). So on entry
+*CurrentTurn still names the turn that has just FINISHED: every faction's upkeep
+for it has run, every decision hook has fired and flushed its record, and the
+turn's autosave has been written (mod_faction_upkeep calls auto_save() for the
+map owner). Exiting here ends the run on a turn boundary holding a complete set
+of artifacts for exactly N turns — which is the property that makes two runs of
+the same save comparable, and the reason a truncated final turn would be worse
+than useless rather than merely short.
+
+The sites that look more natural are each wrong for their own reason:
+
+  - mod_auto_save (savegame.cpp) is the tempting one, since it is already the
+    per-turn artifact hook. But it is gated on autosave_interval, on RULES_IRONMAN
+    and on PBEM, so an exit hung off it would silently never fire for a run
+    configured any of three perfectly ordinary ways. A flag that is present and
+    inert is worse than a missing flag, because it reads as coverage.
+  - The tail of mod_faction_upkeep runs once PER FACTION. Exiting from there would
+    stop partway through the remaining factions and leave the final turn in the
+    log half-populated — and a half-populated turn is not a shorter run, it is a
+    turn that looks complete and is not.
+  - The window procedure, where na_autoload_tick already lives, is re-entered from
+    the ModPeekMessage idle hook while the engine is mid-computation. It can be
+    reached at any instant inside a turn, including between an observation record
+    being built and being committed.
+
+Zero and negative limits mean "no limit", so the flag is absent by default and an
+operator cannot end a run before it starts by fat-fingering the value.
+*/
+void na_exit_turn_check() {
+    if (na_exit_turn <= 0 || *CurrentTurn < na_exit_turn) {
+        return;
+    }
+    FILE* fp = na_log_open();
+    if (fp) {
+        fprintf(fp, "{\"surface_id\":\"na.exit_turn\",\"engine\":\"thinker\""
+                    ",\"event\":\"turn_limit\",\"turn\":%d,\"limit\":%d}\n",
+                *CurrentTurn, na_exit_turn);
+        fflush(fp);
+    }
+    fprintf(stderr, "[thinker] -na-exit-turn %d reached after turn %d, exiting.\n",
+            na_exit_turn, *CurrentTurn);
+    fflush(stderr);
+    na_log_close();
+    flushlog();
+    exit(NA_EXIT_TURN_LIMIT);
 }
 
 /*

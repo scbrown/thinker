@@ -258,6 +258,37 @@ int na_decide_base_hurry(int base_id, int item, int minerals_before, int credits
 void na_autoload_tick();
 
 /*
+True when the command line says nobody is at the keyboard: -na-headless, or
+-na-autoload, which implies it. Answered from the raw command line, so it is
+usable from DllMain before cmd_parse has populated anything.
+
+The one thing that changes in an unattended run, and the only thing an
+interactive run pays for it, is one comparison per would-be dialog.
+*/
+bool na_headless();
+
+/*
+Drop-in MessageBoxA that a headless run survives.
+
+Interactive: forwards, unchanged. Headless: writes the text to the observation
+log and stderr instead of showing it, then returns IDOK for a box that only
+offered OK — so the caller's own control flow, which is where fatality is already
+decided, still runs. A box that asks a real question is not answered here at all;
+the run stops instead. See the definition for why suppression is deliberately not
+allowed to know which sites are fatal.
+*/
+int na_message_box(HWND hwnd, const char* text, const char* caption, UINT type);
+
+/*
+Exit the process once -na-exit-turn turns are complete. No-op when the flag is
+unset. Called as the first statement of mod_turn_upkeep, which is the only site
+at which the finished turn's records and autosave are all on disk and the next
+turn has not begun — the definition argues that at length, because the choice of
+site is what makes the resulting artifacts trustworthy.
+*/
+void na_exit_turn_check();
+
+/*
 Poll the command channel and act on it. Called from the window procedure.
 
 Why a file and not input injection: terranx.exe reads the mouse through DirectInput
