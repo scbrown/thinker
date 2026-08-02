@@ -621,6 +621,97 @@ static void na_build_base_production(NaBuf* w, int base_id, int native_choice,
 }
 
 /*
+base.governor_config — the build priorities in force for one player-owned base.
+
+Strictly an observation: it reports the weights governor_priorities resolved and
+never changes them. The decision itself lives in na_governor_policy (plan.cpp),
+where it belongs — this file serializes, it does not decide.
+
+Deduplicated to one line per base per turn because governor_priorities has two
+call sites (build.cpp:121 and :933) and fires on every production re-evaluation.
+Without the guard the same unchanged configuration would emit several times a
+turn, and the orchestrator's "one record per decision" invariant cannot tell a
+fresh decision from a re-read. Solved here by turn-stamping rather than by a
+discriminator field, because unlike production this surface genuinely decides at
+most once per turn.
+
+`source` is the field worth reading: "player" means the human set priorities and
+the deterministic tier stood aside, "deterministic" means the tier supplied them,
+and "unset" means the tier is off and the base is running the flat all-ones
+weighting that motivated the surface in the first place.
+
+The opt-in gate and the dedup both live here rather than at the call site because
+the in-game hook and the probe have to disagree about exactly these two rules —
+the probe must emit on demand and in a stock build — and splitting them across
+two files is how they drift apart.
+*/
+static int na_gov_seen_turn[MaxBaseNum];
+static int na_gov_seen_init = 0;
+static int na_gov_probing = 0;
+
+void na_observe_base_governor_config(int base_id, int applied, int growth,
+                                     int tech, int wealth, int power, int fight) {
+    if (base_id < 0 || base_id >= *BaseCount || base_id >= MaxBaseNum) {
+        return;
+    }
+    BASE& b = Bases[base_id];
+    if (!na_gov_probing) {
+        // Opt-in only: an unconfigured build writes nothing at all.
+        if (!conf.na_governor_policy && !llm_enabled(b.faction_id)) {
+            return;
+        }
+        if (!na_gov_seen_init) {
+            for (int i = 0; i < MaxBaseNum; i++) {
+                na_gov_seen_turn[i] = -1;
+            }
+            na_gov_seen_init = 1;
+        }
+        if (na_gov_seen_turn[base_id] == *CurrentTurn) {
+            return;
+        }
+        na_gov_seen_turn[base_id] = *CurrentTurn;
+    }
+    uint32_t gov = (uint32_t)b.governor_flags;
+
+    NaBuf w;
+    na_buf_init(&w);
+    na_write_head(&w, "base.governor_config", "base", b.faction_id);
+    na_buf_printf(&w, ",\"base_id\":%d", base_id);
+    na_buf_puts(&w, ",\"base\":\"");
+    na_buf_escaped(&w, b.name);
+    na_buf_puts(&w, "\"");
+
+    na_write_base_state(&w, base_id);
+    na_write_metrics(&w, b.faction_id, base_id);
+
+    // The raw bits, so a reader can confirm the policy fired for the stated reason.
+    na_buf_printf(&w, ",\"governor_flags\":%u", gov);
+    na_buf_printf(&w, ",\"governor_active\":%d", (gov & GOV_ACTIVE) ? 1 : 0);
+    na_buf_puts(&w, ",\"priorities\":{");
+    na_buf_printf(&w, "\"explore\":%d", (gov & GOV_PRIORITY_EXPLORE) ? 1 : 0);
+    na_buf_printf(&w, ",\"discover\":%d", (gov & GOV_PRIORITY_DISCOVER) ? 1 : 0);
+    na_buf_printf(&w, ",\"build\":%d", (gov & GOV_PRIORITY_BUILD) ? 1 : 0);
+    na_buf_printf(&w, ",\"conquer\":%d", (gov & GOV_PRIORITY_CONQUER) ? 1 : 0);
+    na_buf_puts(&w, "}");
+    na_buf_printf(&w, ",\"defend_goal\":%d", (int)b.defend_goal);
+
+    // The resolved weights are the actual outcome of this surface.
+    na_buf_puts(&w, ",\"weights\":{");
+    na_buf_printf(&w, "\"growth\":%d", growth);
+    na_buf_printf(&w, ",\"tech\":%d", tech);
+    na_buf_printf(&w, ",\"wealth\":%d", wealth);
+    na_buf_printf(&w, ",\"power\":%d", power);
+    na_buf_printf(&w, ",\"fight\":%d", fight);
+    na_buf_puts(&w, "}");
+
+    na_buf_puts(&w, ",\"tier\":\"deterministic\",\"source\":\"");
+    na_buf_puts(&w, applied == 1 ? "deterministic" : (applied == 2 ? "player" : "unset"));
+    na_buf_puts(&w, "\",\"applied\":\"native\"}");
+    na_log_record(&w);
+    na_buf_free(&w);
+}
+
+/*
 The side-effect-free probe: emit a world view for one base and decide nothing.
 
 Kept as a separate entry point from na_decide_base_production rather than a flag
@@ -2720,6 +2811,52 @@ void na_command_tick(void* hwnd_raw) {
             char detail[96];
             snprintf(detail, sizeof(detail), "need 0 <= base_id < %d", *BaseCount);
             na_cmd_result("observe-hurry", detail, false);
+        }
+        return;
+    }
+
+    /*
+    "observe-gov <base_id>" — the base.governor_config probe.
+
+    Serialiser only. governor_priorities() writes to the WItem it is handed and
+    touches no game state, so resolving the weights here costs nothing and cannot
+    change the base, which is what makes this safe to run mid-game at any time.
+
+    Emits whether or not the deterministic tier is enabled, on purpose: the case
+    worth being able to inspect is precisely the one where it is OFF and the base
+    is running the flat all-ones weighting, because that is the state the surface
+    exists to expose.
+    */
+    if (strncmp(line, "observe-gov ", 12) == 0) {
+        int base_id = -1;
+        if (sscanf(line + 12, "%d", &base_id) == 1
+        && base_id >= 0 && base_id < *BaseCount) {
+            BASE& b = Bases[base_id];
+            /*
+            An AI-owned base has no governor config to report: gov_config() hands
+            it ~0u and governor_priorities takes the faction-character branch, so
+            probing one would write no line. Say so rather than return a success
+            the log cannot corroborate.
+            */
+            if (!is_human(b.faction_id)) {
+                char detail[96];
+                snprintf(detail, sizeof(detail),
+                    "base_id=%d is AI-owned (faction %d); surface is player-only",
+                    base_id, b.faction_id);
+                na_cmd_result("observe-gov", detail, false);
+                return;
+            }
+            WItem Wgov = {};
+            na_gov_probing = 1;
+            governor_priorities(b, Wgov);
+            na_gov_probing = 0;
+            char detail[96];
+            snprintf(detail, sizeof(detail), "base_id=%d of %d", base_id, *BaseCount);
+            na_cmd_result("observe-gov", detail, true);
+        } else {
+            char detail[96];
+            snprintf(detail, sizeof(detail), "need 0 <= base_id < %d", *BaseCount);
+            na_cmd_result("observe-gov", detail, false);
         }
         return;
     }

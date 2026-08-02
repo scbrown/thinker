@@ -90,6 +90,20 @@ serializer unverifiable without playing until a decision happened to occur.
 void na_observe_base_production(int base_id, int native_choice, int has_gov);
 
 /*
+Emit one base.governor_config observation: the build priorities in force for a
+player-owned base, and where they came from.
+
+The first of the 21 NO_AI_PATH surfaces to carry a deterministic tier. `applied`
+is 1 when na_governor_policy (plan.cpp) supplied the weights, 2 when the player's
+own GOV_PRIORITY_* bits did, and 0 when neither did and the base is running the
+flat all-ones weighting. Deduplicated to one line per base per turn.
+
+Observation only — it reports the weights, it does not choose them.
+*/
+void na_observe_base_governor_config(int base_id, int applied, int growth,
+                                     int tech, int wealth, int power, int fight);
+
+/*
 Load the -na-autoload savegame, once, as soon as the game is idle at the menu.
 
 Called from the GUI timer (mod_blink_timer) because that is the only thing that

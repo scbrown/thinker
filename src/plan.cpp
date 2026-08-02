@@ -1,5 +1,6 @@
 
 #include "plan.h"
+#include "neural.h"
 
 int plan_upkeep_turn = -1;
 int move_upkeep_faction = -1;
@@ -12,15 +13,85 @@ int facility_score(FacilityId item_id, WItem& Wgov) {
         + Wgov.AI_tech * p.AI_tech + Wgov.AI_wealth * p.AI_wealth;
 }
 
+/*
+Whether the player expressed any build priority for this base at all.
+
+The four GOV_PRIORITY_* bits are the entire input governor_priorities has on a
+player-owned base. A base founded normally carries whatever base_governor_adv held
+(base.cpp:120), which for a slot nobody has driven through the governor dialog is
+none of them.
+*/
+static bool na_gov_priorities_set(uint32_t gov) {
+    return (gov & (GOV_PRIORITY_EXPLORE | GOV_PRIORITY_DISCOVER
+        | GOV_PRIORITY_BUILD | GOV_PRIORITY_CONQUER)) != 0;
+}
+
+/*
+Neural Amplifier deterministic tier for base.governor_config — one of the 21
+surfaces in surfaces.NO_AI_PATH, and the first of them to get a native answer.
+
+THE GAP. With no priority bit set every weight below collapses to 1, so
+facility_score (plan.cpp:8) values a Children's Creche and a Command Center
+identically and production ordering falls to tie-breaks instead of intent. That is
+not a neutral default, it is the absence of a policy — and it is the state every
+player-owned base starts in. The surface reads like a permissions checkbox, which
+is why it was filed as low-stakes; it is actually the input to every build
+decision the base makes.
+
+WHY THERE IS NOTHING TO COPY. gov_config() hands AI bases ~0u (engine_base.h:249)
+— "not limited by any governor settings" — so an AI faction never needs priorities
+and never computes any. There is no engine heuristic to port, which is precisely
+what put this surface on the no-AI-path list.
+
+THE POLICY. Faction character for strategy, base posture for defence. The AI_*
+fields are the engine's own model of what a faction wants and are already used
+verbatim for AI factions in the branch below, so reusing them here keeps one
+notion of character rather than inventing a second. AI_fight stays base-local
+because defend_goal is per-base and a frontier base should weight defence
+differently from an interior one — the existing human branch already had that part
+right.
+
+WHY IT DOES NOT WRITE governor_flags. Those bits are the player's saved setting and
+they persist into the savegame. Rewriting them would make the governor dialog
+misreport what it will do and would silently overwrite a preference the player
+could no longer recover. The policy therefore steers the weights only, and only
+where the player expressed nothing to override.
+*/
+static void na_governor_policy(BASE& base, WItem& Wgov) {
+    Faction& f = Factions[base.faction_id];
+    Wgov.AI_growth = (f.AI_growth ? 4 : 1);
+    Wgov.AI_tech   = (f.AI_tech ? 4 : 1);
+    Wgov.AI_wealth = (f.AI_wealth ? 4 : 1);
+    Wgov.AI_power  = (f.AI_power ? 4 : 1);
+}
+
 void governor_priorities(BASE& base, WItem& Wgov) {
     Faction& f = Factions[base.faction_id];
     uint32_t gov = base.governor_flags;
     if (is_human(base.faction_id)) {
-        Wgov.AI_growth = (gov & GOV_PRIORITY_EXPLORE ? 4 : 1);
-        Wgov.AI_tech   = (gov & GOV_PRIORITY_DISCOVER ? 4 : 1);
-        Wgov.AI_wealth = (gov & GOV_PRIORITY_BUILD ? 4 : 1);
-        Wgov.AI_power  = (gov & GOV_PRIORITY_CONQUER ? 4 : 1);
+        if (conf.na_governor_policy && !na_gov_priorities_set(gov)) {
+            na_governor_policy(base, Wgov);
+        } else {
+            Wgov.AI_growth = (gov & GOV_PRIORITY_EXPLORE ? 4 : 1);
+            Wgov.AI_tech   = (gov & GOV_PRIORITY_DISCOVER ? 4 : 1);
+            Wgov.AI_wealth = (gov & GOV_PRIORITY_BUILD ? 4 : 1);
+            Wgov.AI_power  = (gov & GOV_PRIORITY_CONQUER ? 4 : 1);
+        }
         Wgov.AI_fight  = clamp(((base.defend_goal/2)-1)*2, -2, 2);
+        /*
+        Observe the surface (invariant 5: coverage is measured, not assumed).
+        Called unconditionally; the observer decides whether to write, because it
+        also serves the probe and the two would otherwise disagree about when a
+        line is due. A stock build still writes nothing — see neural.cpp.
+
+        Placed after the weights are resolved because the weights ARE the outcome
+        of this surface; the flags alone would only record the input.
+        */
+        na_observe_base_governor_config(&base - Bases,
+            conf.na_governor_policy && !na_gov_priorities_set(gov) ? 1
+                : (na_gov_priorities_set(gov) ? 2 : 0),
+            Wgov.AI_growth, Wgov.AI_tech, Wgov.AI_wealth,
+            Wgov.AI_power, Wgov.AI_fight);
     } else {
         Wgov.AI_growth = (f.AI_growth ? 4 : 1);
         Wgov.AI_tech   = (f.AI_tech ? 4 : 1);

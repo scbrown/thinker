@@ -52,6 +52,8 @@ int option_handler(void* user, const char* section, const char* name, const char
         cf->llm_factions = atoi(value);
     } else if (MATCH("llm_timeout_ms")) {
         cf->llm_timeout_ms = atoi(value);
+    } else if (MATCH("na_governor_policy")) {
+        cf->na_governor_policy = atoi(value);
     } else if (MATCH("llm_endpoint")) {
         char* p = strtrim(buf);
         if (strlen(p)) {

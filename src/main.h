@@ -178,6 +178,15 @@ struct Config {
     the network, so this is the per-base-turn cost, not the per-call cost.
     */
     int llm_timeout_ms = 2500;
+    /*
+    Neural Amplifier: deterministic tier for base.governor_config, one of the 21
+    surfaces the native AI never decides (surfaces.NO_AI_PATH). 0 keeps stock
+    behaviour, so an unconfigured build is unchanged.
+
+    Applies only to player-owned bases that have set NO governor priority bit --
+    see na_governor_policy() in plan.cpp for why that is the whole point.
+    */
+    int na_governor_policy = 0;
     int social_ai = 1;
     int social_ai_bias = 10;
     int tech_balance = 0;
