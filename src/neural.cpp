@@ -125,6 +125,63 @@ static unsigned int na_session_salt() {
 }
 
 /*
+Which run of this process is speaking (na-bzd).
+
+The orchestrator cannot see that the game has died. Nothing on its side counts down while a
+decision loop is blocked, so `decision_deadline_ms` — which fixed the case where the engine is
+alive and has stopped waiting (na-t3h) — does nothing at all for the case where the engine is
+GONE. Measured 2026-08-02: the game was killed mid-decision and relaunched, and the
+still-running orchestrator's /agent/waiting offered four decisions at turn 40, status
+"pending", ages 600-1275s, every one raised by a process that had been dead for twenty minutes.
+Claiming and answering one returned the ordinary success response. An attached agent had no way
+to tell them from live work, and neither did the queue.
+
+This string is the whole signal. The orchestrator never parses it and never orders it; it asks
+one question — is this the same string as last time — and when the answer is no it retires
+every decision left over from the run before, so /agent/waiting stops offering them and a late
+submit is refused with a message that names the dead run instead of a bare conflict.
+
+WHY IT IS SUFFICIENT, which is the only interesting property here. It must be stable for the
+life of this process and different in any two processes the orchestrator could see one after
+the other. Three components, each covering exactly what the others cannot:
+
+  - GetCurrentProcessId separates runs that OVERLAP: two live processes never share a pid.
+  - GetTickCount separates runs that do NOT overlap, where the pid may have been recycled. It
+    is milliseconds since boot and monotonic, so the later process reads a strictly larger
+    value. Matching would take two DLL loads inside one millisecond, and the second terranx.exe
+    cannot start until the first has exited.
+  - time(NULL) separates runs across a REBOOT, which is the one event that resets the tick
+    count.
+
+Deliberately not drawn from any RNG, and emphatically not the engine's: rand() in a game DLL
+shares the game's seed, so drawing from it perturbs map generation and combat. Acquiring a
+correlation id is not worth changing the game — the same trade na_session_salt above already
+refuses, for the same reason.
+
+na_session_salt is not reused for this even though it is also fixed per process. It is one
+second of wall clock and nothing else, so two runs of the same save started inside one second
+share it; and it is folded into a trace word, so widening it would change every trace id the
+adapter has ever emitted. A run id and a trace salt want different guarantees.
+
+Written by na_write_head, so it rides on OBSERVATION records too — deliberately unlike
+na_write_decision_deadline below, which is decide-only because a deadline asserts a wait that an
+observation never performs. This asserts nothing about waiting: it names the process, which is
+equally true of a record that posts nothing and waits for nobody. It also earns its place there,
+because na-observations.jsonl is one file appended across every run of the game and until now
+nothing in it marked where one run ended and the next began.
+*/
+static const char* na_run_id() {
+    static char run_id[32] = {0};
+    if (!run_id[0]) {
+        snprintf(run_id, sizeof(run_id), "%08lx-%08lx-%04x",
+            (unsigned long)time(NULL),
+            GetTickCount(),  // already DWORD, i.e. unsigned long — casting it warns
+            (unsigned)(GetCurrentProcessId() & 0xffff));
+    }
+    return run_id;
+}
+
+/*
 What the engine knows about the asymmetry this decision was made under.
 
 **fairness** stamps only the two inputs the engine actually has: which slot this faction is,
@@ -159,6 +216,9 @@ static void na_write_head(NaBuf* w, const char* surface_id, const char* scope, i
         na_buf_escaped(w, MFactions[faction_id].noun_faction);
     }
     na_buf_puts(w, "\"");
+    // Which run of this process raised this. One string, compared for equality and nothing
+    // else — see na_run_id above for why three clock/pid components are enough.
+    na_buf_printf(w, ",\"run_id\":\"%s\"", na_run_id());
     // W3C traceparent: version-traceid(16 bytes)-spanid(8 bytes)-flags, sampled.
     // The trailing constant keeps the trace id non-zero on turn 0, which the spec
     // forbids and collectors drop. The salt is folded into the turn word rather than
