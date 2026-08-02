@@ -282,13 +282,21 @@ bool na_http_post(const char* endpoint, const char* path, const char* body,
         return false;
     }
     /*
-    timeout_ms <= 0 means wait indefinitely, which is the configured default.
+    timeout_ms <= 0 means wait indefinitely. That is the INTENDED default and it is
+    NOT what ships: `conf.llm_timeout_ms` defaults to 2500 (main.h), and thinker.ini
+    carries no override, so an unconfigured run gives the agent 2.5 seconds.
 
-    The decision is answered by an agent or a person now, not by a model on a
-    stopwatch, and a turn-based game pausing at a decision point is what it
-    already does for a human player. Set llm_timeout_ms to a positive number for
-    an unattended run, where a silent agent would otherwise hang the game with no
-    route back to the deterministic tier.
+    This comment used to claim indefinite WAS the configured default, and the gap
+    cost a whole measured run (na-t3h). No attached agent answers in 2.5s, so every
+    decision fell back to the deterministic tier with
+    `fallback_reason="orchestrator unreachable or slow"` — while the orchestrator,
+    which never learns the adapter gave up, accepted the late answer and recorded it
+    as an applied `tier=llm` decision. Two logs, both well-formed, flatly disagreeing
+    about who decided the game.
+
+    So: an agent-driven run MUST set llm_timeout_ms explicitly (0 for indefinite, or
+    a large finite value so a silent agent cannot hang the game with no route back to
+    the deterministic tier). Do not rely on the default being generous — it is not.
     */
     DWORD deadline = NA_NO_DEADLINE;
     if (timeout_ms > 0) {
