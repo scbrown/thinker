@@ -158,6 +158,46 @@ static void na_write_head(NaBuf* w, const char* surface_id, const char* scope, i
 }
 
 /*
+Tell the orchestrator how long this adapter will wait before it stops caring.
+
+Not a request and not a hint: it is a statement of fact about this engine thread. After
+conf.llm_timeout_ms the socket read gives up, the deterministic tier's answer is applied, and
+the turn moves on (invariant 9). Anything that arrives afterwards reaches nobody.
+
+Written because the orchestrator had no way to learn that number, and the cost of not knowing
+it was a whole measured run (na-t3h). The orchestrator's agent brain defaults to waiting
+FOREVER, so an attached agent answering minutes late completed a decision loop for a turn that
+had been resolved since — and both sides logged success. 66 adapter rows that run, every one
+`applied=native` with `fallback_reason="orchestrator unreachable or slow"`, against
+orchestrator records claiming applied `tier=llm` decisions for the same turns. Two well-formed
+logs, flatly disagreeing about who decided the game. With this field the orchestrator gives up
+FIRST, degrades honestly, and refuses the late answer instead of recording it as applied.
+
+Emitted only on the decide paths, not by na_write_head, and that is the point of it being a
+separate call: an observation posts nothing and waits for nobody, so a deadline on an
+observation record would assert a wait that never happened.
+
+Called before the world view object is closed, so it lands in the posted body AND in the
+record the same buffer becomes. Both matter: the body is what fixes the bug, and the record
+is what makes the fix checkable — a record that does not say which deadline it ran under
+cannot be joined against an orchestrator record to ask whether the answer arrived in time,
+which is the only question that would have caught na-t3h the first night.
+
+OMITTED, not zeroed, when llm_timeout_ms <= 0. That configuration means "wait indefinitely"
+(na_http.cpp: the socket deadline is only armed for timeout_ms > 0), and a literal 0 on the
+wire is the one value most likely to be read as "abandon immediately" — which would turn a
+deliberate no-limit run into every decision instantly degrading, with nothing in either log
+that looks like a misconfiguration. Absent already means "the engine did not bound this" in the
+contract, which is exactly true here. The orchestrator also collapses <= 0 to absent
+(contract.py decision_deadline_seconds), so both ends agree even if one is older than the other.
+*/
+static void na_write_decision_deadline(NaBuf* w) {
+    if (conf.llm_timeout_ms > 0) {
+        na_buf_printf(w, ",\"decision_deadline_ms\":%d", conf.llm_timeout_ms);
+    }
+}
+
+/*
 Per-base-turn call counter.
 
 The engine asks the same base for a production choice several times in one turn:
@@ -1067,6 +1107,7 @@ int na_decide_base_production(int base_id, int native_choice, int has_gov) {
         closed in place, sent, then reopened by rewinding the length — rather than
         copying a world view that runs to tens of kilobytes just to add two fields.
         */
+        na_write_decision_deadline(&w);  // before the close, so it is in the body AND the record
         const size_t open_len = w.len;
         na_buf_puts(&w, "}");
         NaBuf body;
@@ -1410,6 +1451,7 @@ int na_decide_faction_tech(int faction_id, int native_choice) {
     } else {
         // Closed in place, sent, then reopened by rewinding the length — the record and the
         // request body are the same bytes and differ only by the tail appended after the call.
+        na_write_decision_deadline(&w);  // before the close, so it is in the body AND the record
         const size_t open_len = w.len;
         na_buf_puts(&w, "}");
         NaBuf body;
@@ -1679,6 +1721,7 @@ void na_decide_faction_se(int faction_id, int* field, int* model) {
     if (w.failed) {
         snprintf(detail, sizeof(detail), "world view could not be built");
     } else {
+        na_write_decision_deadline(&w);  // before the close, so it is in the body AND the record
         const size_t open_len = w.len;
         na_buf_puts(&w, "}");
         NaBuf body;
@@ -1938,6 +1981,7 @@ int na_decide_base_hurry(int base_id, int item, int minerals_before, int credits
     if (w.failed) {
         snprintf(detail, sizeof(detail), "world view could not be built");
     } else {
+        na_write_decision_deadline(&w);  // before the close, so it is in the body AND the record
         const size_t open_len = w.len;
         na_buf_puts(&w, "}");
         NaBuf body;
