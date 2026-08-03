@@ -3254,10 +3254,22 @@ static bool na_order_exec(const char* line, char* verb_out, size_t verb_n, char*
             snprintf(verb_out, verb_n, "move");
             return false;
         }
-        // The engine's own mover. Its return is the authority on whether the order took; we do
-        // not second-guess it with a reachability model of our own.
-        const int rc = set_move_to(veh_id, x, y);
-        snprintf(why, why_n, "veh %d -> (%d,%d) rc=%d", veh_id, x, y, rc);
+        /*
+        The engine's own mover.
+
+        It has NO FAILURE PATH: it writes waypoint_x/y and ORDER_MOVE_TO and returns a VEH_*
+        status constant (VEH_SYNC == 0), not a success flag. So there is nothing here to test,
+        and reporting the return as `rc=%d` — which this did until a live run — invited every
+        reader to see `rc=0` and conclude the move had failed. A status constant printed where a
+        result code is expected is a lie told by formatting.
+
+        The wording also has to be honest about WHEN: this sets a destination order. The unit
+        has not gone anywhere yet, and will not until movement is processed. "veh 11 -> (20,20)"
+        read as arrival; it never was.
+        */
+        set_move_to(veh_id, x, y);
+        snprintf(why, why_n, "veh %d ordered to (%d,%d); moves when movement is processed",
+                 veh_id, x, y);
         snprintf(verb_out, verb_n, "move");
         return true;
     }
