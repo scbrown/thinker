@@ -3036,6 +3036,78 @@ void na_auto_turn_tick() {
 }
 
 /*
+econ.energy_sliders -- the split of 10 energy points across economy, labs and psych.
+
+WHY THIS ONE FIRST, of the 27 ready surfaces: decision-inputs.md says low frequency and high
+stakes, because that is where a model's judgement can pay for its latency. This fires once per
+faction-turn, and the ratio it sets divides EVERY base's energy for the whole turn. Nothing else
+in the ready bucket reaches as far per decision.
+
+THE ACTION SPACE IS THE ENGINE'S, not ours. A legal split needs labs + psych <= 10 and the
+economy remainder within energy_limit(faction_id) -- the same function mod_allocate_energy clamps
+itself against, three lines above where this is called. Enumerating against our own idea of the
+rules would drift from the engine silently, which is the failure the audit surface exists to
+catch elsewhere.
+
+Emitted as `native_choice` plus the legal set. No decision is taken and nothing is applied:
+`applied` is "native" and `tier` is "deterministic", so a coverage report counts this as observed
+and NOT as decided. Claiming otherwise would inflate the one number this project uses to say how
+much of the game the brain actually drives.
+*/
+void na_observe_econ_energy_sliders(int faction_id) {
+    if (!llm_enabled(faction_id)) {
+        return;
+    }
+    Faction& plr = Factions[faction_id];
+    const int limit = energy_limit(faction_id);
+    const int labs = clamp((int)plr.SE_alloc_labs, 0, 10);
+    const int psych = clamp((int)plr.SE_alloc_psych, 0, 10);
+
+    NaBuf w;
+    na_buf_init(&w);
+    na_write_head(&w, "econ.energy_sliders", "turn", faction_id);
+    na_buf_printf(&w, ",\"energy_limit\":%d", limit);
+    na_buf_printf(&w, ",\"native_labs\":%d,\"native_psych\":%d", labs, psych);
+    na_buf_printf(&w, ",\"native_econ\":%d", 10 - labs - psych);
+    na_buf_puts(&w, ",\"native_choice_name\":\"");
+    {
+        char label[48];
+        snprintf(label, sizeof(label), "econ %d / labs %d / psych %d", 10 - labs - psych, labs, psych);
+        na_buf_escaped(&w, label);
+    }
+    na_buf_puts(&w, "\"");
+
+    na_buf_puts(&w, ",\"action_space\":[");
+    int offered = 0;
+    for (int l = 0; l <= 10; l++) {
+        for (int p = 0; l + p <= 10; p++) {
+            const int e = 10 - l - p;
+            // The engine's own constraint, asked of the engine.
+            if (e > limit) {
+                continue;
+            }
+            if (offered) {
+                na_buf_puts(&w, ",");
+            }
+            na_buf_printf(&w, "{\"id\":\"alloc:%d-%d-%d\",\"action\":\"", e, l, p);
+            char label[48];
+            snprintf(label, sizeof(label), "econ %d / labs %d / psych %d", e, l, p);
+            na_buf_escaped(&w, label);
+            na_buf_printf(&w, "\",\"effects\":{\"labs_output\":%d}}", l);
+            offered++;
+        }
+    }
+    na_buf_printf(&w, "],\"offered\":%d", offered);
+
+    na_write_metrics(&w, faction_id, -1);
+    na_buf_puts(&w, ",\"tier\":\"deterministic\",\"applied\":\"native\"");
+    na_buf_printf(&w, ",\"applied_item\":%d", labs);
+    na_buf_puts(&w, "}");
+    na_log_record(&w);
+    na_buf_free(&w);
+}
+
+/*
 Announce the coming turn's expected decisions.
 
 The orchestrator cannot show an agent a turn it has not been told about: when base #1 is asked,

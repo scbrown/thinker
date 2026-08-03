@@ -2039,6 +2039,15 @@ void __cdecl mod_allocate_energy(int faction_id) {
     while (10 - plr->SE_alloc_labs - plr->SE_alloc_psych > effic_val + plr->SE_alloc_labs) {
         ++plr->SE_alloc_labs;
     }
+    /*
+    Neural Amplifier: record the allocation the engine just settled on (na-yd4).
+
+    LAST statement, after every clamp above. The function narrows SE_alloc_labs four separate
+    times -- energy_limit, the 0..10 clamp, and two efficiency loops -- so an observation taken
+    anywhere earlier would record a value the engine goes on to overwrite, and the record would
+    disagree with the game for reasons no reader could reconstruct.
+    */
+    na_observe_econ_energy_sliders(faction_id);
 }
 
 uint32_t offset_next(int32_t faction, uint32_t position, uint32_t amount) {

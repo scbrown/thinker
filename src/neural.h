@@ -303,6 +303,20 @@ The faction economy totals are zeroed and re-accumulated per base inside
 mod_production_phase, and mod_base_build fires inside that window. These bracket it so
 na_write_metrics can OMIT a half-summed total rather than publish it as income (na-an6).
 */
+/*
+Emit one econ.energy_sliders observation: how the faction split its 10 energy points across
+economy, labs and psych.
+
+The first of the 27 "native path, safe fallback" surfaces to be instrumented (na-yd4), chosen by
+decision-inputs.md's own rule -- low frequency, high stakes. It fires once per faction-turn and
+sets the ratio every base's energy is divided by, so it is the widest-reaching number in the game
+that no LLM has ever been asked about.
+
+OBSERVATION ONLY. mod_allocate_energy decides; this records what it decided and what else was
+legal. Applying here would need an apply path and validation, which is the second half of yd4.
+*/
+void na_observe_econ_energy_sliders(int faction_id);
+
 void na_accumulate_begin(int faction_id);
 void na_accumulate_end(int faction_id);
 
