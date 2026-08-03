@@ -1769,6 +1769,13 @@ void __cdecl mod_production_phase(int faction_id) {
     Faction* f = &Factions[faction_id];
     MFaction* m = &MFactions[faction_id];
     debug("production_phase %d %d\n", *CurrentTurn, faction_id);
+    /*
+    Neural Amplifier: the faction's economy totals are ZEROED on the next line and
+    re-accumulated one base at a time below. mod_base_build fires inside that window, so a
+    world view built during it would report a half-summed total as if it were the faction's
+    income. Marking the window lets na_write_metrics omit those fields instead (na-an6).
+    */
+    na_accumulate_begin(faction_id);
     f->best_mineral_output = 0;
     f->energy_surplus_total = 0;
     f->facility_maint_total = 0;
@@ -1878,6 +1885,8 @@ void __cdecl mod_production_phase(int faction_id) {
             }
         }
     }
+    // Neural Amplifier: totals are whole again from here (na-an6).
+    na_accumulate_end(faction_id);
 }
 
 void __cdecl mod_allocate_energy(int faction_id) {

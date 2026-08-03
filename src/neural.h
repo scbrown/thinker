@@ -299,6 +299,14 @@ its decision would have been raised, and then it never is.
 void na_announce_turn();
 
 /*
+The faction economy totals are zeroed and re-accumulated per base inside
+mod_production_phase, and mod_base_build fires inside that window. These bracket it so
+na_write_metrics can OMIT a half-summed total rather than publish it as income (na-an6).
+*/
+void na_accumulate_begin(int faction_id);
+void na_accumulate_end(int faction_id);
+
+/*
 True once the -na-autoload sequence has finished, however it finished, and when
 no autoload was requested at all.
 */

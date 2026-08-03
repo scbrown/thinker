@@ -566,6 +566,34 @@ numbers by name (contract.py: WorldView.metrics). It used to be `faction_state`,
 the values reached the prompt but not the directive evaluator — every faction-scope directive
 came back UNMEASURABLE while the numbers it wanted were sitting in the same payload.
 */
+/*
+Which faction is mid-accumulation, or -1.
+
+mod_production_phase zeroes energy_surplus_total, facility_maint_total, turn_commerce_income
+and labs_total, then re-accumulates them one base at a time. mod_base_build fires inside that
+window, so a base.production world view built there sees a PARTIAL sum.
+
+Measured 2026-08-02, turn 135: Hive and University reported energy_income 0 and labs_output 0
+on base.production while carrying 49 and 55 bases, and the SAME factions reported 6/25 and
+127/396 on faction.tech in the same turn. A 49-base faction has neither zero energy nor zero
+labs; the totals had simply not been summed yet.
+
+Single int rather than a set, because the engine processes one faction's production phase at a
+time on one thread. If that ever stops being true this becomes wrong silently, which is why it
+is stated here rather than left to be inferred.
+*/
+static int na_accumulating_faction = -1;
+
+void na_accumulate_begin(int faction_id) {
+    na_accumulating_faction = faction_id;
+}
+
+void na_accumulate_end(int faction_id) {
+    if (na_accumulating_faction == faction_id) {
+        na_accumulating_faction = -1;
+    }
+}
+
 static void na_write_metrics(NaBuf* w, int faction_id, int base_id) {
     Faction& plr = Factions[faction_id];
     na_buf_puts(w, ",\"metrics\":{");
@@ -596,9 +624,24 @@ static void na_write_metrics(NaBuf* w, int faction_id, int base_id) {
 
     This stays arithmetic, not estimation, which is what this function's contract requires.
     */
-    na_buf_printf(w, ",\"energy_income\":%d",
-                  plr.energy_surplus_total + plr.turn_commerce_income - plr.facility_maint_total);
-    na_buf_printf(w, ",\"labs_output\":%d", plr.labs_total);
+    /*
+    OMITTED, not zeroed, while this faction's totals are mid-accumulation (na-an6).
+
+    _setback's own doctrine: a figure with an invented denominator is worse than no figure,
+    because it looks like the one piece of hard arithmetic in the block. A half-summed
+    energy_income is exactly that — and worse than invented, because 0 is a value the
+    vocabulary now genuinely admits (na-s4e made "net income is negative" representable), so a
+    reader cannot tell "not summed yet" from "this faction really earns nothing".
+
+    Absent is unambiguous: a directive against a missing metric reads UNMEASURABLE, which is
+    the true state, and the orchestrator already handles it.
+    */
+    const bool totals_ready = (faction_id != na_accumulating_faction);
+    if (totals_ready) {
+        na_buf_printf(w, ",\"energy_income\":%d",
+                      plr.energy_surplus_total + plr.turn_commerce_income - plr.facility_maint_total);
+        na_buf_printf(w, ",\"labs_output\":%d", plr.labs_total);
+    }
     na_buf_printf(w, ",\"base_count\":%d", plr.base_count);
     na_buf_printf(w, ",\"pop_total\":%d", plr.pop_total);
     na_buf_printf(w, ",\"military_units\":%d", plr.total_combat_units);
