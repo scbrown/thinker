@@ -3112,6 +3112,148 @@ static void na_cmd_result(const char* cmd, const char* detail, bool ok) {
     fclose(fp);
 }
 
+/*
+May this faction be given an order right now?
+
+Three questions, and they fail differently on purpose — an agent that is told only "refused"
+cannot tell a mistake it should fix from a wait it should simply repeat.
+
+  halted        the game is in a modal or between states. Try again.
+  not routed    llm_factions does not include this faction. A CONFIGURATION error: repeating it
+                will never work, and the agent should stop rather than spin.
+  not its turn  ordering another faction's units during their turn is not a rules question, it
+                is a fairness one. Refused flatly.
+
+The turn check is the load-bearing one. This tick runs whenever the window pumps, INCLUDING
+while another faction is being processed, so without it an agent could order units on someone
+else's turn — which the engine would in some cases happily do.
+*/
+static bool na_order_gate(int faction_id, char* why, size_t n) {
+    if (*GameHalted) {
+        snprintf(why, n, "game is halted; retry");
+        return false;
+    }
+    if (!llm_enabled(faction_id)) {
+        snprintf(why, n, "faction %d is not routed to the orchestrator (llm_factions)", faction_id);
+        return false;
+    }
+    if (faction_id != *CurrentPlayerFaction) {
+        snprintf(why, n, "not faction %d's turn (current is %d)", faction_id, *CurrentPlayerFaction);
+        return false;
+    }
+    return true;
+}
+
+/*
+`move <veh_id> <x> <y>` · `skip <veh_id>` · `build <base_id> <item_id>`
+
+Ownership is checked before the gate so the message names the real problem: a veh id belonging
+to another faction is a mistake in the agent's model of the board, not a timing issue, and
+reporting it as "not your turn" would send someone looking in the wrong place.
+*/
+static void na_order_command(const char* line) {
+    char why[160];
+    why[0] = '\0';
+
+    if (strncmp(line, "move ", 5) == 0) {
+        int veh_id = -1, x = -1, y = -1;
+        if (sscanf(line + 5, "%d %d %d", &veh_id, &x, &y) != 3) {
+            na_cmd_result("move", "expected: move <veh_id> <x> <y>", false);
+            return;
+        }
+        if (veh_id < 0 || veh_id >= *VehCount) {
+            snprintf(why, sizeof(why), "no veh %d (0 <= veh_id < %d)", veh_id, *VehCount);
+            na_cmd_result("move", why, false);
+            return;
+        }
+        const int fid = Vehs[veh_id].faction_id;
+        if (!na_order_gate(fid, why, sizeof(why))) {
+            na_cmd_result("move", why, false);
+            return;
+        }
+        if (x < 0 || y < 0 || x >= *MapAreaX || y >= *MapAreaY) {
+            snprintf(why, sizeof(why), "tile (%d,%d) is off the map", x, y);
+            na_cmd_result("move", why, false);
+            return;
+        }
+        // The engine's own mover. Its return is the authority on whether the order took; we do
+        // not second-guess it with a reachability model of our own.
+        const int rc = set_move_to(veh_id, x, y);
+        snprintf(why, sizeof(why), "veh %d -> (%d,%d) rc=%d", veh_id, x, y, rc);
+        na_cmd_result("move", why, true);
+        return;
+    }
+
+    if (strncmp(line, "skip ", 5) == 0) {
+        int veh_id = -1;
+        if (sscanf(line + 5, "%d", &veh_id) != 1) {
+            na_cmd_result("skip", "expected: skip <veh_id>", false);
+            return;
+        }
+        if (veh_id < 0 || veh_id >= *VehCount) {
+            snprintf(why, sizeof(why), "no veh %d (0 <= veh_id < %d)", veh_id, *VehCount);
+            na_cmd_result("skip", why, false);
+            return;
+        }
+        const int fid = Vehs[veh_id].faction_id;
+        if (!na_order_gate(fid, why, sizeof(why))) {
+            na_cmd_result("skip", why, false);
+            return;
+        }
+        mod_veh_skip(veh_id);
+        snprintf(why, sizeof(why), "veh %d ends its turn", veh_id);
+        na_cmd_result("skip", why, true);
+        return;
+    }
+
+    if (strncmp(line, "build ", 6) == 0) {
+        int base_id = -1, item = 0;
+        if (sscanf(line + 6, "%d %d", &base_id, &item) != 2) {
+            na_cmd_result("build", "expected: build <base_id> <item_id>", false);
+            return;
+        }
+        if (base_id < 0 || base_id >= *BaseCount || base_id >= MaxBaseNum) {
+            snprintf(why, sizeof(why), "no base %d (0 <= base_id < %d)", base_id, *BaseCount);
+            na_cmd_result("build", why, false);
+            return;
+        }
+        const int fid = Bases[base_id].faction_id;
+        if (!na_order_gate(fid, why, sizeof(why))) {
+            na_cmd_result("build", why, false);
+            return;
+        }
+        // The same availability test the decision path applies to a brain's answer. An agent
+        // acting out of cycle gets no weaker a check than one answering when asked.
+        if (!na_item_is_legal(base_id, item)) {
+            snprintf(why, sizeof(why), "item %d is not buildable at base %d", item, base_id);
+            na_cmd_result("build", why, false);
+            return;
+        }
+        mod_base_change(base_id, item);
+        /*
+        Read it back. mod_base_change writes queue_items[0] and a later engine path may not keep
+        it — which is exactly the divergence na_verify_base_production exists to catch on the
+        decision path. An order channel that reported success from the fact that it called a
+        setter would be the same trap with a new surface.
+        */
+        const int actual = Bases[base_id].item();
+        if (actual != item) {
+            snprintf(why, sizeof(why), "base %d did not keep item %d (has %d)", base_id, item, actual);
+            na_cmd_result("build", why, false);
+            return;
+        }
+        // The cache is what the replay path serves for the rest of this base-turn. Leaving it
+        // stale would let a replay quietly undo an order the agent just gave and was told
+        // succeeded.
+        na_cache_put(base_id, item);
+        snprintf(why, sizeof(why), "base %d builds %.40s", base_id, prod_name(item));
+        na_cmd_result("build", why, true);
+        return;
+    }
+
+    na_cmd_result("order", "unknown order verb", false);
+}
+
 void na_command_tick(void* hwnd_raw) {
     HWND hwnd = (HWND)hwnd_raw;
     static DWORD last_poll = 0;
@@ -3263,6 +3405,37 @@ void na_command_tick(void* hwnd_raw) {
     Both directions matter and mean different things: offered-but-refused is an illegal move
     waiting to happen, refused-but-offered is a legal option being hidden from the brain.
     */
+    /*
+    ORDER VERBS — the agent acting on its own initiative, rather than answering when asked.
+
+    Everything else the brain does arrives through the decision hook: the engine reaches a base,
+    calls us, and blocks until we answer. That hook can only ever offer the one thing it is
+    asking about, in the order the engine happens to walk its bases.
+
+    A human player is not so constrained. They select the former they care about and order it,
+    without waiting for the activation cycle to reach it — which is what makes a DEPENDENT move
+    possible, because the move whose sense depends on another unit having already moved can
+    simply be ordered second. These verbs give an agent the same affordance. See
+    docs/turn-scoped-play.md ("two doors") in the NeuralAmplifier repo.
+
+    They live on the command channel, not the decision hook, and that placement is the whole
+    design: this tick runs from the window procedure, and the decision wait deliberately does
+    not dispatch messages (dispatching re-enters the engine from inside a decision hook and
+    corrupts turns). So an order can never run while a decision is outstanding. That mutual
+    exclusion is a property the code already had, for an unrelated reason — na_order_gate does
+    not re-establish it and must not be read as though it does.
+
+    THE ENGINE STAYS AUTHORITATIVE. Each verb is a thin wrapper over the same function Thinker
+    itself calls, and the legality question is asked of the engine (na_item_is_legal,
+    set_move_to's own return) rather than of our opinion of the rules. A wrapper that reimplemented
+    a validator would be the one place here capable of corrupting a game.
+    */
+    if (strncmp(line, "move ", 5) == 0 || strncmp(line, "skip ", 5) == 0
+        || strncmp(line, "build ", 6) == 0) {
+        na_order_command(line);
+        return;
+    }
+
     if (strncmp(line, "audit ", 6) == 0) {
         int fid = -1;
         if (sscanf(line + 6, "%d", &fid) != 1 || fid <= 0 || fid >= MaxPlayerNum) {
