@@ -3210,83 +3210,104 @@ Ownership is checked before the gate so the message names the real problem: a ve
 to another faction is a mistake in the agent's model of the board, not a timing issue, and
 reporting it as "not your turn" would send someone looking in the wrong place.
 */
-static void na_order_command(const char* line) {
-    char why[160];
+static bool na_order_exec(const char* line, char* verb_out, size_t verb_n, char* why, size_t why_n) {
+    snprintf(verb_out, verb_n, "%s", "order");
     why[0] = '\0';
 
     if (strncmp(line, "move ", 5) == 0) {
         int veh_id = -1, x = -1, y = -1;
         if (sscanf(line + 5, "%d %d %d", &veh_id, &x, &y) != 3) {
-            na_cmd_result("move", "expected: move <veh_id> <x> <y>", false);
-            return;
+            snprintf(verb_out, verb_n, "move");
+            snprintf(why, why_n, "expected: move <veh_id> <x> <y>");
+            return false;
         }
         if (veh_id < 0 || veh_id >= *VehCount) {
-            snprintf(why, sizeof(why), "no veh %d (0 <= veh_id < %d)", veh_id, *VehCount);
-            na_cmd_result("move", why, false);
-            return;
+            snprintf(why, why_n, "no veh %d (0 <= veh_id < %d)", veh_id, *VehCount);
+            snprintf(verb_out, verb_n, "move");
+            return false;
         }
         const int fid = Vehs[veh_id].faction_id;
-        if (!na_order_gate(fid, why, sizeof(why))) {
-            na_cmd_result("move", why, false);
-            return;
+        if (!na_order_gate(fid, why, why_n)) {
+            snprintf(verb_out, verb_n, "move");
+            return false;
         }
         if (x < 0 || y < 0 || x >= *MapAreaX || y >= *MapAreaY) {
-            snprintf(why, sizeof(why), "tile (%d,%d) is off the map", x, y);
-            na_cmd_result("move", why, false);
-            return;
+            snprintf(why, why_n, "tile (%d,%d) is off the map", x, y);
+            snprintf(verb_out, verb_n, "move");
+            return false;
+        }
+        /*
+        FAIR PLAY. Refuse a destination this faction has not explored.
+
+        Worth stating precisely, because the design doc got this wrong first: there is NO
+        tile-visibility gate on the orchestrator side. `fog.py` filters the foreign-DIPLOMACY
+        feed and nothing else, so this is not a second line of defence behind an existing check —
+        for tiles it is the only one there is.
+
+        It does not make an agent's knowledge fog-clean; knowledge arrives in the world view and
+        is that path's problem. What it stops is the concrete cheat available through this door:
+        ordering a unit onto a square the faction has never seen. `is_known` is the engine's own
+        answer, so a rules change moves this with it.
+        */
+        if (!is_known(x, y, fid)) {
+            snprintf(why, why_n, "faction %d has not explored tile (%d,%d)", fid, x, y);
+            snprintf(verb_out, verb_n, "move");
+            return false;
         }
         // The engine's own mover. Its return is the authority on whether the order took; we do
         // not second-guess it with a reachability model of our own.
         const int rc = set_move_to(veh_id, x, y);
-        snprintf(why, sizeof(why), "veh %d -> (%d,%d) rc=%d", veh_id, x, y, rc);
-        na_cmd_result("move", why, true);
-        return;
+        snprintf(why, why_n, "veh %d -> (%d,%d) rc=%d", veh_id, x, y, rc);
+        snprintf(verb_out, verb_n, "move");
+        return true;
     }
 
     if (strncmp(line, "skip ", 5) == 0) {
         int veh_id = -1;
         if (sscanf(line + 5, "%d", &veh_id) != 1) {
-            na_cmd_result("skip", "expected: skip <veh_id>", false);
-            return;
+            snprintf(verb_out, verb_n, "skip");
+            snprintf(why, why_n, "expected: skip <veh_id>");
+            return false;
         }
         if (veh_id < 0 || veh_id >= *VehCount) {
-            snprintf(why, sizeof(why), "no veh %d (0 <= veh_id < %d)", veh_id, *VehCount);
-            na_cmd_result("skip", why, false);
-            return;
+            snprintf(why, why_n, "no veh %d (0 <= veh_id < %d)", veh_id, *VehCount);
+            snprintf(verb_out, verb_n, "skip");
+            return false;
         }
         const int fid = Vehs[veh_id].faction_id;
-        if (!na_order_gate(fid, why, sizeof(why))) {
-            na_cmd_result("skip", why, false);
-            return;
+        if (!na_order_gate(fid, why, why_n)) {
+            snprintf(verb_out, verb_n, "skip");
+            return false;
         }
         mod_veh_skip(veh_id);
-        snprintf(why, sizeof(why), "veh %d ends its turn", veh_id);
-        na_cmd_result("skip", why, true);
-        return;
+        snprintf(why, why_n, "veh %d ends its turn", veh_id);
+        snprintf(verb_out, verb_n, "skip");
+        return true;
     }
 
     if (strncmp(line, "build ", 6) == 0) {
         int base_id = -1, item = 0;
         if (sscanf(line + 6, "%d %d", &base_id, &item) != 2) {
-            na_cmd_result("build", "expected: build <base_id> <item_id>", false);
-            return;
+            snprintf(verb_out, verb_n, "build");
+            snprintf(why, why_n, "expected: build <base_id> <item_id>");
+            return false;
         }
         if (base_id < 0 || base_id >= *BaseCount || base_id >= MaxBaseNum) {
-            snprintf(why, sizeof(why), "no base %d (0 <= base_id < %d)", base_id, *BaseCount);
-            na_cmd_result("build", why, false);
-            return;
+            snprintf(why, why_n, "no base %d (0 <= base_id < %d)", base_id, *BaseCount);
+            snprintf(verb_out, verb_n, "build");
+            return false;
         }
         const int fid = Bases[base_id].faction_id;
-        if (!na_order_gate(fid, why, sizeof(why))) {
-            na_cmd_result("build", why, false);
-            return;
+        if (!na_order_gate(fid, why, why_n)) {
+            snprintf(verb_out, verb_n, "build");
+            return false;
         }
         // The same availability test the decision path applies to a brain's answer. An agent
         // acting out of cycle gets no weaker a check than one answering when asked.
         if (!na_item_is_legal(base_id, item)) {
-            snprintf(why, sizeof(why), "item %d is not buildable at base %d", item, base_id);
-            na_cmd_result("build", why, false);
-            return;
+            snprintf(why, why_n, "item %d is not buildable at base %d", item, base_id);
+            snprintf(verb_out, verb_n, "build");
+            return false;
         }
         mod_base_change(base_id, item);
         /*
@@ -3297,20 +3318,83 @@ static void na_order_command(const char* line) {
         */
         const int actual = Bases[base_id].item();
         if (actual != item) {
-            snprintf(why, sizeof(why), "base %d did not keep item %d (has %d)", base_id, item, actual);
-            na_cmd_result("build", why, false);
-            return;
+            snprintf(why, why_n, "base %d did not keep item %d (has %d)", base_id, item, actual);
+            snprintf(verb_out, verb_n, "build");
+            return false;
         }
         // The cache is what the replay path serves for the rest of this base-turn. Leaving it
         // stale would let a replay quietly undo an order the agent just gave and was told
         // succeeded.
         na_cache_put(base_id, item);
-        snprintf(why, sizeof(why), "base %d builds %.40s", base_id, prod_name(item));
-        na_cmd_result("build", why, true);
-        return;
+        snprintf(why, why_n, "base %d builds %.40s", base_id, prod_name(item));
+        snprintf(verb_out, verb_n, "build");
+        return true;
     }
 
-    na_cmd_result("order", "unknown order verb", false);
+    snprintf(why, why_n, "unknown order verb");
+    return false;
+}
+
+/*
+Run a batch of order lines and write ONE result carrying every outcome.
+
+Why batching exists: the channel is one file polled at 4 Hz, so an order costs a quarter-second
+round trip and fifty units cost twelve seconds of a turn. That is the difference between an agent
+that can move an army and one that can move a squad.
+
+Why the result is a single object with a `results` array, rather than one file per order: the
+result file is a single slot that the next write overwrites. Writing N results would mean N-1 of
+them are destroyed before anyone reads them — and a caller that reads the survivor learns the
+outcome of one order and nothing about the others, which is worse than not batching at all.
+
+`ok` on the envelope is true only when EVERY order succeeded. A batch that half-worked is not a
+success, and flattening it to one boolean is exactly how a partial failure becomes invisible;
+the per-order entries are what a caller must actually read.
+
+Bounded at NA_ORDER_BATCH_MAX because this runs on the window procedure. A caller that sends
+more gets the first NA_ORDER_BATCH_MAX executed and is TOLD how many were dropped, rather than
+having the tail silently ignored.
+*/
+static const int NA_ORDER_BATCH_MAX = 32;
+
+static void na_order_batch(char lines[][256], int count, int dropped) {
+    NaBuf o;
+    na_buf_init(&o);
+    na_buf_puts(&o, "{\"command\":\"batch\",\"results\":[");
+
+    bool all_ok = true;
+    for (int i = 0; i < count; i++) {
+        char verb[32];
+        char why[160];
+        const bool ok = na_order_exec(lines[i], verb, sizeof(verb), why, sizeof(why));
+        all_ok = all_ok && ok;
+        if (i) {
+            na_buf_puts(&o, ",");
+        }
+        na_buf_puts(&o, "{\"command\":\"");
+        na_buf_escaped(&o, verb);
+        na_buf_puts(&o, "\",\"detail\":\"");
+        na_buf_escaped(&o, why);
+        na_buf_printf(&o, "\",\"ok\":%s}", ok ? "true" : "false");
+    }
+    na_buf_printf(&o, "],\"count\":%d,\"dropped\":%d", count, dropped);
+    na_buf_printf(&o, ",\"ok\":%s", all_ok && dropped == 0 ? "true" : "false");
+    na_buf_printf(&o, ",\"turn\":%d,\"halted\":%d}", *CurrentTurn, *GameHalted);
+
+    FILE* fp = fopen(NA_CMD_RESULT, "wt");
+    if (fp) {
+        if (!o.failed) {
+            fputs(o.data, fp);
+            fputs("\n", fp);
+        }
+        fclose(fp);
+    }
+    na_buf_free(&o);
+}
+
+static bool na_is_order_line(const char* line) {
+    return strncmp(line, "move ", 5) == 0 || strncmp(line, "skip ", 5) == 0
+        || strncmp(line, "build ", 6) == 0;
 }
 
 void na_command_tick(void* hwnd_raw) {
@@ -3335,6 +3419,52 @@ void na_command_tick(void* hwnd_raw) {
     char line[1024] = {};
     if (!fgets(line, sizeof(line)-1, fp)) {
         line[0] = '\0';
+    }
+    /*
+    A BATCH of orders, read while the file is still open.
+
+    Only order verbs batch. Everything else on this channel (shot, click, key, load, enter,
+    audit, observe) stays strictly one-per-file: those are operator commands where a second line
+    is far more likely to be a mistake than an intent, and several of them move the game in ways
+    that should not run unattended in a group.
+
+    Read here rather than in a second open because the file is REMOVED below — reopening it
+    would be a race against our own cleanup.
+    */
+    char batch[NA_ORDER_BATCH_MAX][256];
+    int batched = 0;
+    int dropped = 0;
+    {
+        char trimmed[1024];
+        snprintf(trimmed, sizeof(trimmed), "%s", line);
+        for (int i = (int)strlen(trimmed) - 1; i >= 0; i--) {
+            if (trimmed[i] == '\n' || trimmed[i] == '\r' || trimmed[i] == ' ' || trimmed[i] == '\t') {
+                trimmed[i] = '\0';
+            } else {
+                break;
+            }
+        }
+        if (na_is_order_line(trimmed)) {
+            snprintf(batch[batched++], sizeof(batch[0]), "%s", trimmed);
+            char more[256];
+            while (fgets(more, sizeof(more) - 1, fp)) {
+                for (int i = (int)strlen(more) - 1; i >= 0; i--) {
+                    if (more[i] == '\n' || more[i] == '\r' || more[i] == ' ' || more[i] == '\t') {
+                        more[i] = '\0';
+                    } else {
+                        break;
+                    }
+                }
+                if (!more[0]) {
+                    continue;
+                }
+                if (batched >= NA_ORDER_BATCH_MAX) {
+                    dropped++;
+                    continue;
+                }
+                snprintf(batch[batched++], sizeof(batch[0]), "%s", more);
+            }
+        }
     }
     fclose(fp);
 
@@ -3489,9 +3619,17 @@ void na_command_tick(void* hwnd_raw) {
     set_move_to's own return) rather than of our opinion of the rules. A wrapper that reimplemented
     a validator would be the one place here capable of corrupting a game.
     */
-    if (strncmp(line, "move ", 5) == 0 || strncmp(line, "skip ", 5) == 0
-        || strncmp(line, "build ", 6) == 0) {
-        na_order_command(line);
+    if (batched > 0) {
+        if (batched == 1 && dropped == 0) {
+            // One order: keep the original single-object result, so a caller written against
+            // the pre-batch channel is unaffected.
+            char verb[32];
+            char why[160];
+            const bool ok = na_order_exec(batch[0], verb, sizeof(verb), why, sizeof(why));
+            na_cmd_result(verb, why, ok);
+        } else {
+            na_order_batch(batch, batched, dropped);
+        }
         return;
     }
 
