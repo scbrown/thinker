@@ -206,6 +206,15 @@ static void na_write_fairness(NaBuf* w, int faction_id) {
     na_buf_puts(w, "\",\"handicaps\":[]}");
 }
 
+/*
+The traceparent most recently written by na_write_head.
+
+Single-threaded by construction: the engine calls these hooks on its own thread and the DLL
+never spawns one, so "most recent" is unambiguous. It is read immediately by the decide paths,
+which stash it per base before anything else can overwrite it.
+*/
+static char na_last_trace[64];
+
 static void na_write_head(NaBuf* w, const char* surface_id, const char* scope, int faction_id) {
     na_buf_printf(w, "{\"schema_version\":\"0.1\",\"engine\":\"thinker\"");
     na_buf_printf(w, ",\"scope\":\"%s\",\"surface_id\":\"%s\"", scope, surface_id);
@@ -225,11 +234,20 @@ static void na_write_head(NaBuf* w, const char* surface_id, const char* scope, i
     // replacing that constant, so the non-zero guarantee does not come to depend on
     // what the clock happened to read.
     na_trace_seq++;
-    na_buf_printf(w,
-        ",\"trace\":{\"traceparent\":\"00-%08x%08x%08x%08x-%08x%08x-01\"}",
+    /*
+    Formatted into na_last_trace first, then written, so there is ONE definition of the
+    traceparent string. The outcome report (na_post_outcome) has to name the decision it is
+    about, and the traceparent is the only identifier both sides already share: the orchestrator
+    stamps no id into the reply, and a decision id exists only when an agent brain is mounted.
+    Regenerating the string at report time from turn/faction/seq would be a second definition of
+    a format that must agree exactly, which is how two "identical" ids drift.
+    */
+    snprintf(na_last_trace, sizeof(na_last_trace),
+        "00-%08x%08x%08x%08x-%08x%08x-01",
         (unsigned)*CurrentTurn ^ na_session_salt(), (unsigned)faction_id,
         na_trace_seq, 0x7a1c0de,
         na_trace_seq, (unsigned)(*CurrentTurn + 1));
+    na_buf_printf(w, ",\"trace\":{\"traceparent\":\"%s\"}", na_last_trace);
     na_write_fairness(w, faction_id);
 }
 
@@ -1168,6 +1186,56 @@ static void na_cache_put(int base_id, int item) {
 }
 
 /*
+The traceparent of the decision that set this base's cached item.
+
+Kept alongside the cache rather than inside it because it answers a different question. The
+cache answers "what did we decide"; this answers "which decision was that", which is what an
+outcome report has to name. na_verify_base_production runs long after the decide call has
+returned, so without this the divergence it detects could not be attached to anything.
+*/
+static char na_cached_trace[MaxBaseNum][64];
+
+static void na_trace_put(int base_id) {
+    if (base_id >= 0 && base_id < MaxBaseNum) {
+        snprintf(na_cached_trace[base_id], sizeof(na_cached_trace[base_id]), "%s", na_last_trace);
+    }
+}
+
+static const char* na_trace_get(int base_id) {
+    if (base_id < 0 || base_id >= MaxBaseNum || !na_cached_trace[base_id][0]) {
+        return "";
+    }
+    return na_cached_trace[base_id];
+}
+
+/*
+Tell the orchestrator what the ENGINE did, which is not what the orchestrator decided.
+
+Everything this reports is already computed and already written to na-observations.jsonl. The
+orchestrator never read that file, so its picture of its own effect was absent rather than
+incomplete — it could not tell an applied order from one the engine silently dropped.
+
+BOUNDED HARD, and deliberately not on conf.llm_timeout_ms. A decision may block the game for as
+long as an agent needs to think, because a turn-based game pausing for a player is what it
+already does. Reporting what already happened has earned no such licence: it runs after the
+decision, several times per base-turn, and a slow or absent collector must cost the game
+approximately nothing. So the timeout is a small constant and the result is discarded — a report
+that does not land is a report that does not land, and the orchestrator's own "unknown" status
+covers it. Silence there is already defined as "not confirmed" rather than "fine".
+*/
+static const int NA_OUTCOME_TIMEOUT_MS = 250;
+
+static void na_post_outcome(const char* json) {
+    if (!json || !json[0]) {
+        return;
+    }
+    NaBuf resp;
+    if (na_http_post(llm_endpoint.c_str(), "/outcome", json, NA_OUTCOME_TIMEOUT_MS, &resp)) {
+        na_buf_free(&resp);
+    }
+}
+
+/*
 A1: the first decision the brain actually gets to make.
 
 Returns the item this base should build. Every failure path returns
@@ -1278,7 +1346,36 @@ int na_decide_base_production(int base_id, int native_choice, int has_gov) {
     }
 
     na_cache_put(base_id, applied);
+    na_trace_put(base_id);
     na_history_put(base_id, applied, tier[0] == 'l' ? 'l' : 'd');
+
+    // Report what the engine was handed. Sent before the record is closed below so the two
+    // cannot disagree about what was applied — they are built from the same locals.
+    {
+        NaBuf o;
+        na_buf_init(&o);
+        na_buf_printf(&o, "{\"traceparent\":\"%s\"", na_trace_get(base_id));
+        na_buf_printf(&o, ",\"run_id\":\"%s\"", na_run_id());
+        na_buf_puts(&o, ",\"surface_id\":\"base.production\",\"event\":\"applied\"");
+        na_buf_printf(&o, ",\"turn\":%d,\"base_id\":%d", *CurrentTurn, base_id);
+        na_buf_puts(&o, ",\"base\":\"");
+        na_buf_escaped(&o, Bases[base_id].name);
+        na_buf_printf(&o, "\",\"tier\":\"%s\",\"applied\":\"%s\"", tier, how);
+        na_buf_printf(&o, ",\"applied_item\":%d", applied);
+        na_buf_puts(&o, ",\"applied_item_name\":\"");
+        na_buf_escaped(&o, prod_name(applied));
+        na_buf_puts(&o, "\"");
+        if (detail[0]) {
+            na_buf_puts(&o, ",\"fallback_reason\":\"");
+            na_buf_escaped(&o, detail);
+            na_buf_puts(&o, "\"");
+        }
+        na_buf_puts(&o, "}");
+        if (!o.failed) {
+            na_post_outcome(o.data);
+        }
+        na_buf_free(&o);
+    }
 
     na_buf_printf(&w, ",\"tier\":\"%s\",\"applied\":\"%s\"", tier, how);
     na_buf_printf(&w, ",\"applied_item\":%d", applied);
@@ -1352,6 +1449,38 @@ void na_verify_base_production(int base_id) {
         // established is how a guess becomes a fact in someone's analysis three months later.
         fputs("\",\"fallback_reason\":\"engine did not keep the applied item\"}\n", lf);
         fflush(lf);
+    }
+
+    /*
+    The same divergence, sent rather than only filed. This is the single most valuable thing the
+    orchestrator can learn and the one it could least infer: every gate upstream said yes, and
+    the base is building something else anyway.
+
+    Reported BEFORE the cache is overwritten below, so the traceparent still names the decision
+    that was diverged from rather than the correction.
+    */
+    {
+        NaBuf o;
+        na_buf_init(&o);
+        na_buf_printf(&o, "{\"traceparent\":\"%s\"", na_trace_get(base_id));
+        na_buf_printf(&o, ",\"run_id\":\"%s\"", na_run_id());
+        na_buf_puts(&o, ",\"surface_id\":\"base.production\",\"event\":\"divergence\"");
+        na_buf_printf(&o, ",\"turn\":%d,\"base_id\":%d", *CurrentTurn, base_id);
+        na_buf_puts(&o, ",\"base\":\"");
+        na_buf_escaped(&o, base.name);
+        na_buf_printf(&o, "\",\"intended_item\":%d", intended);
+        na_buf_puts(&o, ",\"intended_item_name\":\"");
+        na_buf_escaped(&o, prod_name(intended));
+        na_buf_printf(&o, "\",\"applied_item\":%d", actual);
+        na_buf_puts(&o, ",\"applied_item_name\":\"");
+        na_buf_escaped(&o, prod_name(actual));
+        // Same discipline as the record: we do not know WHY, and naming a cause we have not
+        // established is how a guess becomes a fact in someone's analysis three months later.
+        na_buf_puts(&o, "\",\"fallback_reason\":\"engine did not keep the applied item\"}");
+        if (!o.failed) {
+            na_post_outcome(o.data);
+        }
+        na_buf_free(&o);
     }
 
     na_cache_put(base_id, actual);
