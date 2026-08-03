@@ -1026,6 +1026,14 @@ void __cdecl mod_turn_upkeep() {
     procedure — each of which is reachable and each of which is wrong.
     */
     na_exit_turn_check();
+    /*
+    Neural Amplifier: forecast the COMING turn to the orchestrator.
+
+    Same seam, same reason, opposite direction: the exit check reads the turn that just finished,
+    and this announces the one about to start. Placed after it deliberately — a run that is
+    stopping should not first publish a forecast for a turn it will never play.
+    */
+    na_announce_turn();
     debug("turn_upkeep %d bases: %d vehs: %d\n", (*CurrentTurn)+1, *BaseCount, *VehCount);
     snprintf(ThinkerVars->build_date, 12, MOD_DATE);
     if (*CurrentTurn == 0) {

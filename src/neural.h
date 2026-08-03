@@ -289,6 +289,16 @@ site is what makes the resulting artifacts trustworthy.
 void na_exit_turn_check();
 
 /*
+Tell the orchestrator what the coming turn is expected to ask about.
+
+Called from the first statements of mod_turn_upkeep, where *CurrentTurn still names the turn that
+just finished — so the forecast is built from the board as it stood at the end of it. That is
+what makes it a FORECAST and not a worklist: a base can be captured or finish a project before
+its decision would have been raised, and then it never is.
+*/
+void na_announce_turn();
+
+/*
 True once the -na-autoload sequence has finished, however it finished, and when
 no autoload was requested at all.
 */

@@ -2992,6 +2992,65 @@ void na_auto_turn_tick() {
     na_autoload_log("auto_end_turn_returned", "", 1);
 }
 
+/*
+Announce the coming turn's expected decisions.
+
+The orchestrator cannot show an agent a turn it has not been told about: when base #1 is asked,
+bases #2..#51 have not been POSTed and do not exist to its queue. So it can only ever offer the
+oldest single decision, and an agent cannot weigh fifty bases against one pool of minerals.
+
+WHAT IS FORECAST, and what is deliberately not. Only base.production, and only for bases owned by
+a routed faction. That surface fires for every base every turn, so it is the one we can predict
+honestly. faction.tech and faction.se fire conditionally — a tech choice only when research
+completes — and listing them would be guessing; an entry that never arrives is indistinguishable
+from a stuck adapter, so a wrong forecast is worse than a short one.
+
+*CurrentTurn still names the turn that just finished here, so the announced turn is +1 and the
+board this is built from is the previous turn's. That is exactly why the orchestrator treats the
+set as a forecast: a base can be captured or starve before its decision would have been raised.
+
+Bounded and fire-and-forget, like na_post_outcome and for the same reason: this is bookkeeping
+about a turn that has not started, and a slow or absent collector must not delay the game.
+*/
+void na_announce_turn() {
+    if (llm_endpoint.empty()) {
+        return;
+    }
+    const int turn = *CurrentTurn + 1;
+
+    NaBuf w;
+    na_buf_init(&w);
+    na_buf_printf(&w, "{\"turn\":%d", turn);
+    na_buf_printf(&w, ",\"run_id\":\"%s\"", na_run_id());
+    na_buf_puts(&w, ",\"expected\":[");
+
+    int emitted = 0;
+    for (int i = 0; i < *BaseCount && i < MaxBaseNum; i++) {
+        const BASE& base = Bases[i];
+        if (!llm_enabled(base.faction_id)) {
+            continue;
+        }
+        if (emitted) {
+            na_buf_puts(&w, ",");
+        }
+        na_buf_puts(&w, "{\"surface_id\":\"base.production\"");
+        na_buf_printf(&w, ",\"faction_id\":%d,\"base_id\":%d", base.faction_id, i);
+        na_buf_puts(&w, ",\"base\":\"");
+        na_buf_escaped(&w, base.name);
+        na_buf_puts(&w, "\"}");
+        emitted++;
+    }
+    na_buf_puts(&w, "]}");
+
+    if (!w.failed) {
+        NaBuf resp;
+        if (na_http_post(llm_endpoint.c_str(), "/turn", w.data, NA_OUTCOME_TIMEOUT_MS, &resp)) {
+            na_buf_free(&resp);
+        }
+    }
+    na_buf_free(&w);
+}
+
 void na_exit_turn_check() {
     if (na_exit_turn <= 0 || *CurrentTurn < na_exit_turn) {
         return;
