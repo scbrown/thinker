@@ -875,9 +875,34 @@ static void na_write_history(NaBuf* w, int base_id) {
     na_buf_puts(w, "]");
 }
 
-// Build the contract world view for one base's production decision.
+/*
+The engine's own pick, as two fields. Factored out so the DECIDE path can append the
+same bytes to its record after the call returns, rather than restating the escaping.
+*/
+static void na_write_native_choice(NaBuf* w, int native_choice) {
+    na_buf_printf(w, ",\"native_choice\":%d", native_choice);
+    na_buf_puts(w, ",\"native_choice_name\":\"");
+    na_buf_escaped(w, prod_name(native_choice));
+    na_buf_puts(w, "\"");
+}
+
+/*
+Build the contract world view for one base's production decision.
+
+`reveal_native` decides whether the engine's own pick goes in. It is FALSE on the decide
+path and true everywhere else, because this buffer IS the request body there — see the
+comment at the send site. The record still gets the fields; they are appended afterwards.
+
+A BOOL rather than base.hurry's sentinel, and the difference is not stylistic (na-glk).
+base.hurry's `native_hurried` is a tri-state whose values are 1/0, so a negative is free
+to mean "not asked". A production item id has no such spare value: `prod_name` asserts
+`item_id >= -SP_ID_Last && item_id < MaxProtoNum`, and NEGATIVE ids are ordinary
+facilities — the captured turn-135 record carries `native_choice: -4` for Recycling
+Tanks. Suppressing on `native_choice < 0` here would have silently stripped the field
+from every facility decision in the RECORD too, which is the half we must keep.
+*/
 static void na_build_base_production(NaBuf* w, int base_id, int native_choice,
-                                     int has_gov, int call_seq) {
+                                     int has_gov, int call_seq, bool reveal_native) {
     BASE& base = Bases[base_id];
     int faction_id = base.faction_id;
 
@@ -888,23 +913,29 @@ static void na_build_base_production(NaBuf* w, int base_id, int native_choice,
     na_buf_puts(w, "\"");
     na_buf_printf(w, ",\"x\":%d,\"y\":%d", base.x, base.y);
 
-    /*
-    The engine's own pick, always recorded.
-
-    It is no longer merely a record: it is the fallback this decision degrades to
-    (invariant 9), so the log line shows both what the deterministic tier would
-    have done and what actually ran. Losing that comparison is how an A/B against
-    the deterministic tier (na-6db) stops being possible.
-    */
-    na_buf_printf(w, ",\"native_choice\":%d", native_choice);
     // has_gov is mod_base_build's own second parameter. Kept because it is free and
     // documents the call's context, but it does NOT discriminate between repeated
     // calls — measured 0 on every sample. call_seq is what does.
     na_buf_printf(w, ",\"has_gov\":%d", has_gov);
     na_buf_printf(w, ",\"call_seq\":%d", call_seq);
-    na_buf_puts(w, ",\"native_choice_name\":\"");
-    na_buf_escaped(w, prod_name(native_choice));
-    na_buf_puts(w, "\"");
+
+    /*
+    The engine's own pick, always RECORDED — but never sent to the brain.
+
+    It is not merely a record: it is the fallback this decision degrades to
+    (invariant 9), so the log line shows both what the deterministic tier would
+    have done and what actually ran. Losing that comparison is how an A/B against
+    the deterministic tier (na-6db) stops being possible.
+
+    Which is exactly why it must not ride along in the REQUEST. na-6db's headline
+    is agreement between the tiers, and agreement with an answer you were shown is
+    not evidence of independent judgement — the confound points the same way as the
+    hoped-for result. It also cheapens invariant-1 reasoning: "the model picked the
+    legal thing" is less impressive when the legal thing was named in the prompt.
+    */
+    if (reveal_native) {
+        na_write_native_choice(w, native_choice);
+    }
     na_write_base_state(w, base_id);
     na_write_metrics(w, faction_id, base_id);
     na_write_history(w, base_id);
@@ -1143,7 +1174,8 @@ void na_observe_base_production(int base_id, int native_choice, int has_gov) {
     }
     NaBuf w;
     na_buf_init(&w);
-    na_build_base_production(&w, base_id, native_choice, has_gov, 0);
+    // Reveals the native pick: a probe is a record and touches no network.
+    na_build_base_production(&w, base_id, native_choice, has_gov, 0, true);
     na_buf_puts(&w, ",\"tier\":\"probe\",\"applied\":\"none\"}");
     na_log_record(&w);
     na_buf_free(&w);
@@ -1321,7 +1353,9 @@ int na_decide_base_production(int base_id, int native_choice, int has_gov) {
         }
         NaBuf d;
         na_buf_init(&d);
-        na_build_base_production(&d, base_id, native_choice, has_gov, call_seq);
+        // Reveals the native pick: this divergence report is a record only — it is
+        // never posted, and the brain is not consulted on this path at all.
+        na_build_base_production(&d, base_id, native_choice, has_gov, call_seq, true);
         na_buf_puts(&d, ",\"tier\":\"deterministic\",\"applied\":\"native\"");
         na_buf_printf(&d, ",\"applied_item\":%d", native_choice);
         na_buf_puts(&d, ",\"applied_item_name\":\"");
@@ -1339,7 +1373,13 @@ int na_decide_base_production(int base_id, int native_choice, int has_gov) {
 
     NaBuf w;
     na_buf_init(&w);
-    na_build_base_production(&w, base_id, native_choice, has_gov, call_seq);
+    /*
+    reveal_native = FALSE — this buffer becomes the POST body (see the comment at the
+    send below: "the record and the request body are the same bytes"). The engine's own
+    pick is appended to the RECORD after the call returns, so the two stay
+    distinguishable: the record needs it, the request must not carry it (na-glk).
+    */
+    na_build_base_production(&w, base_id, native_choice, has_gov, call_seq, false);
 
     int applied = native_choice;
     const char* tier = "deterministic";
@@ -1420,6 +1460,12 @@ int na_decide_base_production(int base_id, int native_choice, int has_gov) {
         na_buf_free(&o);
     }
 
+    /*
+    The native pick joins the RECORD here, after the request has gone. Withheld from the
+    body above and restored now, so "llm chose X, applied Y" still has the deterministic
+    tier's answer to be measured against while the brain never saw it (na-glk).
+    */
+    na_write_native_choice(&w, native_choice);
     na_buf_printf(&w, ",\"tier\":\"%s\",\"applied\":\"%s\"", tier, how);
     na_buf_printf(&w, ",\"applied_item\":%d", applied);
     na_buf_puts(&w, ",\"applied_item_name\":\"");
@@ -1638,7 +1684,21 @@ and the only difference between their records is the tier/applied tail each appe
 Leaves the JSON object OPEN. The caller closes it, because the decide path sends the open
 buffer as a request body and then reopens it to append what came back.
 */
-static void na_build_faction_tech(NaBuf* w, int faction_id, int native_choice) {
+/*
+The engine's own research target, as two fields. Same split and same reason as
+na_write_native_choice — see na_build_base_production for why the decide path withholds it.
+*/
+static void na_write_native_tech(NaBuf* w, int native_choice) {
+    na_buf_printf(w, ",\"native_choice\":%d", native_choice);
+    na_buf_puts(w, ",\"native_choice_name\":\"");
+    if (native_choice >= 0 && native_choice < MaxTechnologyNum) {
+        na_buf_escaped(w, Tech[native_choice].name);
+    }
+    na_buf_puts(w, "\"");
+}
+
+static void na_build_faction_tech(NaBuf* w, int faction_id, int native_choice,
+                                  bool reveal_native) {
     Faction& plr = Factions[faction_id];
     na_write_head(w, "faction.tech", "turn", faction_id);
 
@@ -1680,12 +1740,9 @@ static void na_build_faction_tech(NaBuf* w, int faction_id, int native_choice) {
         na_buf_printf(w, ",\"turns_to_complete\":%d", (left + rate - 1) / rate);
     }
 
-    na_buf_printf(w, ",\"native_choice\":%d", native_choice);
-    na_buf_puts(w, ",\"native_choice_name\":\"");
-    if (native_choice >= 0 && native_choice < MaxTechnologyNum) {
-        na_buf_escaped(w, Tech[native_choice].name);
+    if (reveal_native) {
+        na_write_native_tech(w, native_choice);
     }
-    na_buf_puts(w, "\"");
 
     na_write_tech_action_space(w, faction_id);
 }
@@ -1697,7 +1754,8 @@ void na_observe_faction_tech(int faction_id, int native_choice) {
     NaBuf wb;
     NaBuf* w = &wb;
     na_buf_init(w);
-    na_build_faction_tech(w, faction_id, native_choice);
+    // Reveals the native pick: a probe is a record and touches no network.
+    na_build_faction_tech(w, faction_id, native_choice, true);
     na_buf_puts(w, ",\"tier\":\"deterministic\",\"applied\":\"native\"}");
     na_log_record(w);
     na_buf_free(w);
@@ -1748,7 +1806,9 @@ int na_decide_faction_tech(int faction_id, int native_choice) {
 
     NaBuf w;
     na_buf_init(&w);
-    na_build_faction_tech(&w, faction_id, native_choice);
+    // reveal_native = FALSE: this buffer becomes the POST body. The native target is
+    // appended to the RECORD after the call returns (na-glk).
+    na_build_faction_tech(&w, faction_id, native_choice, false);
 
     int applied = native_choice;
     const char* tier = "deterministic";
@@ -1790,6 +1850,8 @@ int na_decide_faction_tech(int faction_id, int native_choice) {
         }
     }
 
+    // The native target joins the RECORD here, after the request has gone (na-glk).
+    na_write_native_tech(&w, native_choice);
     na_buf_printf(&w, ",\"tier\":\"%s\",\"applied\":\"%s\"", tier, how);
     na_buf_printf(&w, ",\"applied_item\":%d", applied);
     na_buf_puts(&w, ",\"applied_item_name\":\"");
@@ -1813,7 +1875,30 @@ Social engineering. field/model describe the change the deterministic tier settl
 field < 0 for "no change this turn" — which is a real decision and is recorded as one
 rather than as an absence.
 */
-static void na_build_faction_se(NaBuf* w, int faction_id, int field, int model, int cost) {
+/*
+The engine's own SE proposal, as three fields. `upheaval_cost` travels WITH it and is
+withheld with it: it is the cost of the native move specifically, not of the options in
+the action space, so leaving it behind would hand the brain a priced hint at the answer
+while the answer itself was withheld. Nothing on the orchestrator side reads it
+(measured — zero references in the Python), so it is record context, which is where it
+now stays on the decide path.
+*/
+static void na_write_native_se(NaBuf* w, int field, int model, int cost) {
+    if (field >= 0 && field < MaxSocialCatNum && model >= 0 && model < MaxSocialModelNum) {
+        na_buf_printf(w, ",\"native_choice\":\"se:%d:%d\"", field, model);
+        na_buf_puts(w, ",\"native_choice_name\":\"");
+        na_buf_escaped(w, SocialField[field].field_name);
+        na_buf_puts(w, " -> ");
+        na_buf_escaped(w, SocialField[field].soc_name[model]);
+        na_buf_printf(w, "\",\"upheaval_cost\":%d", cost);
+    } else {
+        na_buf_puts(w, ",\"native_choice\":\"se:none\",\"native_choice_name\":\"No change\"");
+        na_buf_puts(w, ",\"upheaval_cost\":0");
+    }
+}
+
+static void na_build_faction_se(NaBuf* w, int faction_id, int field, int model, int cost,
+                                bool reveal_native) {
     Faction& plr = Factions[faction_id];
     const int* current = &plr.SE_Politics;
     na_write_head(w, "faction.se", "turn", faction_id);
@@ -1931,16 +2016,8 @@ static void na_build_faction_se(NaBuf* w, int faction_id, int field, int model, 
     }
     na_buf_printf(w, "],\"action_space_size\":%d", count);
 
-    if (field >= 0 && field < MaxSocialCatNum && model >= 0 && model < MaxSocialModelNum) {
-        na_buf_printf(w, ",\"native_choice\":\"se:%d:%d\"", field, model);
-        na_buf_puts(w, ",\"native_choice_name\":\"");
-        na_buf_escaped(w, SocialField[field].field_name);
-        na_buf_puts(w, " -> ");
-        na_buf_escaped(w, SocialField[field].soc_name[model]);
-        na_buf_printf(w, "\",\"upheaval_cost\":%d", cost);
-    } else {
-        na_buf_puts(w, ",\"native_choice\":\"se:none\",\"native_choice_name\":\"No change\"");
-        na_buf_puts(w, ",\"upheaval_cost\":0");
+    if (reveal_native) {
+        na_write_native_se(w, field, model, cost);
     }
 }
 
@@ -1951,7 +2028,8 @@ void na_observe_faction_se(int faction_id, int field, int model, int cost) {
     NaBuf wb;
     NaBuf* w = &wb;
     na_buf_init(w);
-    na_build_faction_se(w, faction_id, field, model, cost);
+    // Reveals the native pick: a probe is a record and touches no network.
+    na_build_faction_se(w, faction_id, field, model, cost, true);
     na_buf_puts(w, ",\"tier\":\"deterministic\",\"applied\":\"native\"}");
     na_log_record(w);
     na_buf_free(w);
@@ -2019,7 +2097,9 @@ void na_decide_faction_se(int faction_id, int* field, int* model) {
 
     NaBuf w;
     na_buf_init(&w);
-    na_build_faction_se(&w, faction_id, native_field, native_model, native_cost);
+    // reveal_native = FALSE: this buffer becomes the POST body. The native proposal is
+    // appended to the RECORD after the call returns (na-glk).
+    na_build_faction_se(&w, faction_id, native_field, native_model, native_cost, false);
 
     int applied_field = native_field;
     int applied_model = native_model;
@@ -2076,6 +2156,8 @@ void na_decide_faction_se(int faction_id, int* field, int* model) {
         }
     }
 
+    // The native proposal joins the RECORD here, after the request has gone (na-glk).
+    na_write_native_se(&w, native_field, native_model, native_cost);
     na_buf_printf(&w, ",\"tier\":\"%s\",\"applied\":\"%s\"", tier, how);
     if (applied_field >= 0 && applied_field < MaxSocialCatNum) {
         na_buf_printf(&w, ",\"applied_item\":\"se:%d:%d\"", applied_field, applied_model);
