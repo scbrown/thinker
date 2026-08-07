@@ -5,6 +5,7 @@
 #include "tech.h"
 #include "build.h"
 #include "basewin.h"
+#include "gui_dialog.h"
 
 /*
 The observation sink.
@@ -1185,6 +1186,30 @@ int faction_id, int faction_id_tgt, int target_id, int base_id, int applied) {
         na_buf_printf(&w, ",\"target_odp\":%d", tgt.satellites_ODP);
     }
     na_buf_puts(&w, "}");
+    na_buf_puts(&w, ",\"tier\":\"deterministic\",\"applied\":\"");
+    na_buf_puts(&w, applied ? "native" : "none");
+    na_buf_puts(&w, "\"}");
+    na_log_record(&w);
+    na_buf_free(&w);
+}
+
+void na_observe_diplo_tech_trade(
+int faction_id, int faction_id_tgt, int tech_id, int price, int accept, int applied) {
+    if (faction_id <= 0 || faction_id >= MaxPlayerNum
+    || faction_id_tgt <= 0 || faction_id_tgt >= MaxPlayerNum) {
+        return;
+    }
+    NaBuf w;
+    na_buf_init(&w);
+    na_write_head(&w, "diplo.tech_trade", "turn", faction_id);
+    na_write_metrics(&w, faction_id, -1);
+    na_buf_puts(&w, ",\"inputs\":{");
+    na_buf_printf(&w, "\"seller_faction_id\":%d", faction_id_tgt);
+    na_buf_printf(&w, ",\"tech_id\":%d", tech_id);
+    na_buf_printf(&w, ",\"price\":%d", price);
+    na_buf_printf(&w, ",\"energy_reserves\":%d", Factions[faction_id].energy_credits);
+    na_buf_puts(&w, "}");
+    na_buf_printf(&w, ",\"native_choice\":{\"accept\":%d}", accept ? 1 : 0);
     na_buf_puts(&w, ",\"tier\":\"deterministic\",\"applied\":\"");
     na_buf_puts(&w, applied ? "native" : "none");
     na_buf_puts(&w, "\"}");
@@ -3967,6 +3992,25 @@ void na_command_tick(void* hwnd_raw) {
             na_cmd_result("observe-odp-attack", detail, true);
         } else {
             na_cmd_result("observe-odp-attack", "need 0 < faction_id < 8", false);
+        }
+        return;
+    }
+
+    // Price and answer a technology offer without opening diplomacy or transferring anything.
+    if (strncmp(line, "observe-tech-trade ", 19) == 0) {
+        int buyer = -1;
+        int seller = -1;
+        int tech_id = -1;
+        int high_price = 0;
+        if (sscanf(line + 19, "%d %d %d %d", &buyer, &seller, &tech_id, &high_price) == 4
+        && buyer > 0 && buyer < MaxPlayerNum && seller > 0 && seller < MaxPlayerNum
+        && buyer != seller && tech_id >= 0 && tech_id < MaxTechnologyNum) {
+            na_probe_diplo_tech_trade(buyer, seller, tech_id, high_price);
+            char detail[96];
+            snprintf(detail, sizeof(detail), "buyer=%d seller=%d tech=%d", buyer, seller, tech_id);
+            na_cmd_result("observe-tech-trade", detail, true);
+        } else {
+            na_cmd_result("observe-tech-trade", "need buyer seller tech_id high_price", false);
         }
         return;
     }

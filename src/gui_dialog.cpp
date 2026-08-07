@@ -1,5 +1,6 @@
 
 #include "gui_dialog.h"
+#include "neural.h"
 
 
 void parse_gen_name(int faction_id, size_t title_value, size_t name_value)
@@ -478,6 +479,41 @@ int __cdecl mod_energy_trade(int faction1, int faction2)
     return 0;
 }
 
+int na_tech_purchase_price(int faction1, int faction2, int tech_id, int high_price) {
+    Faction& f_plr = Factions[faction1];
+    Faction& f_cmp = Factions[faction2];
+    int value = (tech_alt_val(tech_id, faction2, 0) + 50)
+        * clamp(*DiffLevel + 3, 4, 8)
+        * clamp(32 + clamp(*DiploFriction, 0, 20)
+        + 4*diplo_relation(faction1, faction2)
+        + 2*f_plr.atrocities, 16, 96) / 256;
+    if (f_plr.ranking > f_cmp.ranking) {
+        value = value * 5 / 4;
+    }
+    if (f_plr.pop_total > f_cmp.pop_total) {
+        value = value * 5 / 4;
+    }
+    if (has_treaty(faction1, faction2, DIPLO_PACT)) {
+        value = value * 3 / 4;
+    } else if (has_treaty(faction1, faction2, DIPLO_TREATY)) {
+        value = value * 7 / 8;
+    }
+    if (high_price) {
+        value = value * 5 / 4;
+    }
+    if (f_plr.tech_cost > 50 && f_plr.tech_research_id == tech_id) {
+        value = (int)(value * (1.0 - clamp(
+            1.0 * f_plr.tech_accumulated / f_plr.tech_cost, 0.0, 0.7)));
+    }
+    return clamp((value / 25) * 25, 25, 10000);
+}
+
+void na_probe_diplo_tech_trade(int faction1, int faction2, int tech_id, int high_price) {
+    int price = na_tech_purchase_price(faction1, faction2, tech_id, high_price);
+    int accept = Factions[faction1].energy_credits >= price;
+    na_observe_diplo_tech_trade(faction1, faction2, tech_id, price, accept, 0);
+}
+
 int __cdecl mod_buy_tech(int faction1, int faction2, int counter_id, int high_price, int proposal_id)
 {
     Faction& f_plr = Factions[faction1];
@@ -495,30 +531,7 @@ int __cdecl mod_buy_tech(int faction1, int faction2, int counter_id, int high_pr
             X_dialog(random(2) ? "REJTECHLATER0" : "REJTECHLATER1", faction2);
             return 1; // skip additional dialog replies
         }
-        int value = (tech_alt_val(*diplo_tech_id1, faction2, 0) + 50)
-            * clamp(*DiffLevel + 3, 4, 8)
-            * clamp(32 + clamp(*DiploFriction, 0, 20)
-            + 4*diplo_relation(faction1, faction2)
-            + 2*f_plr.atrocities, 16, 96) / 256;
-        if (f_plr.ranking > f_cmp.ranking) {
-            value = value * 5 / 4;
-        }
-        if (f_plr.pop_total > f_cmp.pop_total) {
-            value = value * 5 / 4;
-        }
-        if (has_treaty(faction1, faction2, DIPLO_PACT)) {
-            value = value * 3 / 4;
-        } else if (has_treaty(faction1, faction2, DIPLO_TREATY)) {
-            value = value * 7 / 8;
-        }
-        if (high_price) {
-            value = value * 5 / 4;
-        }
-        if (f_plr.tech_cost > 50 && f_plr.tech_research_id == *diplo_tech_id1) {
-            value = (int)(value * (1.0 - clamp(
-                1.0 * f_plr.tech_accumulated / f_plr.tech_cost, 0.0, 0.7)));
-        }
-        value = clamp((value / 25) * 25, 25, 10000);
+        int value = na_tech_purchase_price(faction1, faction2, *diplo_tech_id1, high_price);
 
         StrBuffer[0] = '\0';
         say_tech(StrBuffer, *diplo_tech_id1, 1);
@@ -533,7 +546,13 @@ int __cdecl mod_buy_tech(int faction1, int faction2, int counter_id, int high_pr
             X_dialog(random(2) ? "BUYTECHHIGH0" : "BUYTECHHIGH1", faction2);
             return 1;
         }
-        if (X_dialog(random(2) ? "BUYTECH0" : "BUYTECH1", faction2) == 1) {
+        int accept = conf.na_tech_trade_policy
+            ? 1 : X_dialog(random(2) ? "BUYTECH0" : "BUYTECH1", faction2) == 1;
+        if (conf.na_tech_trade_policy) {
+            na_observe_diplo_tech_trade(
+                faction1, faction2, *diplo_tech_id1, value, accept, accept);
+        }
+        if (accept) {
             net_energy(faction1, -value, faction2, value, 1);
             net_tech(faction1, *diplo_tech_id1, faction2, 1);
         }
@@ -541,4 +560,3 @@ int __cdecl mod_buy_tech(int faction1, int faction2, int counter_id, int high_pr
     }
     return buy_tech(faction1, faction2, counter_id, high_price, proposal_id);
 }
-

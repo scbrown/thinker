@@ -231,6 +231,8 @@ struct Config {
     0 preserves stock behaviour (AI factions never launch ODP attacks).
     */
     int na_odp_attack_policy = 0;
+    /* Default-off deterministic response for an offered technology purchase. */
+    int na_tech_trade_policy = 0;
     int social_ai = 1;
     int social_ai_bias = 10;
     int tech_balance = 0;
@@ -497,5 +499,4 @@ void exit_fail(int32_t addr);
 void exit_fail();
 int opt_handle_error(const char* section, const char* name);
 int opt_list_parse(int32_t* dst, char* src, int num, int min_val, int max_val);
-
 

@@ -55,4 +55,5 @@ int __cdecl mod_threaten(int faction1, int faction2);
 int __cdecl mod_base_swap(int faction1, int faction2);
 int __cdecl mod_energy_trade(int faction1, int faction2);
 int __cdecl mod_buy_tech(int faction1, int faction2, int counter_id, int high_price, int proposal_id);
-
+int na_tech_purchase_price(int faction1, int faction2, int tech_id, int high_price);
+void na_probe_diplo_tech_trade(int faction1, int faction2, int tech_id, int high_price);
