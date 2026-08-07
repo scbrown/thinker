@@ -1,6 +1,7 @@
 
 #include "game.h"
 #include "neural.h"
+#include "basewin.h"
 
 static uint32_t custom_game_rules = 0;
 static uint32_t custom_more_rules = 0;
@@ -1556,6 +1557,10 @@ void __cdecl mod_faction_upkeep(int faction_id) {
         do_all_non_input();
         enemy_strategy(faction_id);
         do_all_non_input();
+        if (conf.na_odp_attack_policy) {
+            na_odp_attack_upkeep(faction_id);
+            do_all_non_input();
+        }
         /*
         Thinker-specific AI planning routines.
         Note that move_upkeep is only updated after all the production is done,
@@ -2222,5 +2227,4 @@ int __cdecl load_music_strcmpi(const char* active, const char* label)
     }
     return strcmpi(label, lookup);
 }
-
 

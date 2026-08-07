@@ -4,6 +4,7 @@
 #include "veh.h"
 #include "tech.h"
 #include "build.h"
+#include "basewin.h"
 
 /*
 The observation sink.
@@ -1151,6 +1152,41 @@ void na_observe_base_hq_escape(int base_id, int dest_base_id, int relocate) {
     // The probe captures nothing and pays nothing, so it must not claim otherwise.
     na_buf_puts(&w, ",\"tier\":\"deterministic\",\"applied\":\"");
     na_buf_puts(&w, na_hq_probing ? "none" : "native");
+    na_buf_puts(&w, "\"}");
+    na_log_record(&w);
+    na_buf_free(&w);
+}
+
+void na_observe_unit_odp_attack(
+int faction_id, int faction_id_tgt, int target_id, int base_id, int applied) {
+    if (faction_id <= 0 || faction_id >= MaxPlayerNum) {
+        return;
+    }
+    Faction& plr = Factions[faction_id];
+    NaBuf w;
+    na_buf_init(&w);
+    na_write_head(&w, "unit.odp_attack", "unit", faction_id);
+    na_write_metrics(&w, faction_id, -1);
+    na_buf_puts(&w, ",\"inputs\":{");
+    na_buf_printf(&w, "\"odp_total\":%d", plr.satellites_ODP);
+    na_buf_printf(&w, ",\"odp_available\":%d",
+        max(0, plr.satellites_ODP - plr.ODP_deployed));
+    na_buf_printf(&w, ",\"attack_chance\":%d", OrbitalAttackChance);
+    na_buf_puts(&w, "}");
+    na_buf_puts(&w, ",\"native_choice\":{");
+    na_buf_printf(&w, "\"target_faction_id\":%d", faction_id_tgt);
+    na_buf_printf(&w, ",\"target_id\":%d", target_id);
+    na_buf_printf(&w, ",\"base_id\":%d", base_id);
+    if (faction_id_tgt > 0 && faction_id_tgt < MaxPlayerNum) {
+        Faction& tgt = Factions[faction_id_tgt];
+        na_buf_printf(&w, ",\"target_nutrient\":%d", tgt.satellites_nutrient);
+        na_buf_printf(&w, ",\"target_mineral\":%d", tgt.satellites_mineral);
+        na_buf_printf(&w, ",\"target_energy\":%d", tgt.satellites_energy);
+        na_buf_printf(&w, ",\"target_odp\":%d", tgt.satellites_ODP);
+    }
+    na_buf_puts(&w, "}");
+    na_buf_puts(&w, ",\"tier\":\"deterministic\",\"applied\":\"");
+    na_buf_puts(&w, applied ? "native" : "none");
     na_buf_puts(&w, "\"}");
     na_log_record(&w);
     na_buf_free(&w);
@@ -3917,6 +3953,20 @@ void na_command_tick(void* hwnd_raw) {
             na_cmd_result("observe-se", detail, true);
         } else {
             na_cmd_result("observe-se", "need 0 < faction_id < 8", false);
+        }
+        return;
+    }
+
+    // Side-effect-free unit.odp_attack probe: choose and serialise, never fire.
+    if (strncmp(line, "observe-odp-attack ", 19) == 0) {
+        int fid = -1;
+        if (sscanf(line + 19, "%d", &fid) == 1 && fid > 0 && fid < MaxPlayerNum) {
+            na_probe_unit_odp_attack(fid);
+            char detail[96];
+            snprintf(detail, sizeof(detail), "faction_id=%d", fid);
+            na_cmd_result("observe-odp-attack", detail, true);
+        } else {
+            na_cmd_result("observe-odp-attack", "need 0 < faction_id < 8", false);
         }
         return;
     }

@@ -61,6 +61,8 @@ int option_handler(void* user, const char* section, const char* name, const char
         cf->na_abandon_policy = atoi(value);
     } else if (MATCH("na_hq_escape_policy")) {
         cf->na_hq_escape_policy = atoi(value);
+    } else if (MATCH("na_odp_attack_policy")) {
+        cf->na_odp_attack_policy = atoi(value);
     } else if (MATCH("llm_endpoint")) {
         char* p = strtrim(buf);
         if (strlen(p)) {
@@ -600,6 +602,5 @@ DLL_EXPORT BOOL APIENTRY DllMain(HINSTANCE UNUSED(hinstDLL), DWORD fdwReason, LP
     }
     return TRUE;
 }
-
 
 

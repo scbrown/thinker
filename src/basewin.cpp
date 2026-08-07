@@ -1,4 +1,5 @@
 #include "basewin.h"
+#include "neural.h"
 
 static int hurry_minimal_cost = 0;
 static int base_zoom_factor = -14;
@@ -94,6 +95,85 @@ void __cdecl action_sat_attack(int faction_id, int faction_id_tgt, int target_id
     }
     if (ReportIf->field_8 == 6 && dword_7AE778[*dword_7D392C] == 5) {
         ReportIf_on_redraw(ReportIf);
+    }
+}
+
+/*
+Native answer for unit.odp_attack.
+
+The UI path receives the enemy and asset type after both have already been
+chosen. Stock AI has no caller. This chooser supplies that missing policy while
+remaining deliberately conservative: vendettas only, one strike per turn, and
+no strike when the enemy has no orbital asset.
+*/
+NaOdpAttackChoice na_odp_attack_choice(int faction_id) {
+    NaOdpAttackChoice best = {-1, -1, -1};
+    if (faction_id <= 0 || faction_id >= MaxPlayerNum || *MultiplayerActive) {
+        return best;
+    }
+    Faction& plr = Factions[faction_id];
+    if (plr.satellites_ODP <= plr.ODP_deployed) {
+        return best;
+    }
+    int best_rank = -1;
+    int best_count = -1;
+    for (int tgt_id = 1; tgt_id < MaxPlayerNum; tgt_id++) {
+        if (tgt_id == faction_id || !(plr.diplo_status[tgt_id] & DIPLO_VENDETTA)) {
+            continue;
+        }
+        Faction& tgt = Factions[tgt_id];
+        int target_id = -1;
+        int rank = -1;
+        int count = 0;
+        int base_id = -1;
+        if (tgt.satellites_ODP > 0) {
+            target_id = 3;
+            rank = 4;
+            count = tgt.satellites_ODP;
+        } else if (tgt.satellites_mineral > 0) {
+            target_id = 1;
+            rank = 3;
+            count = tgt.satellites_mineral;
+        } else if (tgt.satellites_energy > 0) {
+            target_id = 2;
+            rank = 2;
+            count = tgt.satellites_energy;
+        } else if (tgt.satellites_nutrient > 0) {
+            target_id = 0;
+            rank = 1;
+            count = tgt.satellites_nutrient;
+        } else {
+            for (int i = 0; i < *BaseCount; i++) {
+                if (Bases[i].faction_id == tgt_id
+                && has_fac_built(FAC_GEOSYNC_SURVEY_POD, i)) {
+                    target_id = 4;
+                    rank = 0;
+                    count++;
+                    if (base_id < 0) {
+                        base_id = i;
+                    }
+                }
+            }
+        }
+        if (rank > best_rank || (rank == best_rank && count > best_count)) {
+            best = {tgt_id, target_id, base_id};
+            best_rank = rank;
+            best_count = count;
+        }
+    }
+    return best;
+}
+
+void na_probe_unit_odp_attack(int faction_id) {
+    NaOdpAttackChoice c = na_odp_attack_choice(faction_id);
+    na_observe_unit_odp_attack(faction_id, c.faction_id_tgt, c.target_id, c.base_id, 0);
+}
+
+void na_odp_attack_upkeep(int faction_id) {
+    NaOdpAttackChoice c = na_odp_attack_choice(faction_id);
+    na_observe_unit_odp_attack(faction_id, c.faction_id_tgt, c.target_id, c.base_id, c.target_id >= 0);
+    if (c.target_id >= 0) {
+        action_sat_attack(faction_id, c.faction_id_tgt, c.target_id, c.base_id);
     }
 }
 
@@ -501,5 +581,3 @@ int __thiscall BaseWin_gov_options(BaseWindow* This, int flag) {
         return 1;
     }
 }
-
-

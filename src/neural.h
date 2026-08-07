@@ -128,6 +128,10 @@ Observation only — na_should_escape_hq (base.cpp) decides.
 */
 void na_observe_base_hq_escape(int base_id, int dest_base_id, int relocate);
 
+/* Emit the native unit.odp_attack choice. applied is false for the probe. */
+void na_observe_unit_odp_attack(
+    int faction_id, int faction_id_tgt, int target_id, int base_id, int applied);
+
 /*
 Load the -na-autoload savegame, once, as soon as the game is idle at the menu.
 

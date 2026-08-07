@@ -5,6 +5,14 @@
 void __cdecl action_staple(int base_id);
 void __cdecl action_sat_attack(int faction_id, int faction_id_tgt, int target_id, int base_id);
 void __cdecl sat_attack(int faction_id, int faction_id_tgt, int target_id);
+struct NaOdpAttackChoice {
+    int faction_id_tgt;
+    int target_id;
+    int base_id;
+};
+NaOdpAttackChoice na_odp_attack_choice(int faction_id);
+void na_odp_attack_upkeep(int faction_id);
+void na_probe_unit_odp_attack(int faction_id);
 void BaseWin_support_zoom(bool zoom_in);
 int __thiscall BaseWin_hurry_popup_start(
     Popup* This, const char* filename, const char* label, int a4, char* a5, int a6, GraphicWin* a7);
@@ -21,4 +29,3 @@ void __cdecl BaseWin_action_staple(int base_id);
 void __cdecl popb_action_staple(int base_id);
 int __thiscall BaseWin_click_staple(BaseWindow* This);
 int __thiscall BaseWin_gov_options(BaseWindow* This, int flag);
-
