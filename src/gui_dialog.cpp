@@ -205,6 +205,18 @@ int base_trade_value(int base_id, int faction1, int faction2)
     return value;
 }
 
+int na_should_buy_base(int faction1, int cost) {
+    Faction& buyer = Factions[faction1];
+    return cost > 0 && buyer.energy_credits - cost >= buyer.hurry_cost_total;
+}
+
+void na_probe_diplo_base_swap(int faction1, int faction2, int base_id) {
+    int cost = base_trade_value(base_id, faction1, faction2);
+    int accept = na_should_buy_base(faction1, cost);
+    na_observe_diplo_base_swap(faction1, faction2, base_id, cost,
+        Factions[faction1].hurry_cost_total, accept, 0);
+}
+
 int __cdecl mod_base_swap(int faction1, int faction2)
 {
     Faction& f_plr = Factions[faction1];
@@ -252,7 +264,14 @@ int __cdecl mod_base_swap(int faction1, int faction2)
             X_dialog("NOBASESWAP", faction2);
             return 0;
         }
-        if (!X_dialog("PAYBASESWAP", faction2)) {
+        int accept = conf.na_base_swap_policy
+            ? na_should_buy_base(faction1, cost_ask)
+            : X_dialog("PAYBASESWAP", faction2);
+        if (conf.na_base_swap_policy) {
+            na_observe_diplo_base_swap(faction1, faction2, *diplo_ask_base_swap_id,
+                cost_ask, f_plr.hurry_cost_total, accept, accept);
+        }
+        if (!accept) {
             return 0;
         }
         // net_energy also calls Console_update_data and StatusWin_redraw

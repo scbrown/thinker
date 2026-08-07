@@ -1243,6 +1243,35 @@ int score, int amount, int turns, int payment, int available_income, int accept,
     na_buf_free(&w);
 }
 
+void na_observe_diplo_base_swap(int faction_id, int faction_id_tgt,
+int base_id, int cost, int committed_hurry, int accept, int applied) {
+    if (faction_id <= 0 || faction_id >= MaxPlayerNum
+    || faction_id_tgt <= 0 || faction_id_tgt >= MaxPlayerNum
+    || base_id < 0 || base_id >= *BaseCount) {
+        return;
+    }
+    NaBuf w;
+    na_buf_init(&w);
+    na_write_head(&w, "diplo.base_swap", "turn", faction_id);
+    na_write_metrics(&w, faction_id, -1);
+    na_buf_puts(&w, ",\"inputs\":{");
+    na_buf_printf(&w, "\"seller_faction_id\":%d", faction_id_tgt);
+    na_buf_printf(&w, ",\"base_id\":%d", base_id);
+    na_buf_puts(&w, ",\"base\":\"");
+    na_buf_escaped(&w, Bases[base_id].name);
+    na_buf_puts(&w, "\"");
+    na_buf_printf(&w, ",\"cost\":%d", cost);
+    na_buf_printf(&w, ",\"energy_reserves\":%d", Factions[faction_id].energy_credits);
+    na_buf_printf(&w, ",\"committed_hurry\":%d", committed_hurry);
+    na_buf_puts(&w, "}");
+    na_buf_printf(&w, ",\"native_choice\":{\"accept\":%d}", accept ? 1 : 0);
+    na_buf_puts(&w, ",\"tier\":\"deterministic\",\"applied\":\"");
+    na_buf_puts(&w, applied ? "native" : "none");
+    na_buf_puts(&w, "\"}");
+    na_log_record(&w);
+    na_buf_free(&w);
+}
+
 /*
 The side-effect-free probe: emit a world view for one base and decide nothing.
 
@@ -4054,6 +4083,25 @@ void na_command_tick(void* hwnd_raw) {
             na_cmd_result("observe-energy-loan", detail, true);
         } else {
             na_cmd_result("observe-energy-loan", "need borrower lender", false);
+        }
+        return;
+    }
+
+    // Value a requested base and answer without transferring ownership or credits.
+    if (strncmp(line, "observe-base-swap ", 18) == 0) {
+        int buyer = -1;
+        int seller = -1;
+        int base_id = -1;
+        if (sscanf(line + 18, "%d %d %d", &buyer, &seller, &base_id) == 3
+        && buyer > 0 && buyer < MaxPlayerNum && seller > 0 && seller < MaxPlayerNum
+        && buyer != seller && base_id >= 0 && base_id < *BaseCount
+        && Bases[base_id].faction_id == seller) {
+            na_probe_diplo_base_swap(buyer, seller, base_id);
+            char detail[96];
+            snprintf(detail, sizeof(detail), "buyer=%d seller=%d base=%d", buyer, seller, base_id);
+            na_cmd_result("observe-base-swap", detail, true);
+        } else {
+            na_cmd_result("observe-base-swap", "need buyer seller base_id", false);
         }
         return;
     }

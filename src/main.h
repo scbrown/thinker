@@ -235,6 +235,8 @@ struct Config {
     int na_tech_trade_policy = 0;
     /* Default-off deterministic response for an offered energy loan. */
     int na_energy_loan_policy = 0;
+    /* Default-off deterministic response for a priced base purchase. */
+    int na_base_swap_policy = 0;
     int social_ai = 1;
     int social_ai_bias = 10;
     int tech_balance = 0;

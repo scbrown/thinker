@@ -67,6 +67,8 @@ int option_handler(void* user, const char* section, const char* name, const char
         cf->na_tech_trade_policy = atoi(value);
     } else if (MATCH("na_energy_loan_policy")) {
         cf->na_energy_loan_policy = atoi(value);
+    } else if (MATCH("na_base_swap_policy")) {
+        cf->na_base_swap_policy = atoi(value);
     } else if (MATCH("llm_endpoint")) {
         char* p = strtrim(buf);
         if (strlen(p)) {
