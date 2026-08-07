@@ -1217,6 +1217,32 @@ int faction_id, int faction_id_tgt, int tech_id, int price, int accept, int appl
     na_buf_free(&w);
 }
 
+void na_observe_diplo_energy_loan(int faction_id, int faction_id_tgt,
+int score, int amount, int turns, int payment, int available_income, int accept, int applied) {
+    if (faction_id <= 0 || faction_id >= MaxPlayerNum
+    || faction_id_tgt <= 0 || faction_id_tgt >= MaxPlayerNum) {
+        return;
+    }
+    NaBuf w;
+    na_buf_init(&w);
+    na_write_head(&w, "diplo.energy_loan", "turn", faction_id);
+    na_write_metrics(&w, faction_id, -1);
+    na_buf_puts(&w, ",\"inputs\":{");
+    na_buf_printf(&w, "\"lender_faction_id\":%d", faction_id_tgt);
+    na_buf_printf(&w, ",\"score\":%d", score);
+    na_buf_printf(&w, ",\"amount\":%d", amount);
+    na_buf_printf(&w, ",\"turns\":%d", turns);
+    na_buf_printf(&w, ",\"payment\":%d", payment);
+    na_buf_printf(&w, ",\"available_income\":%d", available_income);
+    na_buf_puts(&w, "}");
+    na_buf_printf(&w, ",\"native_choice\":{\"accept\":%d}", accept ? 1 : 0);
+    na_buf_puts(&w, ",\"tier\":\"deterministic\",\"applied\":\"");
+    na_buf_puts(&w, applied ? "native" : "none");
+    na_buf_puts(&w, "\"}");
+    na_log_record(&w);
+    na_buf_free(&w);
+}
+
 /*
 The side-effect-free probe: emit a world view for one base and decide nothing.
 
@@ -4011,6 +4037,23 @@ void na_command_tick(void* hwnd_raw) {
             na_cmd_result("observe-tech-trade", detail, true);
         } else {
             na_cmd_result("observe-tech-trade", "need buyer seller tech_id high_price", false);
+        }
+        return;
+    }
+
+    // Compute offered loan terms and repayment capacity without creating debt.
+    if (strncmp(line, "observe-energy-loan ", 20) == 0) {
+        int borrower = -1;
+        int lender = -1;
+        if (sscanf(line + 20, "%d %d", &borrower, &lender) == 2
+        && borrower > 0 && borrower < MaxPlayerNum && lender > 0 && lender < MaxPlayerNum
+        && borrower != lender) {
+            na_probe_diplo_energy_loan(borrower, lender);
+            char detail[96];
+            snprintf(detail, sizeof(detail), "borrower=%d lender=%d", borrower, lender);
+            na_cmd_result("observe-energy-loan", detail, true);
+        } else {
+            na_cmd_result("observe-energy-loan", "need borrower lender", false);
         }
         return;
     }

@@ -65,6 +65,8 @@ int option_handler(void* user, const char* section, const char* name, const char
         cf->na_odp_attack_policy = atoi(value);
     } else if (MATCH("na_tech_trade_policy")) {
         cf->na_tech_trade_policy = atoi(value);
+    } else if (MATCH("na_energy_loan_policy")) {
+        cf->na_energy_loan_policy = atoi(value);
     } else if (MATCH("llm_endpoint")) {
         char* p = strtrim(buf);
         if (strlen(p)) {
@@ -604,4 +606,3 @@ DLL_EXPORT BOOL APIENTRY DllMain(HINSTANCE UNUSED(hinstDLL), DWORD fdwReason, LP
     }
     return TRUE;
 }
-

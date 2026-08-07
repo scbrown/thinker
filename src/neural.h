@@ -133,6 +133,8 @@ void na_observe_unit_odp_attack(
     int faction_id, int faction_id_tgt, int target_id, int base_id, int applied);
 void na_observe_diplo_tech_trade(
     int faction_id, int faction_id_tgt, int tech_id, int price, int accept, int applied);
+void na_observe_diplo_energy_loan(int faction_id, int faction_id_tgt,
+    int score, int amount, int turns, int payment, int available_income, int accept, int applied);
 
 /*
 Load the -na-autoload savegame, once, as soon as the game is idle at the menu.

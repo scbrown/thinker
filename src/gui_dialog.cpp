@@ -296,6 +296,63 @@ int __cdecl mod_base_swap(int faction1, int faction2)
     return 0;
 }
 
+NaEnergyLoanTerms na_energy_loan_terms(int faction1, int faction2) {
+    Faction& f_plr = Factions[faction1];
+    Faction& f_cmp = Factions[faction2];
+    bool is_pact = has_treaty(faction1, faction2, DIPLO_PACT);
+    bool is_treaty = has_treaty(faction1, faction2, DIPLO_TREATY);
+    int friction = clamp(*DiploFriction, 0, 20);
+    int score = 5 - friction
+        - 8*diplo_relation(faction1, faction2)
+        - 4*f_plr.atrocities
+        + (is_pact ? 16 : (is_treaty ? 4 : 0))
+        + (want_revenge(faction2, faction1) ? -20 : 0)
+        + clamp((f_cmp.pop_total - f_plr.pop_total)/32, -8, 8)
+        + clamp((f_cmp.labs_total - f_plr.labs_total)/64, -8, 8);
+
+    for (int i = 1; i < MaxPlayerNum; i++) {
+        if (Factions[i].base_count && i != faction1 && i != faction2) {
+            if (at_war(i, faction1) && has_pact(i, faction2)) {
+                score -= 5;
+            }
+            if (at_war(i, faction2) && has_pact(i, faction1)) {
+                score -= 5;
+            }
+            if (at_war(i, faction1) && at_war(i, faction2)) {
+                score += 5;
+            }
+        }
+    }
+    int reserve = max(0, min(f_cmp.energy_credits - 50 - 20*friction,
+        f_cmp.energy_credits/16 + 40*max(4, f_cmp.base_count + f_plr.base_count)));
+    int amount = (reserve
+        * clamp(32 - friction - 4*diplo_relation(faction1, faction2)
+        - 8*clamp(f_cmp.AI_fight, -1, 1)
+        + 8*clamp(f_cmp.SE_economy_base, -1, 1)
+        + 4*clamp(f_cmp.ranking - f_plr.ranking, -4, 4)
+        + (is_pact ? 32 : (is_treaty ? 8 : 0)), 12, 96) / 256) / 20 * 20;
+    int turns = clamp(50 - *DiffLevel*5 - friction + score/2, 10, 50);
+    int payment = ((20 + friction/4 + *DiffLevel*2)*amount + 15) / (16*turns);
+    int available_income = f_plr.energy_surplus_total
+        + f_plr.turn_commerce_income - f_plr.facility_maint_total;
+    for (int i = 1; i < MaxPlayerNum; i++) {
+        if (f_plr.loan_balance[i] > 0) {
+            available_income -= f_plr.loan_payment[i];
+        }
+    }
+    int eligible = !(f_plr.sanction_turns > 0 || score < 0
+        || f_plr.loan_balance[faction2] > 0 || amount < 10 || payment < 1
+        || f_cmp.energy_credits < 50);
+    return {score, amount, turns, payment, available_income, eligible};
+}
+
+void na_probe_diplo_energy_loan(int faction1, int faction2) {
+    NaEnergyLoanTerms t = na_energy_loan_terms(faction1, faction2);
+    int accept = t.eligible && t.available_income >= t.payment;
+    na_observe_diplo_energy_loan(faction1, faction2, t.score, t.amount, t.turns,
+        t.payment, t.available_income, accept, 0);
+}
+
 int __cdecl mod_energy_trade(int faction1, int faction2)
 {
     Faction& f_plr = Factions[faction1];
@@ -334,37 +391,11 @@ int __cdecl mod_energy_trade(int faction1, int faction2)
 
     if (prop_counter == DiploCounterLoanPayment) {
         int friction = clamp(*DiploFriction, 0, 20);
-        int score = 5 - friction
-            - 8*diplo_relation(faction1, faction2)
-            - 4*f_plr.atrocities
-            + (is_pact ? 16 : (is_treaty ? 4 : 0))
-            + (want_revenge(faction2, faction1) ? -20 : 0)
-            + clamp((f_cmp.pop_total - f_plr.pop_total)/32, -8, 8)
-            + clamp((f_cmp.labs_total - f_plr.labs_total)/64, -8, 8);
-
-        for (int i = 1; i < MaxPlayerNum; i++) {
-            if (Factions[i].base_count && i != faction1 && i != faction2) {
-                if (at_war(i, faction1) && has_pact(i, faction2)) {
-                    score -= 5;
-                }
-                if (at_war(i, faction2) && has_pact(i, faction1)) {
-                    score -= 5;
-                }
-                if (at_war(i, faction1) && at_war(i, faction2)) {
-                    score += 5;
-                }
-            }
-        }
-        int reserve = max(0, min(f_cmp.energy_credits - 50 - 20*friction,
-            f_cmp.energy_credits/16 + 40*max(4, f_cmp.base_count + f_plr.base_count)));
-        int amount = (reserve
-            * clamp(32 - friction - 4*diplo_relation(faction1, faction2)
-            - 8*clamp(f_cmp.AI_fight, -1, 1)
-            + 8*clamp(f_cmp.SE_economy_base, -1, 1)
-            + 4*clamp(f_cmp.ranking - f_plr.ranking, -4, 4)
-            + (is_pact ? 32 : (is_treaty ? 8 : 0)), 12, 96) / 256) / 20 * 20;
-        int turns = clamp(50 - *DiffLevel*5 - friction + score/2, 10, 50);
-        int payment = ((20 + friction/4 + *DiffLevel*2)*amount + 15) / (16*turns);
+        NaEnergyLoanTerms terms = na_energy_loan_terms(faction1, faction2);
+        int score = terms.score;
+        int amount = terms.amount;
+        int turns = terms.turns;
+        int payment = terms.payment;
 
         debug("energy_trade %s score: %d friction: %d credits: %d reserve: %d amount: %d turns: %d payment: %d\n",
         MFactions[faction2].filename, score, friction, f_cmp.energy_credits, reserve, amount, turns, payment);
@@ -388,7 +419,13 @@ int __cdecl mod_energy_trade(int faction1, int faction2)
         ParseNumTable[2] = turns;
         parse_gen_name(faction1, 0, 1);
 
-        int value = X_dialog(random(2) ? "ENERGYLOAN1" : "ENERGYLOAN2", faction2);
+        int value = conf.na_energy_loan_policy
+            ? (terms.available_income >= payment ? 1 : 0)
+            : X_dialog(random(2) ? "ENERGYLOAN1" : "ENERGYLOAN2", faction2);
+        if (conf.na_energy_loan_policy) {
+            na_observe_diplo_energy_loan(faction1, faction2, score, amount, turns,
+                payment, terms.available_income, value == 1, value == 1);
+        }
         if (value == 1) {
             net_loan(faction1, faction2, turns * payment, payment);
             net_energy(faction1, amount, faction2, -amount, 1);
