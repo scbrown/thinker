@@ -253,6 +253,15 @@ struct Config {
     is a fact, and the policy that reads it owns the threshold.
     */
     int na_board_state = 0;
+    /*
+    Neural Amplifier: emit a base.retool observation when a production switch would cost
+    banked minerals. 0 keeps stock behaviour, so an unconfigured build is unchanged.
+
+    Observation only — this surface's deterministic tier already exists inside select_build,
+    which is what na-lnv established. What was missing was the record, and without one the
+    surface is invisible to coverage and has no baseline for na-6db to A/B the brain against.
+    */
+    int na_retool_observe = 0;
     int social_ai = 1;
     int social_ai_bias = 10;
     int tech_balance = 0;

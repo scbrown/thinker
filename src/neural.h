@@ -246,6 +246,20 @@ void na_observe_base_hurry(int base_id, int item, int minerals_before, int credi
                            int native_hurried);
 
 /*
+Record a base.retool decision — the production switch that would cost banked minerals.
+
+OBSERVATION ONLY, and deliberately so. Unlike the other NO_AI_PATH surfaces this one already
+HAS its deterministic tier: select_build threads a retool category through the production
+chooser and push_item penalises a category crossing (na-lnv). What was missing was the record,
+without which coverage cannot see the surface and na-6db has no baseline to A/B against.
+
+Called from the select_build wrapper (build.cpp), which is the one place holding both halves:
+the item the base was producing and the item the chooser picked. native_choice is their
+category comparison — the engine's own answer, and the baseline the record exists for.
+*/
+void na_observe_base_retool(int base_id, int prev_id, int chosen);
+
+/*
 Decide whether to hurry: post the world view, spend or hold, return what the
 engine hook should return (1 hurried, 0 did not).
 

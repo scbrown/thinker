@@ -2550,6 +2550,114 @@ static void na_build_base_hurry(NaBuf* w, int base_id, int item, int minerals_be
     }
 }
 
+/*
+base.retool — the world view for a production switch that would cost banked minerals.
+
+Observation only, and that is the whole point of the surface as na-lnv found it: the
+DETERMINISTIC TIER ALREADY EXISTS. select_build threads a retool category through the whole
+production chooser and push_item (build.cpp:840) penalises a category crossing by 400, or 800
+with a secret project at risk, gated on check_retool. So this surface never needed a tier built
+— it needed a record, and without one coverage cannot see it and na-6db has no baseline to A/B
+the brain against even though a baseline is right there.
+
+`previous` and `chosen` are BOTH named because a retool decision is about the pair. The question
+is "does the chosen item share the previous item's category", and neither half alone can be
+re-derived into it later.
+
+`penalty_applies` is check_retool's own answer rather than our re-derivation of it. Copying the
+five conditions here would be a second definition of when minerals are at risk, and a copy that
+drifts is how a record starts describing a rule the engine no longer follows.
+*/
+static void na_build_base_retool(NaBuf* w, int base_id, int prev_id, int chosen) {
+    BASE& base = Bases[base_id];
+    const int faction_id = base.faction_id;
+
+    na_write_head(w, "base.retool", "base", faction_id);
+    na_buf_printf(w, ",\"base_id\":%d", base_id);
+    na_buf_puts(w, ",\"base\":\"");
+    na_buf_escaped(w, base.name);
+    na_buf_puts(w, "\"");
+
+    /*
+    `previous_item`, NOT `current_item` — na_write_base_state already emits a `current_item`
+    inside base_state, and it is the queue head. On a retool record those two systematically
+    DISAGREE: prev_id is what the base last produced and the queue head is what it is on now,
+    and the whole decision is about the pair being different. Two same-named fields that
+    disagree by construction is a reader's trap, so the outer one takes the name it earns.
+    */
+    na_buf_printf(w, ",\"previous_item\":%d", prev_id);
+    na_buf_puts(w, ",\"previous_item_name\":\"");
+    na_buf_escaped(w, prod_name(prev_id));
+    na_buf_puts(w, "\"");
+    na_buf_printf(w, ",\"chosen_item\":%d", chosen);
+    na_buf_puts(w, ",\"chosen_item_name\":\"");
+    na_buf_escaped(w, prod_name(chosen));
+    na_buf_puts(w, "\"");
+
+    /*
+    The two retool CATEGORIES, from the engine's own mod_base_making. Two items sharing a
+    category switch for free; crossing one is what spends the banked minerals. Emitting the
+    numbers rather than a derived "would_cost" boolean, for the reason the board fields follow
+    too: the threshold is a judgement and the categories are facts.
+    */
+    const int cat_current = mod_base_making(prev_id, base_id);
+    const int cat_chosen = mod_base_making(chosen, base_id);
+    na_buf_printf(w, ",\"retool_category_previous\":%d", cat_current);
+    na_buf_printf(w, ",\"retool_category_chosen\":%d", cat_chosen);
+    na_buf_printf(w, ",\"minerals_accumulated\":%d", base.minerals_accumulated);
+    na_buf_printf(w, ",\"retool_exemption\":%d", (int)Rules->retool_exemption);
+    na_buf_printf(w, ",\"retool_strictness\":%d", (int)Rules->retool_strictness);
+    na_buf_printf(w, ",\"penalty_applies\":%s", na_retool_penalty(base_id) ? "true" : "false");
+
+    // The subject: the decision is ABOUT the item the penalty protects — what a crossing would
+    // abandon. Retrieval keys off subjects because neither "continue" nor "cross" is a node in
+    // any datalinks, so the action labels alone retrieve nothing (the base.hurry lesson,
+    // decision-inputs.md).
+    na_buf_puts(w, ",\"subjects\":[\"");
+    na_buf_escaped(w, prod_name(prev_id));
+    na_buf_puts(w, "\"]");
+
+    na_write_metrics(w, faction_id, base_id);
+    na_write_base_state(w, base_id);
+
+    // Two options and no more. The engine's question is binary — keep the category or cross it
+    // — and offering the whole build list would describe a different decision.
+    na_buf_puts(w, ",\"action_space\":[{\"id\":\"retool:continue\"");
+    na_buf_puts(w, ",\"action\":\"Stay in the current retool category\",\"category\":\"retool\"}");
+    na_buf_puts(w, ",{\"id\":\"retool:switch\"");
+    na_buf_printf(w, ",\"action\":\"Cross retool categories, spending %d banked minerals\"",
+                  base.minerals_accumulated);
+    na_buf_puts(w, ",\"category\":\"retool\"}],\"action_space_size\":2");
+
+    /*
+    The engine's answer, which is the reason this record is worth writing at all — the
+    deterministic tier here is not a stub to be replaced but a working baseline (na-lnv), and a
+    baseline nobody wrote down cannot be A/B'd against (na-6db).
+
+    Derived from the categories rather than from a flag select_build sets, because select_build
+    never decides "switch" as such: it scores the whole build list with the crossing penalty
+    applied and the crossing is whether the winner landed outside the current category. That
+    comparison IS the engine's answer, not an inference about it.
+    */
+    na_buf_printf(w, ",\"native_choice\":\"%s\"",
+                  cat_current == cat_chosen ? "retool:continue" : "retool:switch");
+}
+
+void na_observe_base_retool(int base_id, int prev_id, int chosen) {
+    if (base_id < 0 || base_id >= *BaseCount || base_id >= MaxBaseNum) {
+        return;
+    }
+    NaBuf wb;
+    NaBuf* w = &wb;
+    na_buf_init(w);
+    na_build_base_retool(w, base_id, prev_id, chosen);
+    // Always deterministic and always native: the chooser has already answered by the time this
+    // is called, and claiming otherwise would put a tier on the record the brain never held.
+    na_buf_puts(w, ",\"tier\":\"deterministic\",\"applied\":\"native\"}");
+    na_log_record(w);
+    na_buf_free(w);
+}
+
 void na_observe_base_hurry(int base_id, int item, int minerals_before, int credits_before,
                            int native_hurried) {
     if (base_id < 0 || base_id >= *BaseCount || base_id >= MaxBaseNum) {
@@ -4501,6 +4609,45 @@ void na_command_tick(void* hwnd_raw) {
                     cost, plr.energy_credits);
             fputs(",\"tier\":\"llm\",\"applied\":\"llm\"}\n", lf);
             fflush(lf);
+        }
+        return;
+    }
+
+    /*
+    "observe-retool <base_id> [chosen_item]" — the base.retool probe.
+
+    Serialiser only: it reports what a switch WOULD cost right now and changes nothing. The
+    epic's rule is one surface, one config flag, one probe, and the probe is the load-bearing
+    third: a retool decision only fires when a base is mid-build and the chooser wants a
+    different category, which is rare enough that the surface is otherwise unverifiable without
+    playing until it happens.
+
+    The chosen item defaults to the base's current queue head, which is what select_build would
+    return if it kept its mind — so the bare invocation asks "if the chooser ran now, what would
+    it record". Pass a second argument to ask about a specific item instead.
+
+    Unlike the live path this does NOT gate on na_retool_penalty: a probe that stayed silent
+    exactly when no penalty applies would be unusable for checking the wire format, which is the
+    job it exists to do.
+    */
+    if (strncmp(line, "observe-retool ", 15) == 0) {
+        int base_id = -1;
+        int chosen = 0;
+        const int got = sscanf(line + 15, "%d %d", &base_id, &chosen);
+        if (got >= 1 && base_id >= 0 && base_id < *BaseCount) {
+            BASE& b = Bases[base_id];
+            if (got < 2) {
+                chosen = b.item();
+            }
+            na_observe_base_retool(base_id, b.production_id_last, chosen);
+            char detail[128];
+            snprintf(detail, sizeof(detail), "base_id=%d prev=%d chosen=%d",
+                     base_id, b.production_id_last, chosen);
+            na_cmd_result("observe-retool", detail, true);
+        } else {
+            char detail[96];
+            snprintf(detail, sizeof(detail), "need 0 <= base_id < %d", *BaseCount);
+            na_cmd_result("observe-retool", detail, false);
         }
         return;
     }

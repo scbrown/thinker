@@ -18,6 +18,13 @@ static bool check_retool(BASE* base) {
         && base->minerals_accumulated > Rules->retool_exemption;
 }
 
+bool na_retool_penalty(int base_id) {
+    if (base_id < 0 || base_id >= *BaseCount) {
+        return false;
+    }
+    return check_retool(&Bases[base_id]);
+}
+
 static bool check_probe(BASE* base, Triad triad) {
     for (int i = *VehCount - 1; i >= 0; --i) {
         VEH* veh = &Vehs[i];
@@ -844,7 +851,7 @@ static void push_item(score_max_queue_t& builds, int base_id, int item_id, int r
     debug("push_item %d %d %d %s\n", score, retool, item_id, prod_name(item_id));
 }
 
-int select_build(int base_id) {
+static int select_build_inner(int base_id) {
     BASE* base = &Bases[base_id];
     int faction_id = base->faction_id;
     Faction* f = &Factions[faction_id];
@@ -1311,6 +1318,34 @@ int select_build(int base_id) {
     }
     debug("BUILD COMBAT\n");
     return select_combat(base_id, sea_base, allow_ships);
+}
+
+/*
+Neural Amplifier: base.retool observation wraps the chooser rather than sitting inside it.
+
+The retool question is asked at the top of select_build_inner — check_retool gates, and
+mod_base_making computes the category the penalty is measured against. But the ANSWER is the
+value select_build_inner returns, and it returns from six places. Observing at the question
+alone would record inputs with no outcome, which is the one thing this surface cannot afford:
+its whole reason for existing is that its deterministic tier already works, so the record is
+only worth writing if it captures what that tier DECIDED (na-lnv).
+
+Wrapping gets both from one site. production_id_last is read before the call because the
+chooser's result is what later overwrites it; check_retool is asked after, and gives the same
+answer either way since nothing in the chooser touches minerals_accumulated.
+
+Off by default, and when off this is one branch on a config int.
+*/
+int select_build(int base_id) {
+    if (!conf.na_retool_observe || base_id < 0 || base_id >= *BaseCount) {
+        return select_build_inner(base_id);
+    }
+    const int prev_id = Bases[base_id].production_id_last;
+    const int choice = select_build_inner(base_id);
+    if (na_retool_penalty(base_id)) {
+        na_observe_base_retool(base_id, prev_id, choice);
+    }
+    return choice;
 }
 
 
