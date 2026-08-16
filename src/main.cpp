@@ -83,6 +83,8 @@ int option_handler(void* user, const char* section, const char* name, const char
         cf->na_satellite_observe = atoi(value);
     } else if (MATCH("na_project_observe")) {
         cf->na_project_observe = atoi(value);
+    } else if (MATCH("na_tech_steal_observe")) {
+        cf->na_tech_steal_observe = atoi(value);
     } else if (MATCH("llm_endpoint")) {
         char* p = strtrim(buf);
         if (strlen(p)) {

@@ -306,6 +306,14 @@ struct Config {
     the engine's own facility_score under this base's governor weights.
     */
     int na_project_observe = 0;
+    /*
+    Neural Amplifier: record faction.tech_steal — which technology a probe team or a base
+    capture takes (na-yd4). 0 keeps stock behaviour.
+
+    Observation only. The action space is what the TARGET holds and we do not, which is a
+    different set from what we could research.
+    */
+    int na_tech_steal_observe = 0;
     int social_ai = 1;
     int social_ai_bias = 10;
     int tech_balance = 0;

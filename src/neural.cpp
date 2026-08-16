@@ -2644,6 +2644,96 @@ static void na_build_base_retool(NaBuf* w, int base_id, int prev_id, int chosen)
 }
 
 /*
+faction.tech_steal — which technology to take, from na-yd4's 27.
+
+The action space is NOT the research menu. `na_write_tech_action_space` enumerates what the
+faction could *research* (`tech_avail`); what can be *stolen* is what the target holds and we do
+not, which is a different set and mostly a disjoint one — a tech we could already research is
+usually one we are close enough to that taking it is worth less. Reusing the research writer
+here would have offered a plausible list of the wrong options.
+
+`is_steal` separates the two callers: a probe team's deliberate operation, and the acquisition
+that comes free with capturing a base. Same chooser, different provenance, and an eval that
+could not tell them apart would be comparing an operation against a side effect.
+*/
+static void na_build_faction_tech_steal(NaBuf* w, int faction_id, int faction_id_tgt,
+                                        int tech_id, int is_steal) {
+    na_write_head(w, "faction.tech_steal", "turn", faction_id);
+    na_buf_printf(w, ",\"target_faction_id\":%d", faction_id_tgt);
+    na_buf_puts(w, ",\"target_faction\":\"");
+    if (faction_id_tgt > 0 && faction_id_tgt < MaxPlayerNum) {
+        na_buf_escaped(w, MFactions[faction_id_tgt].noun_faction);
+    }
+    na_buf_puts(w, "\"");
+    na_buf_printf(w, ",\"acquisition\":\"%s\"", is_steal ? "probe_steal" : "base_capture");
+
+    na_write_metrics(w, faction_id, -1);
+
+    /*
+    Every tech the target holds that we do not. `has_tech` on both sides is the engine's own
+    test, so this is the real stealable set rather than an approximation of it.
+    */
+    na_buf_puts(w, ",\"action_space\":[");
+    int count = 0;
+    for (int id = 0; id < MaxTechnologyNum && count < 64; id++) {
+        if (!has_tech(id, faction_id_tgt) || has_tech(id, faction_id)) {
+            continue;
+        }
+        if (count++) {
+            na_buf_puts(w, ",");
+        }
+        na_buf_printf(w, "{\"id\":\"tech:%d\",\"action\":\"", id);
+        na_buf_escaped(w, Tech[id].name);
+        na_buf_puts(w, "\",\"category\":\"tech\"");
+        // The same AI valuation faction.tech emits, so the two tech surfaces can be read
+        // against each other rather than in different units.
+        na_buf_printf(w, ",\"ai_weights\":{\"growth\":%d,\"tech\":%d,\"wealth\":%d,\"power\":%d}}",
+                      Tech[id].AI_growth, Tech[id].AI_tech, Tech[id].AI_wealth, Tech[id].AI_power);
+    }
+    na_buf_printf(w, "],\"action_space_size\":%d", count);
+    na_buf_printf(w, ",\"action_space_truncated\":%s", count >= 64 ? "true" : "false");
+
+    // Techs ARE datalinks nodes, so naming the chosen one makes the grounding hop reachable.
+    na_buf_puts(w, ",\"subjects\":[");
+    if (tech_id >= 0 && tech_id < MaxTechnologyNum) {
+        na_buf_puts(w, "\"");
+        na_buf_escaped(w, Tech[tech_id].name);
+        na_buf_puts(w, "\"");
+    }
+    na_buf_puts(w, "]");
+
+    /*
+    9999 is the engine's own "nothing to take" sentinel, normalised in steal_tech before this
+    is called. Emitted as an explicit id rather than as an absent field, because a missing
+    native_choice would be indistinguishable from an adapter that forgot to write one.
+    */
+    if (tech_id == 9999 || tech_id < 0 || tech_id >= MaxTechnologyNum) {
+        na_buf_puts(w, ",\"native_choice\":\"tech:none\"");
+    } else {
+        na_buf_printf(w, ",\"native_choice\":\"tech:%d\"", tech_id);
+        na_buf_puts(w, ",\"native_choice_name\":\"");
+        na_buf_escaped(w, Tech[tech_id].name);
+        na_buf_puts(w, "\"");
+    }
+    na_buf_printf(w, ",\"native_choice_item\":%d", tech_id);
+}
+
+void na_observe_faction_tech_steal(int faction_id, int faction_id_tgt, int tech_id,
+                                   int is_steal) {
+    if (faction_id <= 0 || faction_id >= MaxPlayerNum
+    || faction_id_tgt <= 0 || faction_id_tgt >= MaxPlayerNum) {
+        return;
+    }
+    NaBuf wb;
+    NaBuf* w = &wb;
+    na_buf_init(w);
+    na_build_faction_tech_steal(w, faction_id, faction_id_tgt, tech_id, is_steal);
+    na_buf_puts(w, ",\"tier\":\"deterministic\",\"applied\":\"native\"}");
+    na_log_record(w);
+    na_buf_free(w);
+}
+
+/*
 base.project — which secret project to start, from na-yd4's 27.
 
 The richest action space in the bucket, and the one where a model has most to add: a secret
@@ -5180,6 +5270,30 @@ void na_command_tick(void* hwnd_raw) {
                     cost, plr.energy_credits);
             fputs(",\"tier\":\"llm\",\"applied\":\"llm\"}\n", lf);
             fflush(lf);
+        }
+        return;
+    }
+
+    /*
+    "observe-steal <faction_id> <target_faction_id>" — the faction.tech_steal probe.
+
+    Serialiser only, and it reports "nothing taken": calling mod_tech_pick would ask the engine
+    to make a real choice, and on the ACQUIRETECH path that choice is consumed by the caller.
+    What the probe verifies is the part that has to be right and cannot be checked any other
+    way — that the stealable set is the target's techs minus ours, not the research menu.
+    */
+    if (strncmp(line, "observe-steal ", 14) == 0) {
+        int faction_id = -1;
+        int target_id = -1;
+        if (sscanf(line + 14, "%d %d", &faction_id, &target_id) == 2
+        && faction_id > 0 && faction_id < MaxPlayerNum
+        && target_id > 0 && target_id < MaxPlayerNum && faction_id != target_id) {
+            na_observe_faction_tech_steal(faction_id, target_id, 9999, 1);
+            char detail[96];
+            snprintf(detail, sizeof(detail), "faction_id=%d target=%d", faction_id, target_id);
+            na_cmd_result("observe-steal", detail, true);
+        } else {
+            na_cmd_result("observe-steal", "need two distinct factions in 1..7", false);
         }
         return;
     }

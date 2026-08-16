@@ -270,6 +270,19 @@ in the table.
 void na_observe_dialog(const char* file, const char* label, int chosen);
 
 /*
+Record a faction.tech_steal decision — which technology is taken (na-yd4).
+
+OBSERVATION ONLY. mod_tech_pick already chooses; this writes it down with the real stealable
+set: every tech the TARGET holds that we do not. That is deliberately not the research menu —
+`tech_avail` answers a different question and would offer a plausible list of the wrong options.
+
+`is_steal` distinguishes a probe team's deliberate operation from the acquisition that comes
+free with a base capture. `tech_id` is expected post-normalisation, so 9999 means "nothing to
+take" and is emitted as tech:none.
+*/
+void na_observe_faction_tech_steal(int faction_id, int faction_id_tgt, int tech_id, int is_steal);
+
+/*
 Record a base.project decision — which secret project a base starts (na-yd4).
 
 OBSERVATION ONLY. find_project already chooses; this writes down what it chose along with the

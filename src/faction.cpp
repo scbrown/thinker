@@ -771,6 +771,18 @@ int __cdecl steal_tech(int faction_id, int faction_id_tgt, int is_steal) {
     if (tech_id < 0) {
         tech_id = 9999;
     }
+    /*
+    Neural Amplifier (na-yd4): recorded AFTER the 9999 normalisation, so the record carries the
+    same "nothing to take" sentinel the rest of this function branches on. Recording the raw
+    negative instead would give the log a second spelling of one outcome.
+
+    `is_steal` separates the two callers this shares: a probe team stealing (probe.cpp) and a
+    base capture acquiring (base.cpp). Same chooser, different provenance, and an eval that
+    could not tell them apart would be comparing a deliberate operation against a side effect.
+    */
+    if (conf.na_tech_steal_observe) {
+        na_observe_faction_tech_steal(faction_id, faction_id_tgt, tech_id, is_steal);
+    }
     if (*MultiplayerActive && faction_id == *CurrentPlayerFaction) {
         message_data(0x244C, 0, faction_id, tech_id, faction_id_tgt, 0);
     } else {
