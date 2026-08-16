@@ -682,6 +682,41 @@ static void na_write_metrics(NaBuf* w, int faction_id, int base_id) {
     }
     na_buf_printf(w, ",\"drone_total\":%d", drones);
     /*
+    Our units standing on somebody else's tiles — the metric that makes a diplomatic promise
+    CHECKABLE (na-nmg).
+
+    The motivating case is real and was played: Miriam asks the Peacekeepers to withdraw from
+    her territory, and "Withdraw troops to nearest base" is a promise about LATER TURNS. A
+    directive is the type that carries such a commitment past the dialog, and Directive.metric
+    must name something in metrics.py or it is refused at issue time — so with no name for
+    "units in foreign territory" the one directive that decision most obviously needs could not
+    be written at all. The answer was accepted, the troops stayed, and nothing noticed.
+
+    Same sweep shape as the drone count above, over Vehs instead of Bases.
+
+    whose_territory rather than sq->owner directly, and the difference is the fog. It returns
+    -1 for an owner this faction has no commlink with (map.cpp:1455-1461), so a unit sitting on
+    the land of a faction we have never met does not count. That is the correct reading twice
+    over: we cannot have promised anything to a faction we have not met, and counting it would
+    leak the existence of that faction into a number the brain reads.
+
+    Own units only, and position only. A unit's ORDERS are not consulted — one already walking
+    home still counts until it is out, which is what makes the metric fall as the promise is
+    kept rather than the moment it is made.
+    */
+    int trespassing = 0;
+    for (int i = 0; i < *VehCount; i++) {
+        VEH* veh = &Vehs[i];
+        if (veh->faction_id != faction_id) {
+            continue;
+        }
+        int owner = whose_territory(faction_id, veh->x, veh->y, 0, 0);
+        if (owner >= 0 && owner != faction_id) {
+            trespassing++;
+        }
+    }
+    na_buf_printf(w, ",\"units_in_foreign_territory\":%d", trespassing);
+    /*
     Base-scope metrics on base-scope surfaces only.
 
     A faction-scope decision has no single base to report these for, and emitting
