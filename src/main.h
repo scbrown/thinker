@@ -237,6 +237,22 @@ struct Config {
     int na_energy_loan_policy = 0;
     /* Default-off deterministic response for a priced base purchase. */
     int na_base_swap_policy = 0;
+    /*
+    Neural Amplifier: publish this faction's own bases in every world view, so the
+    orchestrator's board guard has entities to evaluate policies over. 0 keeps the
+    payload exactly as it was, which is why it is off by default -- the array rides
+    on every decision and the world view IS the prompt.
+
+    Own bases only. Publishing another faction's would be an information cheat of
+    the same kind the diplomacy fog gate exists to stop, and a quieter one, because
+    nothing downstream would flag it.
+
+    The fields are the ENGINE'S OWN numbers, never a derived boolean. "Is this a
+    border base" is a judgement with a threshold in it, and a threshold compiled into
+    the DLL is one nobody can change without a rebuild; published as defend_range it
+    is a fact, and the policy that reads it owns the threshold.
+    */
+    int na_board_state = 0;
     int social_ai = 1;
     int social_ai_bias = 10;
     int tech_balance = 0;

@@ -217,6 +217,14 @@ which stash it per base before anything else can overwrite it.
 */
 static char na_last_trace[64];
 
+/*
+Defined below, beside the other state writers. Forward-declared rather than moved up because
+na_write_head is the ONE point every world view passes through, and hanging the board off it
+is what makes "every decision carries the board" true by construction rather than by thirteen
+call sites all remembering.
+*/
+static void na_write_bases(NaBuf* w, int faction_id);
+
 static void na_write_head(NaBuf* w, const char* surface_id, const char* scope, int faction_id) {
     na_buf_printf(w, "{\"schema_version\":\"0.1\",\"engine\":\"thinker\"");
     na_buf_printf(w, ",\"scope\":\"%s\",\"surface_id\":\"%s\"", scope, surface_id);
@@ -251,6 +259,9 @@ static void na_write_head(NaBuf* w, const char* surface_id, const char* scope, i
         na_trace_seq, (unsigned)(*CurrentTurn + 1));
     na_buf_printf(w, ",\"trace\":{\"traceparent\":\"%s\"}", na_last_trace);
     na_write_fairness(w, faction_id);
+    if (conf.na_board_state) {
+        na_write_bases(w, faction_id);
+    }
 }
 
 /*
@@ -722,6 +733,75 @@ static void na_write_base_state(NaBuf* w, int base_id) {
     na_buf_puts(w, ",\"current_item_name\":\"");
     na_buf_escaped(w, prod_name(b.item()));
     na_buf_puts(w, "\"}");
+}
+
+/*
+Every base this faction owns — the board the orchestrator's policy guard evaluates over.
+
+Off unless na_board_state is set. The array rides on EVERY decision and the world view is
+the prompt, so a faction with thirty bases pays for thirty bases on a decision about one of
+them. That is a real cost and it buys a real thing, so it is a choice rather than a default.
+
+OWN BASES ONLY. Another faction's would be an information cheat of the same kind
+foreign_treaty_popup was (headless-harness.md 4.2), and a quieter one: the diplomacy feed at
+least has a fog gate watching it, and nothing downstream would flag this.
+
+THE ENGINE'S OWN NUMBERS, NEVER A DERIVED BOOLEAN. The temptation here is to emit
+"is_border_base":true, and it is the wrong shape twice over. A threshold compiled into this
+DLL is one nobody can change without a cross-compiler, and it would answer a question the
+adapter has no business answering -- the adapter reports what the engine holds, and the
+judgement belongs to whoever wrote the policy. So defend_range goes out as the integer it is
+and a policy says `| ?d < 12` if that is what it means by "border".
+
+defend_range is NOT a distance in tiles, and reading it as one would make every policy
+written against it wrong. plan.cpp:611 computes it per faction turn as
+
+    min over enemy bases of (map_range * region_factor * war_factor) / 2
+
+with region_factor 2 same-region / 3 otherwise, and war_factor 1 at war / 4 at peace, capped
+at MaxEnemyRange (50). So it is a WEIGHTED exposure figure where lower means more exposed,
+and the same base scores 6 against an at-war neighbour and 24 against the same neighbour at
+peace. Thinker's own build code treats < 12 as "wants perimeter defence" (build.cpp:200),
+which is the nearest thing to a house definition of a border base.
+
+It also REFRESHES ONCE PER FACTION TURN, in plans_upkeep, while these are emitted at decision
+time. Within a turn it can therefore be stale by a few unit moves. Said plainly here because
+the alternative -- recomputing it -- would be this file inventing a second definition of
+exposure that drifts from the one the engine's own build decisions use.
+*/
+static void na_write_bases(NaBuf* w, int faction_id) {
+    na_buf_puts(w, ",\"bases\":[");
+    int count = 0;
+    for (int i = 0; i < *BaseCount && i < MaxBaseNum; i++) {
+        BASE& b = Bases[i];
+        if (b.faction_id != faction_id) {
+            continue;
+        }
+        if (count++) { na_buf_puts(w, ","); }
+        na_buf_printf(w, "{\"id\":\"base:%d\"", i);
+        na_buf_puts(w, ",\"name\":\"");
+        na_buf_escaped(w, b.name);
+        na_buf_printf(w, "\",\"pop_size\":%d", (int)b.pop_size);
+        /*
+        garrison_count counts units standing on the tile that are garrison-capable, at their
+        target, and not sentried aboard a transport (path.cpp:488). It is the engine's own
+        answer to "is anybody actually holding this base", which is the question a garrison
+        policy asks -- deliberately not defender_count, which weights by unit quality and
+        divides, and so cannot distinguish one defender from none.
+        */
+        na_buf_printf(w, ",\"garrison_count\":%d", garrison_count(b.x, b.y));
+        na_buf_printf(w, ",\"defend_range\":%d", (int)b.defend_range);
+        na_buf_printf(w, ",\"defend_goal\":%d", (int)b.defend_goal);
+        na_buf_printf(w, ",\"mineral_surplus\":%d", b.mineral_surplus);
+        na_buf_printf(w, ",\"energy_surplus\":%d", b.energy_surplus);
+        na_buf_printf(w, ",\"drone_total\":%d", (int)b.drone_total);
+        na_buf_printf(w, ",\"talent_total\":%d", (int)b.talent_total);
+        na_buf_printf(w, ",\"current_item\":%d", b.item());
+        na_buf_puts(w, ",\"current_item_name\":\"");
+        na_buf_escaped(w, prod_name(b.item()));
+        na_buf_puts(w, "\"}");
+    }
+    na_buf_puts(w, "]");
 }
 
 /*
