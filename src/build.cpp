@@ -1063,7 +1063,24 @@ static int select_build_inner(int base_id) {
             + Wgov.AI_wealth * item.build + Wgov.AI_power * item.conquer);
 
         if (t == Satellites && gov & GOV_MAY_PROD_FACILITIES && minerals >= p->median_limit) {
-            if ((choice = find_satellite(base_id)) != GOV_NONE) {
+            choice = find_satellite(base_id);
+            /*
+            Neural Amplifier (na-yd4): recorded here rather than inside find_satellite, because
+            the surface is "what did the orbital chooser pick for this base" and only the caller
+            knows the gate it was asked under. find_satellite is also called nowhere else, so
+            there is no second path to miss.
+
+            Recorded even when the answer is GOV_NONE — a decline is a decision here. That is
+            the opposite of base.staple's rule, and deliberately: staple's gate says whether the
+            decision existed at all, whereas this gate has already opened by the time
+            find_satellite runs, so "nothing this turn" is an answer rather than an absence.
+            */
+            if (conf.na_satellite_observe) {
+                // GOV_NONE is file-local to build.cpp, so the sentinel is translated HERE
+                // rather than spelled again in the emitter. One definition of "declined".
+                na_observe_base_satellite(base_id, choice, choice == GOV_NONE);
+            }
+            if (choice != GOV_NONE) {
                 score += random(8*clamp(f->base_count - 5, 0, 50));
                 push_item(builds, base_id, choice, retool, score, --Wt);
                 continue;

@@ -270,6 +270,22 @@ in the table.
 void na_observe_dialog(const char* file, const char* label, int chosen);
 
 /*
+Record a base.satellite decision — which orbital this base builds (na-yd4).
+
+OBSERVATION ONLY. find_satellite already chooses; this writes down what it chose and, unusually
+for this bucket, the real alternatives: four satellite types with their own availability, built
+count and faction goal.
+
+`chosen` is find_satellite's return and `declined` is the caller's translation of its GOV_NONE
+sentinel, which is file-local to build.cpp — passed in rather than re-spelled here, so there is
+one definition of "the chooser picked nothing".
+
+-FAC_AEROSPACE_COMPLEX means "build the prerequisite first" and is named separately rather than
+folded into a decline: a base working toward orbit is not a base that turned orbit down.
+*/
+void na_observe_base_satellite(int base_id, int chosen, bool declined);
+
+/*
 Record an econ.corner_market decision — cornering the global energy market (na-yd4).
 
 OBSERVATION ONLY, and the highest-stakes surface in that bucket: a move toward economic

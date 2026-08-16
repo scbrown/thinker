@@ -289,6 +289,15 @@ struct Config {
     and the market was cornered is a different game from one where only one happened.
     */
     int na_endgame_observe = 0;
+    /*
+    Neural Amplifier: record base.satellite — which orbital a base builds (na-yd4). 0 keeps
+    stock behaviour.
+
+    Observation only. Recorded even when the chooser declines, because by the time
+    find_satellite runs the gate has already opened, so "no orbital this turn" is an answer
+    rather than an absent decision.
+    */
+    int na_satellite_observe = 0;
     int social_ai = 1;
     int social_ai_bias = 10;
     int tech_balance = 0;

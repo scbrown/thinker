@@ -2644,6 +2644,103 @@ static void na_build_base_retool(NaBuf* w, int base_id, int prev_id, int chosen)
 }
 
 /*
+base.satellite — which orbital to build, from na-yd4's 27.
+
+Unusual in this bucket for having a genuinely ENUMERABLE action space. Most surfaces here are
+binary or open-ended; the orbital chooser picks among exactly four satellite types, and each
+one's availability is decided by engine predicates we can ask directly — has_tech for the
+prerequisite, satellite_count against satellite_goal for whether the faction still wants one.
+So the record can offer the real options with the real reasons rather than a two-way summary.
+
+`available` is each option's own eligibility, NOT a prediction of what find_satellite will
+pick. The chooser also weighs an aerospace-complex prerequisite and a randomised defence bias,
+so an option can be available and still not chosen. Conflating the two would produce an action
+space that claims to be a ranking.
+*/
+static void na_build_base_satellite(NaBuf* w, int base_id, int chosen, bool declined) {
+    BASE& base = Bases[base_id];
+    const int faction_id = base.faction_id;
+    static const int kSatellites[] = {
+        FAC_ORBITAL_DEFENSE_POD,
+        FAC_NESSUS_MINING_STATION,
+        FAC_ORBITAL_POWER_TRANS,
+        FAC_SKY_HYDRO_LAB,
+    };
+    const int count = (int)(sizeof(kSatellites) / sizeof(kSatellites[0]));
+
+    na_write_head(w, "base.satellite", "base", faction_id);
+    na_buf_printf(w, ",\"base_id\":%d", base_id);
+    na_buf_puts(w, ",\"base\":\"");
+    na_buf_escaped(w, base.name);
+    na_buf_puts(w, "\"");
+
+    // The prerequisite the whole surface turns on: without orbital access nothing can be
+    // launched here, and find_satellite's first answer is to build the complex instead.
+    const bool has_complex = has_facility(FAC_AEROSPACE_COMPLEX, base_id)
+        || has_project(FAC_SPACE_ELEVATOR, base.faction_id);
+    na_buf_printf(w, ",\"has_orbital_access\":%s", has_complex ? "true" : "false");
+
+    na_buf_puts(w, ",\"subjects\":[");
+    for (int i = 0; i < count; i++) {
+        na_buf_printf(w, "%s\"", i ? "," : "");
+        na_buf_escaped(w, prod_name(-kSatellites[i]));
+        na_buf_puts(w, "\"");
+    }
+    na_buf_puts(w, "]");
+
+    na_write_metrics(w, faction_id, base_id);
+    na_write_base_state(w, base_id);
+
+    na_buf_puts(w, ",\"action_space\":[{\"id\":\"satellite:none\"");
+    na_buf_puts(w, ",\"action\":\"Build no orbital this turn\",\"category\":\"satellite\"}");
+    int offered = 1;
+    for (int i = 0; i < count; i++) {
+        const int item_id = kSatellites[i];
+        na_buf_printf(w, ",{\"id\":\"satellite:%d\",\"action\":\"", item_id);
+        na_buf_escaped(w, prod_name(-item_id));
+        na_buf_puts(w, "\",\"category\":\"satellite\"");
+        na_buf_printf(w, ",\"available\":%s",
+                      has_tech(Facility[item_id].preq_tech, faction_id) ? "true" : "false");
+        // Built-and-queued against the faction's own goal. The engine skips a type once it has
+        // enough, so these two numbers are the reason an available option goes unchosen.
+        na_buf_printf(w, ",\"built\":%d", satellite_count(faction_id, item_id));
+        na_buf_printf(w, ",\"goal\":%d}", satellite_goal(faction_id, item_id));
+        offered++;
+    }
+    na_buf_printf(w, "],\"action_space_size\":%d", offered);
+
+    /*
+    `declined` rather than a comparison against GOV_NONE: that sentinel is file-local to
+    build.cpp, and repeating its value here would be a second definition of "the chooser
+    picked nothing" — the same trap check_retool set on na-lnv.
+    */
+    if (declined) {
+        na_buf_puts(w, ",\"native_choice\":\"satellite:none\"");
+    } else if (chosen == -FAC_AEROSPACE_COMPLEX) {
+        // The chooser's third answer, and it is neither a satellite nor a decline: build the
+        // prerequisite first. Named rather than folded into "none", which would record a base
+        // working toward orbit as a base that declined orbit.
+        na_buf_puts(w, ",\"native_choice\":\"satellite:aerospace_complex\"");
+    } else {
+        na_buf_printf(w, ",\"native_choice\":\"satellite:%d\"", -chosen);
+    }
+    na_buf_printf(w, ",\"native_choice_item\":%d", chosen);
+}
+
+void na_observe_base_satellite(int base_id, int chosen, bool declined) {
+    if (base_id < 0 || base_id >= *BaseCount || base_id >= MaxBaseNum) {
+        return;
+    }
+    NaBuf wb;
+    NaBuf* w = &wb;
+    na_buf_init(w);
+    na_build_base_satellite(w, base_id, chosen, declined);
+    na_buf_puts(w, ",\"tier\":\"deterministic\",\"applied\":\"native\"}");
+    na_log_record(w);
+    na_buf_free(w);
+}
+
+/*
 econ.corner_market — cornering the global energy market, from na-yd4's 27.
 
 The highest-stakes decision in the bucket by some distance: it is a move toward economic
@@ -4976,6 +5073,31 @@ void na_command_tick(void* hwnd_raw) {
                     cost, plr.energy_credits);
             fputs(",\"tier\":\"llm\",\"applied\":\"llm\"}\n", lf);
             fflush(lf);
+        }
+        return;
+    }
+
+    /*
+    "observe-satellite <base_id>" — the base.satellite probe.
+
+    Serialiser only, and it reports a DECLINE: it does not call find_satellite, because that
+    chooser reads a randomised defence bias and a turn-parity skip, so asking it twice in one
+    turn can give two answers. A probe that quietly consumed one of those would be reporting a
+    decision the game never made. What it does verify — the four options, their availability,
+    built counts and goals — is the part that has to be right on the wire.
+    */
+    if (strncmp(line, "observe-satellite ", 18) == 0) {
+        int base_id = -1;
+        if (sscanf(line + 18, "%d", &base_id) == 1
+        && base_id >= 0 && base_id < *BaseCount) {
+            na_observe_base_satellite(base_id, 0, true);
+            char detail[96];
+            snprintf(detail, sizeof(detail), "base_id=%d (reported as a decline)", base_id);
+            na_cmd_result("observe-satellite", detail, true);
+        } else {
+            char detail[96];
+            snprintf(detail, sizeof(detail), "need 0 <= base_id < %d", *BaseCount);
+            na_cmd_result("observe-satellite", detail, false);
         }
         return;
     }
