@@ -272,6 +272,20 @@ struct Config {
     */
     int na_dialog_observe = 0;
     /*
+    Neural Amplifier: answer one-button NOTICE dialogs in an unattended run (invariant 7,
+    na-4lr). 0 keeps stock behaviour.
+
+    HEADLESS ONLY, enforced in code and not merely documented. Answering while a human is there
+    would take their decision away — which is what invariant 7 forbids. With nobody there the
+    alternative is not "the human decides", it is "the run hangs forever", so this is the same
+    policy na_message_box already applies to the Win32 path.
+
+    Never answers a real question and never answers an unrecognised dialog: their button indices
+    live in game text files this project does not ship, and picking one would be inventing an
+    answer.
+    */
+    int na_dialog_auto = 0;
+    /*
     Neural Amplifier: record base.staple decisions — nerve stapling (na-yd4). 0 keeps stock
     behaviour.
 

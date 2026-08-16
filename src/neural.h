@@ -260,6 +260,15 @@ Never suppresses: the engine's return is passed through unchanged on every path.
 void na_install_dialog_hook();
 
 /*
+Record a dialog that was AUTO-ANSWERED on the game's behalf, flagged as such.
+
+A separate entry point from na_observe_dialog rather than a parameter, so the ordinary path
+cannot accidentally claim a dialog was auto-answered and so a log grep for who answered is
+unambiguous.
+*/
+void na_observe_dialog_auto(const char* file, const char* label, int chosen);
+
+/*
 Record one dialog as an observation. Exposed for the `observe-dialog` probe; the hook calls it
 itself when `na_dialog_observe` is set.
 

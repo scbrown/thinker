@@ -4621,6 +4621,16 @@ enum NaDialogKind {
     NA_DIALOG_CHROME,
     //: A decision surface. Recorded with its surface_id and the engine's own answer.
     NA_DIALOG_DECISION,
+    /*
+    A one-button NOTICE — "this happened to you" rather than "do you want to". Recorded like a
+    decision, and additionally AUTO-ANSWERABLE in a headless run.
+
+    The distinction is semantic, not structural: every one of these is raised with the same
+    popp(file, label, 0, image, 0) shape as a real question, so nothing in the call tells them
+    apart. It is drawn from what the label MEANS at its call site — a probe team was discovered,
+    a project was seized — and each is grep-able in this fork.
+    */
+    NA_DIALOG_NOTICE,
 };
 
 struct NaDialogEntry {
@@ -4648,15 +4658,15 @@ static const NaDialogEntry NaDialogTable[] = {
 
     // Decisions. Each label is grep-able in this fork; each surface_id is in the registry.
     {"modmenu", "NERVESTAPLE2",    "base.staple",        NA_DIALOG_DECISION},
-    {nullptr,   "CORNERFOILED",    "econ.corner_market", NA_DIALOG_DECISION},
-    {nullptr,   "CORNERTHEMFOIL",  "econ.corner_market", NA_DIALOG_DECISION},
-    {nullptr,   "CORNERTHEMFOILED","econ.corner_market", NA_DIALOG_DECISION},
-    {nullptr,   "SURVIVEPROJECT",  "base.project",       NA_DIALOG_DECISION},
-    {nullptr,   "HALTPROJECT",     "base.project",       NA_DIALOG_DECISION},
-    {nullptr,   "SEIZEPROJECT",    "base.project",       NA_DIALOG_DECISION},
-    {nullptr,   "LOSEPROJECT",     "base.project",       NA_DIALOG_DECISION},
-    {"modmenu", "SPYFOUND",        "probe.action",       NA_DIALOG_DECISION},
-    {"modmenu", "SPYLOST",         "probe.action",       NA_DIALOG_DECISION},
+    {nullptr,   "CORNERFOILED",    "econ.corner_market", NA_DIALOG_NOTICE},
+    {nullptr,   "CORNERTHEMFOIL",  "econ.corner_market", NA_DIALOG_NOTICE},
+    {nullptr,   "CORNERTHEMFOILED","econ.corner_market", NA_DIALOG_NOTICE},
+    {nullptr,   "SURVIVEPROJECT",  "base.project",       NA_DIALOG_NOTICE},
+    {nullptr,   "HALTPROJECT",     "base.project",       NA_DIALOG_NOTICE},
+    {nullptr,   "SEIZEPROJECT",    "base.project",       NA_DIALOG_NOTICE},
+    {nullptr,   "LOSEPROJECT",     "base.project",       NA_DIALOG_NOTICE},
+    {"modmenu", "SPYFOUND",        "probe.action",       NA_DIALOG_NOTICE},
+    {"modmenu", "SPYLOST",         "probe.action",       NA_DIALOG_NOTICE},
 };
 
 static const int NaDialogTableSize = (int)(sizeof(NaDialogTable) / sizeof(NaDialogTable[0]));
@@ -4665,6 +4675,9 @@ static const int NaDialogTableSize = (int)(sizeof(NaDialogTable) / sizeof(NaDial
 //: matched nothing" and "no dialog was raised" are different facts and only one is a bug.
 static int na_dialog_seen = 0;
 static int na_dialog_unmapped = 0;
+//: How many dialogs this run answered on the game's behalf. Reported by `dialog-stats`,
+//: because "the run finished" reads very differently if it answered forty dialogs to get there.
+static int na_dialog_auto_answered = 0;
 
 //: The engine's own popp, captured at install time. Held separately so the wrapper calls the
 //: ENGINE and not the pointer it just installed itself into — which would recurse forever.
@@ -4720,6 +4733,32 @@ static void na_write_dialog(NaBuf* w, const NaDialogEntry* entry, const char* fi
     na_buf_printf(w, ",\"mapped\":%s}", entry ? "true" : "false");
 }
 
+/*
+The same record with `auto_answered` set. A separate entry point rather than a parameter on
+na_observe_dialog, so the ordinary observation path cannot accidentally claim a dialog was
+auto-answered, and so grepping the log for who answered is unambiguous.
+*/
+void na_observe_dialog_auto(const char* file, const char* label, int chosen) {
+    const NaDialogEntry* entry = na_dialog_lookup(file, label);
+    na_dialog_seen++;
+    NaBuf wb;
+    NaBuf* w = &wb;
+    na_buf_init(w);
+    na_write_dialog(w, entry, file, label, chosen);
+    // Rewrite the closing brace as a field: the builder closes the object, and this record
+    // needs one more fact than it knows about.
+    if (!w->failed && w->data) {
+        const size_t len = strlen(w->data);
+        if (len > 0 && w->data[len - 1] == '}') {
+            w->data[len - 1] = '\0';
+            w->len = len - 1;
+            na_buf_puts(w, ",\"auto_answered\":true}");
+        }
+    }
+    na_log_record(w);
+    na_buf_free(w);
+}
+
 void na_observe_dialog(const char* file, const char* label, int chosen) {
     const NaDialogEntry* entry = na_dialog_lookup(file, label);
     if (entry && entry->kind == NA_DIALOG_CHROME) {
@@ -4746,6 +4785,40 @@ be toggled without a restart and so an unconfigured build does exactly what it d
 */
 int __cdecl na_popp(const char* filename, const char* label, int a3, const char* pcx_filename,
                     fp_none fn) {
+    /*
+    AUTO-ANSWER, and every condition here is load-bearing.
+
+    A popp dialog in an unattended run blocks forever: the engine draws it and waits for input
+    nobody will give. na_message_box already handles the Win32 path — it dismisses an MB_OK and
+    exits NA_EXIT_UNANSWERABLE on anything that asks a real question. This is the same policy
+    for the popp path, which that function never sees.
+
+    ONLY IN HEADLESS. Answering a dialog while a human is sitting there would take their
+    decision away, which is exactly what invariant 7 forbids. With nobody there the alternative
+    is not "the human decides", it is "the run hangs" — so the invariant is not in tension here,
+    it is the reason the gate is on na_headless() and not on a preference.
+
+    ONLY NOTICES, never NA_DIALOG_DECISION. A notice reports what happened and has one
+    acknowledge button; returning 0 dismisses it. A real question's button indices live in a
+    game text file we do not ship, so picking one would be inventing an answer — the thing this
+    adapter refuses to do everywhere else. An unrecognised dialog is not auto-answered either,
+    for the same reason: the table cannot vouch for a label it does not know.
+
+    ONLY WHEN ASKED. conf.na_dialog_auto is off by default, so an unconfigured build reaches the
+    engine exactly as before.
+    */
+    if (conf.na_dialog_auto && na_headless()) {
+        const NaDialogEntry* entry = na_dialog_lookup(filename, label);
+        if (entry && entry->kind == NA_DIALOG_NOTICE) {
+            na_dialog_auto_answered++;
+            if (conf.na_dialog_observe) {
+                // Recorded BEFORE returning, and flagged, so a run's log shows exactly which
+                // dialogs were answered on its behalf rather than by the engine.
+                na_observe_dialog_auto(filename, label, 0);
+            }
+            return 0;
+        }
+    }
     const int chosen = na_engine_popp(filename, label, a3, pcx_filename, fn);
     if (conf.na_dialog_observe) {
         na_observe_dialog(filename, label, chosen);
@@ -5634,9 +5707,10 @@ void na_command_tick(void* hwnd_raw) {
     */
     if (strcmp(line, "dialog-stats") == 0) {
         char detail[128];
-        snprintf(detail, sizeof(detail), "seen=%d unmapped=%d table=%d installed=%d",
-                 na_dialog_seen, na_dialog_unmapped, NaDialogTableSize,
-                 na_engine_popp ? 1 : 0);
+        snprintf(detail, sizeof(detail),
+                 "seen=%d unmapped=%d auto_answered=%d table=%d installed=%d",
+                 na_dialog_seen, na_dialog_unmapped, na_dialog_auto_answered,
+                 NaDialogTableSize, na_engine_popp ? 1 : 0);
         na_cmd_result("dialog-stats", detail, true);
         return;
     }
