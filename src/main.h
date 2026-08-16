@@ -331,6 +331,15 @@ struct Config {
     "Sector 41".
     */
     int na_name_observe = 0;
+    /*
+    Neural Amplifier: record the base.workers + base.specialists allocation (na-yd4). 0 keeps
+    stock behaviour.
+
+    One record for two registry ids, because mod_base_yield answers both at once: the
+    specialists are whatever population the tile loop did not consume. Highest-volume record in
+    the fork — once per base per recompute — so it is off by default and stays that way.
+    */
+    int na_yield_observe = 0;
     int social_ai = 1;
     int social_ai_bias = 10;
     int tech_balance = 0;

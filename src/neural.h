@@ -270,6 +270,19 @@ in the table.
 void na_observe_dialog(const char* file, const char* label, int chosen);
 
 /*
+Record the base.workers + base.specialists allocation (na-yd4).
+
+TWO REGISTRY IDS, ONE DECISION: mod_base_yield's greedy tile loop and the specialist count are
+one answer — leftovers from the loop ARE the specialists. One record carries both.
+
+NOT a world view. The contract's action_space is pick-one and an allocation over 21 tiles does
+not fit that shape, so this is a compact outcome record and neither id enters OBSERVED.
+
+Checks conf.na_yield_observe itself; the call site stays one line.
+*/
+void na_observe_base_yield(int base_id);
+
+/*
 Record a base.name naming event (na-yd4).
 
 NOT a world view and NOT a decision record: no action space, no tier, no applied. The candidate

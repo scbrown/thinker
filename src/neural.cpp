@@ -2644,6 +2644,70 @@ static void na_build_base_retool(NaBuf* w, int base_id, int prev_id, int chosen)
 }
 
 /*
+base.workers + base.specialists — the tile-and-citizen allocation, from na-yd4's 27.
+
+TWO REGISTRY IDS, ONE DECISION. mod_base_yield runs a greedy loop that adds the best-scoring
+unworked tile until the next one is worth less than a specialist would be, then converts the
+leftover population into specialists. There is no separate "how many specialists" step — the
+specialist count is what the tile loop did not consume. Emitting two records would double-count
+one answer, so this emits one carrying both readings.
+
+NOT A WORLD VIEW, and for a structural reason rather than convenience. The contract's
+action_space is pick-one; an allocation over up to 21 tiles is a combinatorial answer that does
+not fit that shape, and flattening it into "which tile next" would describe a decision the
+engine never makes as a unit. So this is the compact outcome form base.name uses, and neither id
+enters OBSERVED — that set is for surfaces where a brain could see and take the decision.
+
+What it records is the RESULT plus the inputs that constrain it, which is what an eval on this
+surface would compare: the tile bitmask, the specialist split, and the three yields.
+*/
+void na_observe_base_yield(int base_id) {
+    if (!conf.na_yield_observe || base_id < 0 || base_id >= *BaseCount
+    || base_id >= MaxBaseNum) {
+        return;
+    }
+    BASE& base = Bases[base_id];
+    NaBuf wb;
+    NaBuf* w = &wb;
+    na_buf_init(w);
+    na_buf_puts(w, "{\"record\":\"base_yield\",\"engine\":\"thinker\"");
+    // Both ids, because both are answered here and a reader looking for either should find it.
+    na_buf_puts(w, ",\"surface_ids\":[\"base.workers\",\"base.specialists\"]");
+    na_buf_printf(w, ",\"turn\":%d,\"faction_id\":%d", *CurrentTurn, (int)base.faction_id);
+    na_buf_printf(w, ",\"base_id\":%d", base_id);
+    na_buf_puts(w, ",\"base\":\"");
+    na_buf_escaped(w, base.name);
+    na_buf_puts(w, "\"");
+
+    na_buf_printf(w, ",\"pop_size\":%d", (int)base.pop_size);
+    // The allocation itself: which of the 21 workable tiles are worked, as the engine's own
+    // bitmask, plus its population count so a reader need not popcount to sanity-check.
+    na_buf_printf(w, ",\"worked_tiles\":%d", (int)base.worked_tiles);
+    int worked = 0;
+    for (int i = 0; i < 32; i++) {
+        if (base.worked_tiles & (1 << i)) {
+            worked++;
+        }
+    }
+    na_buf_printf(w, ",\"worked_tile_count\":%d", worked);
+    na_buf_printf(w, ",\"specialist_total\":%d", (int)base.specialist_total);
+    na_buf_printf(w, ",\"specialist_adjust\":%d", (int)base.specialist_adjust);
+
+    // The three yields the loop was maximising. Reported after base_update, so these are what
+    // the allocation produced rather than the running totals it passed through.
+    na_buf_printf(w, ",\"nutrient_surplus\":%d", base.nutrient_surplus);
+    na_buf_printf(w, ",\"mineral_surplus\":%d", base.mineral_surplus);
+    na_buf_printf(w, ",\"energy_surplus\":%d", base.energy_surplus);
+    // Whether the allocation had to buy off unrest — the constraint that most often makes it
+    // choose a specialist over a good tile.
+    na_buf_printf(w, ",\"drone_total\":%d,\"talent_total\":%d",
+                  (int)base.drone_total, (int)base.talent_total);
+    na_buf_puts(w, "}");
+    na_log_record(w);
+    na_buf_free(w);
+}
+
+/*
 base.name — what a new base is called, from na-yd4's 27.
 
 The lowest-stakes surface in the bucket and instrumented last for exactly that reason, under

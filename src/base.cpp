@@ -2132,6 +2132,19 @@ void __cdecl mod_base_yield() {
     base->eco_damage = terraform_eco_damage(base_id);
     base_yield_active = false;
 
+    /*
+    Neural Amplifier (na-yd4): base.workers and base.specialists, recorded together because they
+    are ONE allocation. The greedy loop above assigns tiles until the next one is worth less
+    than a specialist would be, and whatever population is left becomes specialists — so the two
+    registry ids are two readings of a single answer, not two decisions.
+
+    Placed after base_update so the yields reported are the ones the allocation actually
+    produced, not the running totals it passed through on the way.
+    */
+    if (conf.na_yield_observe) {
+        na_observe_base_yield(base_id);
+    }
+
     if (faction_id == MapWin->cOwner && *ControlUpkeepA
     && f->SE_alloc_psych < 2 && effic_val >= 4 && 2*base->energy_surplus >= 3*base->pop_size
     && base->specialist_adjust > 2 && 2*base->specialist_adjust >= base->pop_size) {
