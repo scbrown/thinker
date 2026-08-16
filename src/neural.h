@@ -270,6 +270,18 @@ in the table.
 void na_observe_dialog(const char* file, const char* label, int chosen);
 
 /*
+Record a base.defend_goal decision — how many defenders a base should hold (na-yd4).
+
+OBSERVATION ONLY. move_upkeep already assigns the tier by percentile across the faction's whole
+base list.
+
+`score` and `cohort` are both required because this decision is RELATIVE: a base is tier 5
+because it is in the top sixteenth of THIS faction's bases, so the same base with the same score
+is a different tier in a bigger empire. The tier alone cannot be compared across turns.
+*/
+void na_observe_base_defend_goal(int base_id, int goal, int score, int cohort);
+
+/*
 Record a faction.tech_steal decision — which technology is taken (na-yd4).
 
 OBSERVATION ONLY. mod_tech_pick already chooses; this writes it down with the real stealable

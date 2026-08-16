@@ -314,6 +314,15 @@ struct Config {
     different set from what we could research.
     */
     int na_tech_steal_observe = 0;
+    /*
+    Neural Amplifier: record base.defend_goal — how many defenders a base should hold (na-yd4).
+    0 keeps stock behaviour.
+
+    Observation only. Fires once per base per faction-turn, so it is the highest-volume surface
+    instrumented so far; the tier is assigned by percentile across the faction's whole base
+    list, and the record carries the score and cohort that produced it.
+    */
+    int na_defend_goal_observe = 0;
     int social_ai = 1;
     int social_ai_bias = 10;
     int tech_balance = 0;

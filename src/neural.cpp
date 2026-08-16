@@ -2644,6 +2644,69 @@ static void na_build_base_retool(NaBuf* w, int base_id, int prev_id, int chosen)
 }
 
 /*
+base.defend_goal — how many defenders a base should hold, from na-yd4's 27.
+
+A RELATIVE decision, and that is the whole character of it. move_upkeep scores every base of a
+faction, sorts the scores, and assigns tiers by percentile: top sixteenth is 5, top eighth 4,
+top quarter 3, top half 2, the rest 1. So the same base with the same score is a different tier
+in a bigger empire, and a record that carried only the tier could not be compared across turns
+— which is precisely what na-6db has to do.
+
+Hence `priority_score` and `cohort_size` together. The score is the engine's own value, built
+from population, objective status, headquarters, enemies near, recent combat loss and distance
+from the front. Emitting the tier alone would be a verdict with its reasoning discarded.
+*/
+static void na_build_base_defend_goal(NaBuf* w, int base_id, int goal, int score, int cohort) {
+    BASE& base = Bases[base_id];
+    const int faction_id = base.faction_id;
+
+    na_write_head(w, "base.defend_goal", "base", faction_id);
+    na_buf_printf(w, ",\"base_id\":%d", base_id);
+    na_buf_puts(w, ",\"base\":\"");
+    na_buf_escaped(w, base.name);
+    na_buf_puts(w, "\"");
+
+    na_buf_printf(w, ",\"priority_score\":%d", score);
+    na_buf_printf(w, ",\"cohort_size\":%d", cohort);
+    // The exposure half of the same question, and the field a board policy already selects on.
+    // NOT tiles — plan.cpp weights map_range by region and war state; lower means more exposed.
+    na_buf_printf(w, ",\"defend_range\":%d", (int)base.defend_range);
+
+    na_buf_puts(w, ",\"subjects\":[\"");
+    na_buf_escaped(w, base.name);
+    na_buf_puts(w, "\"]");
+
+    na_write_metrics(w, faction_id, base_id);
+    na_write_base_state(w, base_id);
+
+    // Five tiers, exactly as the engine assigns them. A range rather than a free integer,
+    // because anything outside 1..5 is not a goal this engine can act on.
+    na_buf_puts(w, ",\"action_space\":[");
+    for (int tier = 1; tier <= 5; tier++) {
+        na_buf_printf(w, "%s{\"id\":\"defend:%d\",\"action\":\"Hold %d defender%s\"",
+                      tier > 1 ? "," : "", tier, tier, tier == 1 ? "" : "s");
+        na_buf_puts(w, ",\"category\":\"defend\"}");
+    }
+    na_buf_puts(w, "],\"action_space_size\":5");
+
+    na_buf_printf(w, ",\"native_choice\":\"defend:%d\"", goal);
+    na_buf_printf(w, ",\"native_choice_item\":%d", goal);
+}
+
+void na_observe_base_defend_goal(int base_id, int goal, int score, int cohort) {
+    if (base_id < 0 || base_id >= *BaseCount || base_id >= MaxBaseNum) {
+        return;
+    }
+    NaBuf wb;
+    NaBuf* w = &wb;
+    na_buf_init(w);
+    na_build_base_defend_goal(w, base_id, goal, score, cohort);
+    na_buf_puts(w, ",\"tier\":\"deterministic\",\"applied\":\"native\"}");
+    na_log_record(w);
+    na_buf_free(w);
+}
+
+/*
 faction.tech_steal — which technology to take, from na-yd4's 27.
 
 The action space is NOT the research menu. `na_write_tech_action_space` enumerates what the
@@ -5270,6 +5333,31 @@ void na_command_tick(void* hwnd_raw) {
                     cost, plr.energy_credits);
             fputs(",\"tier\":\"llm\",\"applied\":\"llm\"}\n", lf);
             fflush(lf);
+        }
+        return;
+    }
+
+    /*
+    "observe-defend <base_id>" — the base.defend_goal probe.
+
+    Reports the base's CURRENT goal with score 0 and cohort 0, and those two zeros are honest
+    rather than lazy: the score exists only inside move_upkeep's sorting pass and cannot be
+    recovered afterwards, so inventing one would put a number in the record that no engine ever
+    computed. A reader seeing cohort 0 knows this row came from a probe.
+    */
+    if (strncmp(line, "observe-defend ", 15) == 0) {
+        int base_id = -1;
+        if (sscanf(line + 15, "%d", &base_id) == 1
+        && base_id >= 0 && base_id < *BaseCount) {
+            na_observe_base_defend_goal(base_id, Bases[base_id].defend_goal, 0, 0);
+            char detail[96];
+            snprintf(detail, sizeof(detail), "base_id=%d goal=%d (probe: no score)",
+                     base_id, (int)Bases[base_id].defend_goal);
+            na_cmd_result("observe-defend", detail, true);
+        } else {
+            char detail[96];
+            snprintf(detail, sizeof(detail), "need 0 <= base_id < %d", *BaseCount);
+            na_cmd_result("observe-defend", detail, false);
         }
         return;
     }

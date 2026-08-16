@@ -1,5 +1,6 @@
 
 #include "move.h"
+#include "neural.h"
 
 /*
 Priority Map Tables contain values calculated for each map square
@@ -1089,6 +1090,19 @@ void move_upkeep(int faction_id, UpdateMode mode) {
                 }
                 debug("base_defend range: %2d goal: %d score: %3d %s\n",
                 base->defend_range, base->defend_goal, value, base->name);
+                /*
+                Neural Amplifier (na-yd4): base.defend_goal. Recorded inside the loop because
+                `value` — the engine's own priority score — exists only in this iteration, and a
+                goal without the score it came from is a verdict with its reasoning discarded.
+
+                The cohort size goes too. This decision is RELATIVE: a base is tier 5 because it
+                sits in the top sixteenth of THIS faction's bases, so the same base with the
+                same score lands in a different tier in a bigger empire. A record without the
+                cohort cannot be compared across turns, which is exactly what na-6db needs to do.
+                */
+                if (conf.na_defend_goal_observe) {
+                    na_observe_base_defend_goal(i, base->defend_goal, value, (int)num);
+                }
             }
         }
     }
