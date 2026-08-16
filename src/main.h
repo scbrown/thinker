@@ -286,6 +286,17 @@ struct Config {
     */
     int na_dialog_auto = 0;
     /*
+    Neural Amplifier: route decidable dialogs to the brain (invariant 7, na-4lr). 0 keeps stock
+    behaviour.
+
+    Enabling this is currently a NO-OP by design: routing needs each dialog's affirm/decline
+    button indices, those live in game text files this project does not ship, and a dialog with
+    no mapping is never routed. The mechanism is built and refuses rather than guesses — see
+    NaDialogEntry in neural.cpp. dialog-stats reports the refusals, so a run says plainly that
+    routing did nothing rather than appearing to work.
+    */
+    int na_dialog_route = 0;
+    /*
     Neural Amplifier: record base.staple decisions — nerve stapling (na-yd4). 0 keeps stock
     behaviour.
 

@@ -260,6 +260,15 @@ Never suppresses: the engine's return is passed through unchanged on every path.
 void na_install_dialog_hook();
 
 /*
+Record a dialog the BRAIN answered, tier llm / applied llm.
+
+Distinct from the observation and auto-answer records because three different parties can answer
+a dialog — the engine, the harness, and the model — and a log that cannot say which is not a
+record of what happened.
+*/
+void na_observe_dialog_routed(const char* file, const char* label, int chosen);
+
+/*
 Record a dialog that was AUTO-ANSWERED on the game's behalf, flagged as such.
 
 A separate entry point from na_observe_dialog rather than a parameter, so the ordinary path

@@ -4638,6 +4638,22 @@ struct NaDialogEntry {
     const char* label;
     const char* surface_id;  // nullptr for chrome.
     NaDialogKind kind;
+    /*
+    THE BUTTON MAPPING, and it is deliberately absent everywhere.
+
+    Routing a dialog to the brain means RETURNING a button index, and which index means "yes"
+    is defined in the game's own text file, keyed by label — data this project does not ship
+    (invariant 8). So the mechanism below is complete and the mapping is empty: -1 means "not
+    known", and a dialog with -1 is NEVER routed no matter how it is configured.
+
+    Filling these in is two integers per dialog, done by someone with an install, verified with
+    the `dialog-buttons` probe. That is a deliberately small and checkable job. Guessing them
+    here would be the same class of mistake as inventing an action space — except the failure
+    would be silent and would take real actions in a real game, which is why the default refuses
+    rather than assumes.
+    */
+    int button_affirm;
+    int button_decline;
 };
 
 /*
@@ -4651,22 +4667,22 @@ The labels are distinctive enough that this is not a real ambiguity.
 */
 static const NaDialogEntry NaDialogTable[] = {
     // Chrome. gui.cpp and basewin.cpp raise these through "modmenu".
-    {"modmenu", "MAINMENU",   nullptr, NA_DIALOG_CHROME},
-    {"modmenu", "GAMEMENU",   nullptr, NA_DIALOG_CHROME},
-    {"modmenu", "STATS",      nullptr, NA_DIALOG_CHROME},
-    {"modmenu", "GENERIC",    nullptr, NA_DIALOG_CHROME},
+    {"modmenu", "MAINMENU",   nullptr, NA_DIALOG_CHROME, -1, -1},
+    {"modmenu", "GAMEMENU",   nullptr, NA_DIALOG_CHROME, -1, -1},
+    {"modmenu", "STATS",      nullptr, NA_DIALOG_CHROME, -1, -1},
+    {"modmenu", "GENERIC",    nullptr, NA_DIALOG_CHROME, -1, -1},
 
     // Decisions. Each label is grep-able in this fork; each surface_id is in the registry.
-    {"modmenu", "NERVESTAPLE2",    "base.staple",        NA_DIALOG_DECISION},
-    {nullptr,   "CORNERFOILED",    "econ.corner_market", NA_DIALOG_NOTICE},
-    {nullptr,   "CORNERTHEMFOIL",  "econ.corner_market", NA_DIALOG_NOTICE},
-    {nullptr,   "CORNERTHEMFOILED","econ.corner_market", NA_DIALOG_NOTICE},
-    {nullptr,   "SURVIVEPROJECT",  "base.project",       NA_DIALOG_NOTICE},
-    {nullptr,   "HALTPROJECT",     "base.project",       NA_DIALOG_NOTICE},
-    {nullptr,   "SEIZEPROJECT",    "base.project",       NA_DIALOG_NOTICE},
-    {nullptr,   "LOSEPROJECT",     "base.project",       NA_DIALOG_NOTICE},
-    {"modmenu", "SPYFOUND",        "probe.action",       NA_DIALOG_NOTICE},
-    {"modmenu", "SPYLOST",         "probe.action",       NA_DIALOG_NOTICE},
+    {"modmenu", "NERVESTAPLE2",    "base.staple",        NA_DIALOG_DECISION, -1, -1},
+    {nullptr,   "CORNERFOILED",    "econ.corner_market", NA_DIALOG_NOTICE, -1, -1},
+    {nullptr,   "CORNERTHEMFOIL",  "econ.corner_market", NA_DIALOG_NOTICE, -1, -1},
+    {nullptr,   "CORNERTHEMFOILED","econ.corner_market", NA_DIALOG_NOTICE, -1, -1},
+    {nullptr,   "SURVIVEPROJECT",  "base.project",       NA_DIALOG_NOTICE, -1, -1},
+    {nullptr,   "HALTPROJECT",     "base.project",       NA_DIALOG_NOTICE, -1, -1},
+    {nullptr,   "SEIZEPROJECT",    "base.project",       NA_DIALOG_NOTICE, -1, -1},
+    {nullptr,   "LOSEPROJECT",     "base.project",       NA_DIALOG_NOTICE, -1, -1},
+    {"modmenu", "SPYFOUND",        "probe.action",       NA_DIALOG_NOTICE, -1, -1},
+    {"modmenu", "SPYLOST",         "probe.action",       NA_DIALOG_NOTICE, -1, -1},
 };
 
 static const int NaDialogTableSize = (int)(sizeof(NaDialogTable) / sizeof(NaDialogTable[0]));
@@ -4678,6 +4694,11 @@ static int na_dialog_unmapped = 0;
 //: How many dialogs this run answered on the game's behalf. Reported by `dialog-stats`,
 //: because "the run finished" reads very differently if it answered forty dialogs to get there.
 static int na_dialog_auto_answered = 0;
+//: Routed to the brain, and refused-and-fell-through. Both reported by `dialog-stats`, because
+//: "routing is on" and "routing is doing anything" are different facts and the second is the
+//: one that matters.
+static int na_dialog_routed = 0;
+static int na_dialog_route_refused = 0;
 
 //: The engine's own popp, captured at install time. Held separately so the wrapper calls the
 //: ENGINE and not the pointer it just installed itself into — which would recurse forever.
@@ -4738,6 +4759,31 @@ The same record with `auto_answered` set. A separate entry point rather than a p
 na_observe_dialog, so the ordinary observation path cannot accidentally claim a dialog was
 auto-answered, and so grepping the log for who answered is unambiguous.
 */
+/*
+A dialog the BRAIN answered. Distinct from both the observation and the auto-answer records for
+the same reason those are distinct from each other: three different parties can answer a dialog
+— the engine, the harness, and the model — and a log that cannot say which is not a record of
+what happened.
+*/
+void na_observe_dialog_routed(const char* file, const char* label, int chosen) {
+    const NaDialogEntry* entry = na_dialog_lookup(file, label);
+    na_dialog_seen++;
+    NaBuf wb;
+    NaBuf* w = &wb;
+    na_buf_init(w);
+    na_write_dialog(w, entry, file, label, chosen);
+    if (!w->failed && w->data) {
+        const size_t len = strlen(w->data);
+        if (len > 0 && w->data[len - 1] == '}') {
+            w->data[len - 1] = '\0';
+            w->len = len - 1;
+            na_buf_puts(w, ",\"tier\":\"llm\",\"applied\":\"llm\"}");
+        }
+    }
+    na_log_record(w);
+    na_buf_free(w);
+}
+
 void na_observe_dialog_auto(const char* file, const char* label, int chosen) {
     const NaDialogEntry* entry = na_dialog_lookup(file, label);
     na_dialog_seen++;
@@ -4783,6 +4829,84 @@ answer and an observation written before the answer exists would have nothing to
 Reads `conf.na_dialog_observe` per call rather than deciding at install time, so the flag can
 be toggled without a restart and so an unconfigured build does exactly what it did before.
 */
+/*
+Route a dialog to the brain and return the button it chose — na-4lr's third disposition.
+
+Returns -1 when the dialog was NOT routed, and every caller treats that as "fall through to the
+engine". Refuses, in this order:
+
+  no button mapping      The dialog's affirm/decline indices are unknown. This is the default
+                         for every entry, because the mapping lives in game text files this
+                         project does not ship. Refusing here is the whole reason routing is
+                         safe to have built at all: a guessed index would take a real action in
+                         a real game, silently.
+  not a DECISION         A notice has nothing to decide, and chrome is not a decision at all.
+  no surface             Nothing to post; the orchestrator keys on surface_id.
+  no reply, or a reply
+  naming something the
+  action space did not
+  offer                  Invariant 1. The brain cannot name a move the engine did not offer,
+                         and a routed dialog is not an exception to that.
+
+Every refusal falls through to the engine, which is invariant 9: a slow, broken or confused
+brain costs a decision, never a turn.
+
+Only base.staple is wired to a world view today, because it is the only DECISION in the table
+and its emitter already exists. That is deliberate: a per-dialog action space is per-dialog
+work, and inventing one for a dialog nobody has looked at would be the same mistake as guessing
+its buttons.
+*/
+static int na_route_dialog(const NaDialogEntry* entry, int base_id) {
+    if (!entry || entry->kind != NA_DIALOG_DECISION || !entry->surface_id) {
+        return -1;
+    }
+    if (entry->button_affirm < 0 || entry->button_decline < 0) {
+        // The expected path today, and it is not a failure — it is the mapping being honest
+        // about not existing. Logged once per dialog so a run says why it did not route.
+        na_dialog_route_refused++;
+        return -1;
+    }
+    if (strcmp(entry->surface_id, "base.staple") != 0) {
+        na_dialog_route_refused++;
+        return -1;
+    }
+    if (base_id < 0 || base_id >= *BaseCount) {
+        na_dialog_route_refused++;
+        return -1;
+    }
+
+    NaBuf w;
+    na_buf_init(&w);
+    // The SAME world view base.staple already emits — not a second description of one
+    // decision. `stapled` is false because nothing has been chosen yet; this is the ask.
+    na_build_base_staple(&w, base_id, false);
+    na_write_decision_deadline(&w);
+    na_buf_puts(&w, "}");
+
+    int button = -1;
+    NaBuf body;
+    if (!w.failed && na_http_post(llm_endpoint.c_str(), "/decide", w.data,
+                                  conf.llm_timeout_ms, &body)) {
+        char action_id[64];
+        if (na_json_string(body.data, "action_id", action_id, sizeof(action_id))) {
+            if (strcmp(action_id, "staple:now") == 0) {
+                button = entry->button_affirm;
+            } else if (strcmp(action_id, "staple:none") == 0) {
+                button = entry->button_decline;
+            }
+            // Anything else is an id the action space never offered, and it stays -1.
+        }
+        na_buf_free(&body);
+    }
+    na_buf_free(&w);
+    if (button >= 0) {
+        na_dialog_routed++;
+    } else {
+        na_dialog_route_refused++;
+    }
+    return button;
+}
+
 int __cdecl na_popp(const char* filename, const char* label, int a3, const char* pcx_filename,
                     fp_none fn) {
     /*
@@ -4807,6 +4931,21 @@ int __cdecl na_popp(const char* filename, const char* label, int a3, const char*
     ONLY WHEN ASKED. conf.na_dialog_auto is off by default, so an unconfigured build reaches the
     engine exactly as before.
     */
+    /*
+    Routing first: a dialog the brain can answer should reach the brain rather than being
+    dismissed as a notice. In practice the order does not matter today — routing only applies to
+    DECISION entries and auto-answer only to NOTICE — but relying on that would make the two
+    features' correctness depend on the table's shape rather than on their own conditions.
+    */
+    if (conf.na_dialog_route) {
+        const int routed = na_route_dialog(na_dialog_lookup(filename, label), *CurrentBaseID);
+        if (routed >= 0) {
+            if (conf.na_dialog_observe) {
+                na_observe_dialog_routed(filename, label, routed);
+            }
+            return routed;
+        }
+    }
     if (conf.na_dialog_auto && na_headless()) {
         const NaDialogEntry* entry = na_dialog_lookup(filename, label);
         if (entry && entry->kind == NA_DIALOG_NOTICE) {
@@ -5708,8 +5847,9 @@ void na_command_tick(void* hwnd_raw) {
     if (strcmp(line, "dialog-stats") == 0) {
         char detail[128];
         snprintf(detail, sizeof(detail),
-                 "seen=%d unmapped=%d auto_answered=%d table=%d installed=%d",
+                 "seen=%d unmapped=%d auto=%d routed=%d route_refused=%d table=%d installed=%d",
                  na_dialog_seen, na_dialog_unmapped, na_dialog_auto_answered,
+                 na_dialog_routed, na_dialog_route_refused,
                  NaDialogTableSize, na_engine_popp ? 1 : 0);
         na_cmd_result("dialog-stats", detail, true);
         return;

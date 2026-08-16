@@ -77,6 +77,8 @@ int option_handler(void* user, const char* section, const char* name, const char
         cf->na_dialog_observe = atoi(value);
     } else if (MATCH("na_dialog_auto")) {
         cf->na_dialog_auto = atoi(value);
+    } else if (MATCH("na_dialog_route")) {
+        cf->na_dialog_route = atoi(value);
     } else if (MATCH("na_staple_observe")) {
         cf->na_staple_observe = atoi(value);
     } else if (MATCH("na_endgame_observe")) {
