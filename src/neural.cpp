@@ -3940,6 +3940,200 @@ static void na_order_batch(char lines[][256], int count, int dropped) {
     na_buf_free(&o);
 }
 
+/*
+================================================================================================
+In-game dialogs as decision points — invariant 7, na-4lr.
+
+"Intercept in-game dialogs; never blanket-suppress them. They are decision points." Council
+votes, diplomacy offers, random events and pact proposals all arrive as `popp` dialogs, and
+each is a surface the brain should eventually own.
+
+HOW THIS IS CENTRAL WITHOUT PATCHING THE BINARY. `popp` is not a symbol Thinker calls directly
+— engine.h declares `extern Fpopp popp` and engine.cpp binds it to an address. Every one of the
+~50 `popp(...)` calls in this fork's own source therefore goes THROUGH that pointer, so
+installing a wrapper into the variable intercepts all of them at once. That is the whole hook:
+no `write_call` per site, no prologue detour, nothing that needs the game binary present to
+build or reason about.
+
+WHAT IT DOES NOT REACH, stated plainly because the difference matters and is invisible from
+here: dialogs the ENGINE raises from its own code call the real function directly and never
+touch this pointer. Reaching those needs each call site's address, which needs the binary —
+which this repository deliberately does not have (invariant 8). So this is central over
+Thinker's dialogs, not over every dialog the game can show, and `na_dialog_stats` reports what
+was actually seen rather than letting the gap pass as an empty inventory.
+
+NOTHING IS SUPPRESSED. The wrapper's return value is the engine's, unmodified, on every path
+including the ones it does not recognise. Invariant 7 forbids blanket suppression, and the
+fatal-error MessageBoxA that `na_message_box` handles is a different function entirely and is
+untouched by any of this.
+
+THE TABLE IS EVIDENCE, NOT GUESSWORK. Every entry below is a (file, label) pair that appears in
+this fork's source — grep for it. Filling the table with plausible-looking labels from memory
+would produce a map that matches nothing while looking like coverage, which is the exact
+failure this project has already paid for twice (a policy in the wrong namespace, a Cargo
+feature that made the parser silently inert). An unrecognised dialog is therefore RECORDED as
+unmapped rather than dropped, so the real inventory can be built from a real game instead of
+invented here.
+================================================================================================
+*/
+
+enum NaDialogKind {
+    /*
+    Menu and file-picker chrome. Not a decision, and deliberately never recorded: the main
+    menu opens on every launch and would bury the log. na-4lr is explicit that automating
+    this class is throwaway work.
+    */
+    NA_DIALOG_CHROME,
+    //: A decision surface. Recorded with its surface_id and the engine's own answer.
+    NA_DIALOG_DECISION,
+};
+
+struct NaDialogEntry {
+    const char* file;   // nullptr matches any file — the label alone is distinctive.
+    const char* label;
+    const char* surface_id;  // nullptr for chrome.
+    NaDialogKind kind;
+};
+
+/*
+Only pairs that appear in this fork's source. `surface_id` values come from the frozen registry
+in `orchestrator/src/neural_amplifier/surfaces.py`; a value not in that registry would be
+dropped by the orchestrator as unknown.
+
+`file` is nullptr wherever the fork passes `ScriptFile` — a runtime variable whose value is a
+game data file we do not ship, so matching on the label alone is what can actually be checked.
+The labels are distinctive enough that this is not a real ambiguity.
+*/
+static const NaDialogEntry NaDialogTable[] = {
+    // Chrome. gui.cpp and basewin.cpp raise these through "modmenu".
+    {"modmenu", "MAINMENU",   nullptr, NA_DIALOG_CHROME},
+    {"modmenu", "GAMEMENU",   nullptr, NA_DIALOG_CHROME},
+    {"modmenu", "STATS",      nullptr, NA_DIALOG_CHROME},
+    {"modmenu", "GENERIC",    nullptr, NA_DIALOG_CHROME},
+
+    // Decisions. Each label is grep-able in this fork; each surface_id is in the registry.
+    {"modmenu", "NERVESTAPLE2",    "base.staple",        NA_DIALOG_DECISION},
+    {nullptr,   "CORNERFOILED",    "econ.corner_market", NA_DIALOG_DECISION},
+    {nullptr,   "CORNERTHEMFOIL",  "econ.corner_market", NA_DIALOG_DECISION},
+    {nullptr,   "CORNERTHEMFOILED","econ.corner_market", NA_DIALOG_DECISION},
+    {nullptr,   "SURVIVEPROJECT",  "base.project",       NA_DIALOG_DECISION},
+    {nullptr,   "HALTPROJECT",     "base.project",       NA_DIALOG_DECISION},
+    {nullptr,   "SEIZEPROJECT",    "base.project",       NA_DIALOG_DECISION},
+    {nullptr,   "LOSEPROJECT",     "base.project",       NA_DIALOG_DECISION},
+    {"modmenu", "SPYFOUND",        "probe.action",       NA_DIALOG_DECISION},
+    {"modmenu", "SPYLOST",         "probe.action",       NA_DIALOG_DECISION},
+};
+
+static const int NaDialogTableSize = (int)(sizeof(NaDialogTable) / sizeof(NaDialogTable[0]));
+
+//: What the wrapper actually saw. Reported by the `dialog-stats` probe, because "the table
+//: matched nothing" and "no dialog was raised" are different facts and only one is a bug.
+static int na_dialog_seen = 0;
+static int na_dialog_unmapped = 0;
+
+//: The engine's own popp, captured at install time. Held separately so the wrapper calls the
+//: ENGINE and not the pointer it just installed itself into — which would recurse forever.
+static Fpopp na_engine_popp = nullptr;
+
+static const NaDialogEntry* na_dialog_lookup(const char* file, const char* label) {
+    if (!label) {
+        return nullptr;
+    }
+    for (int i = 0; i < NaDialogTableSize; i++) {
+        const NaDialogEntry& e = NaDialogTable[i];
+        if (strcmp(e.label, label) != 0) {
+            continue;
+        }
+        // A nullptr file in the table matches any caller; a named one must agree.
+        if (e.file && (!file || strcmp(e.file, file) != 0)) {
+            continue;
+        }
+        return &e;
+    }
+    return nullptr;
+}
+
+/*
+A dialog observation. NOT a world view, and that is deliberate.
+
+A world view has to carry an action space the brain could choose from, and this hook cannot
+build one: the buttons live in a game text file keyed by label, which is data we do not ship.
+Emitting a contract-shaped record with an invented or empty action space would be a decision
+record for a decision nobody could make, and it would count toward coverage.
+
+So this takes the compact form the `na_verify_*` divergence records already use — a surface_id
+and the facts, no `tier` and no `applied` — which the harvester is documented to skip rather
+than mistake for a capture.
+*/
+static void na_write_dialog(NaBuf* w, const NaDialogEntry* entry, const char* file,
+                            const char* label, int chosen) {
+    const int faction_id = *CurrentPlayerFaction;
+    na_buf_puts(w, "{\"record\":\"dialog\",\"engine\":\"thinker\"");
+    na_buf_printf(w, ",\"turn\":%d,\"faction_id\":%d", *CurrentTurn, faction_id);
+    na_buf_puts(w, ",\"dialog_file\":\"");
+    na_buf_escaped(w, file ? file : "");
+    na_buf_puts(w, "\",\"dialog_label\":\"");
+    na_buf_escaped(w, label ? label : "");
+    na_buf_puts(w, "\"");
+    if (entry && entry->surface_id) {
+        na_buf_printf(w, ",\"surface_id\":\"%s\"", entry->surface_id);
+    }
+    // The engine's answer: popp returns the button index. Recorded for the same reason
+    // base.retool records native_choice — a surface with no baseline written down cannot be
+    // measured against a brain later.
+    na_buf_printf(w, ",\"native_choice\":%d", chosen);
+    na_buf_printf(w, ",\"mapped\":%s}", entry ? "true" : "false");
+}
+
+void na_observe_dialog(const char* file, const char* label, int chosen) {
+    const NaDialogEntry* entry = na_dialog_lookup(file, label);
+    if (entry && entry->kind == NA_DIALOG_CHROME) {
+        return;
+    }
+    na_dialog_seen++;
+    if (!entry) {
+        na_dialog_unmapped++;
+    }
+    NaBuf wb;
+    NaBuf* w = &wb;
+    na_buf_init(w);
+    na_write_dialog(w, entry, file, label, chosen);
+    na_log_record(w);
+    na_buf_free(w);
+}
+
+/*
+The hook itself. Calls through FIRST and records the result, because the engine's return is the
+answer and an observation written before the answer exists would have nothing to say.
+
+Reads `conf.na_dialog_observe` per call rather than deciding at install time, so the flag can
+be toggled without a restart and so an unconfigured build does exactly what it did before.
+*/
+int __cdecl na_popp(const char* filename, const char* label, int a3, const char* pcx_filename,
+                    fp_none fn) {
+    const int chosen = na_engine_popp(filename, label, a3, pcx_filename, fn);
+    if (conf.na_dialog_observe) {
+        na_observe_dialog(filename, label, chosen);
+    }
+    return chosen;
+}
+
+/*
+Install the wrapper into the `popp` pointer. Idempotent: a second call is a no-op rather than
+chaining the wrapper onto itself, which would double every record and, worse, recurse.
+
+Captures whatever engine.cpp bound rather than naming the address again here. A second literal
+for the same function is how the wrapper and the engine come to disagree about which one is
+being wrapped.
+*/
+void na_install_dialog_hook() {
+    if (na_engine_popp) {
+        return;
+    }
+    na_engine_popp = popp;
+    popp = na_popp;
+}
+
 static bool na_is_order_line(const char* line) {
     return strncmp(line, "move ", 5) == 0 || strncmp(line, "skip ", 5) == 0
         || strncmp(line, "build ", 6) == 0;
@@ -4609,6 +4803,42 @@ void na_command_tick(void* hwnd_raw) {
                     cost, plr.energy_credits);
             fputs(",\"tier\":\"llm\",\"applied\":\"llm\"}\n", lf);
             fflush(lf);
+        }
+        return;
+    }
+
+    /*
+    "observe-dialog <label> [file]" — the dialog probe, and the `dialog-stats` report.
+
+    The probe emits one dialog record without a dialog having been raised, which is what makes
+    the wire format checkable: most of these fire on rare events (a secret project seized, a
+    probe team caught) that cannot be produced on demand.
+
+    `dialog-stats` answers the question the table cannot: how many dialogs the hook actually
+    saw, and how many of those it did not recognise. "The table matched nothing" and "no dialog
+    was raised" look identical in an empty log and only one of them is a bug — and a high
+    unmapped count is not a failure either, it is the inventory this hook exists to collect.
+    */
+    if (strcmp(line, "dialog-stats") == 0) {
+        char detail[128];
+        snprintf(detail, sizeof(detail), "seen=%d unmapped=%d table=%d installed=%d",
+                 na_dialog_seen, na_dialog_unmapped, NaDialogTableSize,
+                 na_engine_popp ? 1 : 0);
+        na_cmd_result("dialog-stats", detail, true);
+        return;
+    }
+
+    if (strncmp(line, "observe-dialog ", 15) == 0) {
+        char label[64] = {0};
+        char file[64] = {0};
+        const int got = sscanf(line + 15, "%63s %63s", label, file);
+        if (got >= 1) {
+            na_observe_dialog(got >= 2 ? file : nullptr, label, 0);
+            char detail[160];
+            snprintf(detail, sizeof(detail), "label=%s file=%s", label, got >= 2 ? file : "(any)");
+            na_cmd_result("observe-dialog", detail, true);
+        } else {
+            na_cmd_result("observe-dialog", "need a label", false);
         }
         return;
     }

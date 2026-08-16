@@ -246,6 +246,30 @@ void na_observe_base_hurry(int base_id, int item, int minerals_before, int credi
                            int native_hurried);
 
 /*
+Install the in-game dialog hook — invariant 7, na-4lr.
+
+`popp` is a function POINTER the engine binds and this fork calls through, so writing a wrapper
+into it intercepts every `popp(...)` in Thinker's source at once, with no per-site patch and no
+binary detour. Idempotent; call it once at init.
+
+Does NOT reach dialogs the engine raises from its own code — those call the real function
+directly. That needs per-call-site addresses, which needs the game binary.
+
+Never suppresses: the engine's return is passed through unchanged on every path.
+*/
+void na_install_dialog_hook();
+
+/*
+Record one dialog as an observation. Exposed for the `observe-dialog` probe; the hook calls it
+itself when `na_dialog_observe` is set.
+
+`chosen` is the button index popp returned. A dialog the table does not know is still recorded,
+marked `mapped:false`, so the real inventory can be built from a real game rather than guessed
+in the table.
+*/
+void na_observe_dialog(const char* file, const char* label, int chosen);
+
+/*
 Record a base.retool decision — the production switch that would cost banked minerals.
 
 OBSERVATION ONLY, and deliberately so. Unlike the other NO_AI_PATH surfaces this one already

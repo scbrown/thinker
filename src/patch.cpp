@@ -419,6 +419,18 @@ bool patch_setup(Config* cf) {
     debug("patch_setup screen: %dx%d window: %dx%d\n",
         cf->screen_width, cf->screen_height, cf->window_width, cf->window_height);
 
+    /*
+    Neural Amplifier: install the dialog hook (invariant 7, na-4lr). Unconditional, and that is
+    on purpose — the wrapper reads conf.na_dialog_observe per call, so installing it always
+    means the flag can be toggled without a restart while an unconfigured build still behaves
+    exactly as before. Installing only when the flag is set would make the flag a launch-time
+    decision, which is a worse contract for something whose whole job is observation.
+
+    Before every write_call below, because those patch call sites and this replaces a pointer
+    the rest of this function may already read.
+    */
+    na_install_dialog_hook();
+
     if (!VirtualProtect(AC_IMPORT_BASE, AC_IMPORT_LEN, PAGE_EXECUTE_READWRITE, &oldattrs)) {
         return false;
     }

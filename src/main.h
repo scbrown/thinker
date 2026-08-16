@@ -262,6 +262,15 @@ struct Config {
     surface is invisible to coverage and has no baseline for na-6db to A/B the brain against.
     */
     int na_retool_observe = 0;
+    /*
+    Neural Amplifier: record in-game dialogs as decision points (invariant 7, na-4lr). 0 keeps
+    stock behaviour.
+
+    Observation only, and it NEVER suppresses — the engine's answer is passed through unchanged
+    on every path, including for a dialog the table does not recognise. Invariant 7 is explicit
+    that dialogs are decision points to be intercepted, not hidden.
+    */
+    int na_dialog_observe = 0;
     int social_ai = 1;
     int social_ai_bias = 10;
     int tech_balance = 0;
