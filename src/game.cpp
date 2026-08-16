@@ -1575,7 +1575,18 @@ void __cdecl mod_faction_upkeep(int faction_id) {
         if (!is_human(faction_id) && *GameRules & RULES_VICTORY_ECONOMIC
         && has_tech(Rules->tech_preq_economic_victory, faction_id)) {
             int cost = corner_market(faction_id);
-            if (!victory_done() && f->corner_market_cost <= 0 && f->energy_credits > cost) {
+            /*
+            Neural Amplifier (na-yd4): hoisted into a named bool, and the reserve read BEFORE
+            the deduction below — the record has to show what the decision was made against,
+            not what survived it. The condition is unchanged: same operands, same order.
+            */
+            const int na_credits_before = f->energy_credits;
+            const bool na_cornered =
+                !victory_done() && f->corner_market_cost <= 0 && f->energy_credits > cost;
+            if (conf.na_endgame_observe) {
+                na_observe_corner_market(faction_id, cost, na_credits_before, na_cornered);
+            }
+            if (na_cornered) {
                 f->corner_market_turn = *CurrentTurn + Rules->turns_corner_global_energy_market;
                 f->corner_market_cost = cost;
                 f->energy_credits -= cost;
@@ -1619,7 +1630,23 @@ void __cdecl mod_faction_upkeep(int faction_id) {
             popp(ScriptFile, "COUNCILOPEN", 0, "council_sm.pcx", 0);
         }
         if (!is_human(faction_id)) {
+            /*
+            Neural Amplifier (na-yd4): call_council decides internally and returns nothing
+            useful, so the answer is observed as a STATE TRANSITION — convened off before, on
+            after. An inference from eligibility alone would be a guess; this is the fact.
+
+            can_call_council is asked only when observing, so an unconfigured build does not
+            pay for a predicate it will not use.
+            */
+            const bool na_observing = conf.na_endgame_observe != 0;
+            const bool na_eligible = na_observing && can_call_council(faction_id, 0);
+            const bool na_convened_before = (*GameState & STATE_COUNCIL_HAS_CONVENED) != 0;
             call_council(faction_id);
+            if (na_observing) {
+                const bool na_called =
+                    !na_convened_before && (*GameState & STATE_COUNCIL_HAS_CONVENED) != 0;
+                na_observe_council_call(faction_id, na_eligible, na_called);
+            }
         }
     }
     if (!*MultiplayerActive && *GamePreferences & PREF_BSC_AUTOSAVE_EACH_TURN

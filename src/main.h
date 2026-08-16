@@ -271,6 +271,24 @@ struct Config {
     that dialogs are decision points to be intercepted, not hidden.
     */
     int na_dialog_observe = 0;
+    /*
+    Neural Amplifier: record base.staple decisions — nerve stapling (na-yd4). 0 keeps stock
+    behaviour.
+
+    Observation only. consider_staple already decides and keeps deciding; this writes down what
+    it chose. Records only when its eligibility gate opened, so a row is always a decision that
+    was actually available.
+    */
+    int na_staple_observe = 0;
+    /*
+    Neural Amplifier: record econ.corner_market and council.call — two AI-only, very
+    low-frequency, very high-stakes turn-scope decisions (na-yd4). 0 keeps stock behaviour.
+
+    One flag for both because they sit in the same function, fire on the same cadence, and
+    neither is useful without the other when reading a turn: a game where the council convened
+    and the market was cornered is a different game from one where only one happened.
+    */
+    int na_endgame_observe = 0;
     int social_ai = 1;
     int social_ai_bias = 10;
     int tech_balance = 0;

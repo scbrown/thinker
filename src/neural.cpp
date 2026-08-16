@@ -2643,6 +2643,179 @@ static void na_build_base_retool(NaBuf* w, int base_id, int prev_id, int chosen)
                   cat_current == cat_chosen ? "retool:continue" : "retool:switch");
 }
 
+/*
+econ.corner_market — cornering the global energy market, from na-yd4's 27.
+
+The highest-stakes decision in the bucket by some distance: it is a move toward economic
+victory, it is AI-only (the whole block is gated on `!is_human`), and it fires at most a
+handful of times in a game. decision-inputs.md's rule points straight at it.
+
+The native answer is an affordability-and-timing test, and it is emitted as the three facts it
+is made of rather than as its verdict. `cost` in particular is `corner_market()`'s own return,
+never re-derived: it scales with the game state and a copy here would be a second opinion about
+the price.
+
+Faction scope, so no base_state and metrics with base_id -1.
+*/
+static void na_build_corner_market(NaBuf* w, int faction_id, int cost, int credits_before,
+                                   bool cornered) {
+    Faction& plr = Factions[faction_id];
+
+    na_write_head(w, "econ.corner_market", "turn", faction_id);
+    na_buf_printf(w, ",\"corner_cost\":%d", cost);
+    na_buf_printf(w, ",\"energy_credits_before\":%d", credits_before);
+    // Non-zero means a corner is ALREADY running, which is one of the reasons the engine
+    // declines. Emitted rather than folded into a boolean so a declined row says which reason.
+    na_buf_printf(w, ",\"corner_market_cost_existing\":%d", plr.corner_market_cost);
+    na_buf_printf(w, ",\"corner_market_turn\":%d", plr.corner_market_turn);
+    na_buf_printf(w, ",\"turns_to_resolve\":%d",
+                  (int)Rules->turns_corner_global_energy_market);
+
+    na_write_metrics(w, faction_id, -1);
+
+    na_buf_puts(w, ",\"action_space\":[{\"id\":\"corner:none\"");
+    na_buf_puts(w, ",\"action\":\"Do not corner the energy market\"");
+    na_buf_puts(w, ",\"cost\":0,\"cost_unit\":\"credits\",\"category\":\"corner\"}");
+    na_buf_puts(w, ",{\"id\":\"corner:now\"");
+    na_buf_puts(w, ",\"action\":\"Corner the global energy market\"");
+    na_buf_printf(w, ",\"cost\":%d,\"cost_unit\":\"credits\",\"category\":\"corner\"", cost);
+    // Declared because it happens THIS turn and the orchestrator computes directive trade-offs
+    // from `effects` alone. The credits leave the reserve immediately — unlike a build order,
+    // which is a commitment paid over turns (the na-co2 distinction).
+    na_buf_printf(w, ",\"effects\":{\"energy_reserves\":%d}}]", -cost);
+    na_buf_puts(w, ",\"action_space_size\":2");
+
+    na_buf_printf(w, ",\"native_choice\":\"%s\"", cornered ? "corner:now" : "corner:none");
+}
+
+void na_observe_corner_market(int faction_id, int cost, int credits_before, bool cornered) {
+    if (faction_id <= 0 || faction_id >= MaxPlayerNum) {
+        return;
+    }
+    NaBuf wb;
+    NaBuf* w = &wb;
+    na_buf_init(w);
+    na_build_corner_market(w, faction_id, cost, credits_before, cornered);
+    na_buf_puts(w, ",\"tier\":\"deterministic\",\"applied\":\"native\"}");
+    na_log_record(w);
+    na_buf_free(w);
+}
+
+/*
+council.call — convening the Planetary Council, from na-yd4's 27.
+
+`call_council` is an engine function that decides internally, so the answer is not a return
+value to read. It is observed as a STATE TRANSITION instead: whether STATE_COUNCIL_HAS_CONVENED
+was off before the call and on after. That is the engine's answer as an observable fact rather
+than an inference about one, which is the same standard base.retool's category comparison meets.
+
+`eligible` comes from the engine's own `can_call_council`, never re-derived — the caller passes
+it in for the reason check_retool is passed in rather than copied.
+*/
+static void na_build_council_call(NaBuf* w, int faction_id, bool eligible, bool called) {
+    na_write_head(w, "council.call", "turn", faction_id);
+    na_buf_printf(w, ",\"eligible\":%s", eligible ? "true" : "false");
+    na_buf_printf(w, ",\"council_has_convened\":%s",
+                  (*GameState & STATE_COUNCIL_HAS_CONVENED) ? "true" : "false");
+
+    na_write_metrics(w, faction_id, -1);
+
+    na_buf_puts(w, ",\"action_space\":[{\"id\":\"council:none\"");
+    na_buf_puts(w, ",\"action\":\"Do not convene the council\",\"category\":\"council\"}");
+    na_buf_puts(w, ",{\"id\":\"council:call\"");
+    na_buf_puts(w, ",\"action\":\"Convene the Planetary Council\",\"category\":\"council\"}]");
+    na_buf_puts(w, ",\"action_space_size\":2");
+
+    na_buf_printf(w, ",\"native_choice\":\"%s\"", called ? "council:call" : "council:none");
+}
+
+void na_observe_council_call(int faction_id, bool eligible, bool called) {
+    if (faction_id <= 0 || faction_id >= MaxPlayerNum) {
+        return;
+    }
+    NaBuf wb;
+    NaBuf* w = &wb;
+    na_buf_init(w);
+    na_build_council_call(w, faction_id, eligible, called);
+    na_buf_puts(w, ",\"tier\":\"deterministic\",\"applied\":\"native\"}");
+    na_log_record(w);
+    na_buf_free(w);
+}
+
+/*
+base.staple — nerve stapling, the first of na-yd4's 27.
+
+Chosen on decision-inputs.md's own rule: low frequency, high stakes. It fires only when a base
+is riotous enough and eligible enough for `consider_staple`'s eight-condition gate to open, and
+when it does it trades a lasting diplomatic and psych cost for immediate order. That is a
+judgement with a long tail, which is where a model's latency can pay for itself.
+
+Invariant 9 holds from the first record, which is what makes this bucket different from the
+NO_AI_PATH one: the native path IS the fallback. `consider_staple` already decides; this only
+writes down what it decided, so there is nothing to build before a record is safe.
+
+`eligible` is not a field because the record only exists when it is true. Emitting
+`"eligible":true` on every row would be a constant dressed as a fact.
+*/
+static void na_build_base_staple(NaBuf* w, int base_id, bool stapled) {
+    BASE& base = Bases[base_id];
+    const int faction_id = base.faction_id;
+
+    na_write_head(w, "base.staple", "base", faction_id);
+    na_buf_printf(w, ",\"base_id\":%d", base_id);
+    na_buf_puts(w, ",\"base\":\"");
+    na_buf_escaped(w, base.name);
+    na_buf_puts(w, "\"");
+
+    /*
+    The numbers consider_staple's inner test actually weighs, as facts rather than as the
+    comparison's result. The threshold is the engine's judgement and can change; the counts are
+    what it judged.
+    */
+    na_buf_printf(w, ",\"drone_total\":%d", (int)base.drone_total);
+    na_buf_printf(w, ",\"talent_total\":%d", (int)base.talent_total);
+    na_buf_printf(w, ",\"specialist_adjust\":%d", (int)base.specialist_adjust);
+    na_buf_printf(w, ",\"nerve_staple_count\":%d", (int)base.nerve_staple_count);
+    na_buf_printf(w, ",\"drone_riots_active\":%s",
+                  base.drone_riots_active() ? "true" : "false");
+    // Who the base was taken from — one of the gate's conditions, and the half of this
+    // decision that is not about order.
+    na_buf_printf(w, ",\"faction_id_former\":%d", (int)base.faction_id_former);
+
+    // The subject is the base. "Staple" is not a node in any datalinks, so an action label
+    // retrieves nothing (the base.hurry lesson, decision-inputs.md).
+    na_buf_puts(w, ",\"subjects\":[\"");
+    na_buf_escaped(w, base.name);
+    na_buf_puts(w, "\"]");
+
+    na_write_metrics(w, faction_id, base_id);
+    na_write_base_state(w, base_id);
+
+    na_buf_puts(w, ",\"action_space\":[{\"id\":\"staple:none\"");
+    na_buf_puts(w, ",\"action\":\"Leave the drones unstapled\",\"category\":\"staple\"}");
+    na_buf_puts(w, ",{\"id\":\"staple:now\"");
+    na_buf_puts(w, ",\"action\":\"Nerve staple the base\",\"category\":\"staple\"}]");
+    na_buf_puts(w, ",\"action_space_size\":2");
+
+    // The engine's answer, and the reason the record is worth writing at all — na-6db has
+    // nothing to A/B against otherwise.
+    na_buf_printf(w, ",\"native_choice\":\"%s\"", stapled ? "staple:now" : "staple:none");
+}
+
+void na_observe_base_staple(int base_id, bool stapled) {
+    if (base_id < 0 || base_id >= *BaseCount || base_id >= MaxBaseNum) {
+        return;
+    }
+    NaBuf wb;
+    NaBuf* w = &wb;
+    na_buf_init(w);
+    na_build_base_staple(w, base_id, stapled);
+    // consider_staple has already acted by the time this runs, so the tier is the engine's.
+    na_buf_puts(w, ",\"tier\":\"deterministic\",\"applied\":\"native\"}");
+    na_log_record(w);
+    na_buf_free(w);
+}
+
 void na_observe_base_retool(int base_id, int prev_id, int chosen) {
     if (base_id < 0 || base_id >= *BaseCount || base_id >= MaxBaseNum) {
         return;
@@ -4803,6 +4976,79 @@ void na_command_tick(void* hwnd_raw) {
                     cost, plr.energy_credits);
             fputs(",\"tier\":\"llm\",\"applied\":\"llm\"}\n", lf);
             fflush(lf);
+        }
+        return;
+    }
+
+    /*
+    "observe-corner <faction_id>" and "observe-council <faction_id>" — the two turn-scope
+    probes from na-yd4.
+
+    These two need a probe more than any other surface in the bucket. Cornering the energy
+    market requires economic victory enabled, the prerequisite tech, and enough credits; the
+    council needs a specific game state. Both fire a handful of times in a whole game, and
+    neither can be provoked. Without a probe the serialisers would be unverifiable in practice.
+
+    Serialiser only. `observe-corner` asks corner_market() for the live price and reports what
+    the decision WOULD look like, spending nothing; `observe-council` reports eligibility with
+    called=false, so it never convenes anything.
+    */
+    if (strncmp(line, "observe-corner ", 15) == 0) {
+        int faction_id = -1;
+        if (sscanf(line + 15, "%d", &faction_id) == 1
+        && faction_id > 0 && faction_id < MaxPlayerNum) {
+            const int cost = corner_market(faction_id);
+            na_observe_corner_market(faction_id, cost,
+                                     Factions[faction_id].energy_credits, false);
+            char detail[96];
+            snprintf(detail, sizeof(detail), "faction_id=%d cost=%d", faction_id, cost);
+            na_cmd_result("observe-corner", detail, true);
+        } else {
+            na_cmd_result("observe-corner", "need 0 < faction_id < 8", false);
+        }
+        return;
+    }
+
+    if (strncmp(line, "observe-council ", 16) == 0) {
+        int faction_id = -1;
+        if (sscanf(line + 16, "%d", &faction_id) == 1
+        && faction_id > 0 && faction_id < MaxPlayerNum) {
+            const bool eligible = can_call_council(faction_id, 0);
+            na_observe_council_call(faction_id, eligible, false);
+            char detail[96];
+            snprintf(detail, sizeof(detail), "faction_id=%d eligible=%d", faction_id, eligible);
+            na_cmd_result("observe-council", detail, true);
+        } else {
+            na_cmd_result("observe-council", "need 0 < faction_id < 8", false);
+        }
+        return;
+    }
+
+    /*
+    "observe-staple <base_id> [stapled]" — the base.staple probe.
+
+    Serialiser only: it reports what the decision would look like right now and stakes nobody.
+    `stapled` defaults to 0, so the bare invocation asks "what does the record say if the
+    engine declines" — the common case, and the one that never destroys anything.
+
+    Unlike the live path it does NOT gate on consider_staple's eligibility, because a probe that
+    went silent exactly when a base was ineligible could not be used to check the wire format,
+    which is the job it exists for. The gate is what makes the LIVE record meaningful; it would
+    make the probe useless.
+    */
+    if (strncmp(line, "observe-staple ", 15) == 0) {
+        int base_id = -1;
+        int stapled = 0;
+        const int got = sscanf(line + 15, "%d %d", &base_id, &stapled);
+        if (got >= 1 && base_id >= 0 && base_id < *BaseCount) {
+            na_observe_base_staple(base_id, stapled != 0);
+            char detail[96];
+            snprintf(detail, sizeof(detail), "base_id=%d stapled=%d", base_id, stapled != 0);
+            na_cmd_result("observe-staple", detail, true);
+        } else {
+            char detail[96];
+            snprintf(detail, sizeof(detail), "need 0 <= base_id < %d", *BaseCount);
+            na_cmd_result("observe-staple", detail, false);
         }
         return;
     }

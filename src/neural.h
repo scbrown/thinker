@@ -270,6 +270,40 @@ in the table.
 void na_observe_dialog(const char* file, const char* label, int chosen);
 
 /*
+Record an econ.corner_market decision — cornering the global energy market (na-yd4).
+
+OBSERVATION ONLY, and the highest-stakes surface in that bucket: a move toward economic
+victory, AI-only, firing at most a handful of times per game.
+
+`cost` is corner_market()'s own return and `credits_before` is read before the deduction, so
+the record shows the reserve the decision was actually made against rather than what was left
+afterwards.
+*/
+void na_observe_corner_market(int faction_id, int cost, int credits_before, bool cornered);
+
+/*
+Record a council.call decision — convening the Planetary Council (na-yd4).
+
+OBSERVATION ONLY. call_council decides internally and returns nothing useful, so `called` is a
+STATE TRANSITION observed by the caller: STATE_COUNCIL_HAS_CONVENED off before, on after.
+`eligible` is can_call_council's own answer, passed in rather than re-derived.
+*/
+void na_observe_council_call(int faction_id, bool eligible, bool called);
+
+/*
+Record a base.staple decision — nerve stapling, na-yd4's first surface.
+
+OBSERVATION ONLY. `consider_staple` (build.cpp) already decides, and the native path being the
+fallback is what makes this bucket safe to instrument from the first record: invariant 9 needs
+nothing built first.
+
+Called only when consider_staple's eligibility gate opened, so every record is a decision that
+was genuinely available rather than a base where stapling was never on the table. `stapled` is
+the engine's own answer, passed in rather than re-derived.
+*/
+void na_observe_base_staple(int base_id, bool stapled);
+
+/*
 Record a base.retool decision — the production switch that would cost banked minerals.
 
 OBSERVATION ONLY, and deliberately so. Unlike the other NO_AI_PATH surfaces this one already

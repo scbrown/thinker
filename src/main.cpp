@@ -75,6 +75,10 @@ int option_handler(void* user, const char* section, const char* name, const char
         cf->na_retool_observe = atoi(value);
     } else if (MATCH("na_dialog_observe")) {
         cf->na_dialog_observe = atoi(value);
+    } else if (MATCH("na_staple_observe")) {
+        cf->na_staple_observe = atoi(value);
+    } else if (MATCH("na_endgame_observe")) {
+        cf->na_endgame_observe = atoi(value);
     } else if (MATCH("llm_endpoint")) {
         char* p = strtrim(buf);
         if (strlen(p)) {

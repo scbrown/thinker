@@ -275,18 +275,36 @@ int hurry_item(int base_id, int mins, int cost) {
 
 int consider_staple(int base_id) {
     BASE* b = &Bases[base_id];
-    if (can_staple(base_id)
-    && (!un_charter() || (*SunspotDuration > 1 && *DiffLevel >= DIFF_LIBRARIAN))
-    && base_can_riot(base_id, true)
-    && b->nerve_staple_count < 4
-    && b->pop_size / 4 >= b->nerve_staple_count
-    && b->drone_total + b->specialist_adjust > 0
-    && (b->faction_id == b->faction_id_former || !is_alive(b->faction_id_former)
-    || want_revenge(b->faction_id, b->faction_id_former))) {
+    /*
+    Hoisted into a named bool so the base.staple observation can report the gate rather than
+    re-derive it (na-yd4). These eight conditions are the definition of "stapling is even on
+    the table here"; a copy of them in the emitter would be a second definition that drifts,
+    which is the mistake check_retool taught. The expression is unchanged — same operands, same
+    order, same short-circuit.
+    */
+    const bool eligible = can_staple(base_id)
+        && (!un_charter() || (*SunspotDuration > 1 && *DiffLevel >= DIFF_LIBRARIAN))
+        && base_can_riot(base_id, true)
+        && b->nerve_staple_count < 4
+        && b->pop_size / 4 >= b->nerve_staple_count
+        && b->drone_total + b->specialist_adjust > 0
+        && (b->faction_id == b->faction_id_former || !is_alive(b->faction_id_former)
+        || want_revenge(b->faction_id, b->faction_id_former));
+    bool stapled = false;
+    if (eligible) {
         if (b->drone_riots_active() || b->drone_total + b->specialist_adjust
         > b->talent_total + (b->nutrient_surplus > 0 && b->mineral_surplus > 0)) {
             action_staple(base_id);
+            stapled = true;
         }
+    }
+    /*
+    Only when the decision was actually available. A record for every base every turn would be
+    almost entirely "stapling was not an option here", which is not a decision anyone made and
+    would swamp the log — the same reason base.retool records only when the penalty applies.
+    */
+    if (conf.na_staple_observe && eligible) {
+        na_observe_base_staple(base_id, stapled);
     }
     return 0;
 }
