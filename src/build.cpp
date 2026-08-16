@@ -1087,7 +1087,18 @@ static int select_build_inner(int base_id) {
             }
         }
         if (t == SecretProject && gov & GOV_MAY_PROD_SP && minerals >= p->project_limit) {
-            if ((choice = find_project(base_id, Wgov)) != GOV_NONE) {
+            choice = find_project(base_id, Wgov);
+            /*
+            Neural Amplifier (na-yd4): Wgov is forwarded so the record scores every option with
+            the SAME weights find_project just used. Reconstructing them in the emitter would
+            produce a ranking that disagrees with the engine's for invisible reasons.
+
+            GOV_NONE is file-local here, so the sentinel is translated at this call site.
+            */
+            if (conf.na_project_observe) {
+                na_observe_base_project(base_id, choice, choice == GOV_NONE, Wgov);
+            }
+            if (choice != GOV_NONE) {
                 if (choice >= 0 || choice == -FAC_SKUNKWORKS) {
                     score += 40*p->defense_modifier;
                 }

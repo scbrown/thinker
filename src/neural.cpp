@@ -2644,6 +2644,113 @@ static void na_build_base_retool(NaBuf* w, int base_id, int prev_id, int chosen)
 }
 
 /*
+base.project — which secret project to start, from na-yd4's 27.
+
+The richest action space in the bucket, and the one where a model has most to add: a secret
+project is the largest single commitment a base makes, it locks minerals for many turns, and
+only one faction on the planet can have each. `find_project` picks by `facility_score` against
+the governor weights — a competent local heuristic with no sense of what the rest of the game is
+doing.
+
+THE SCORES ARE THE ENGINE'S OWN, from the same `facility_score(item, Wgov)` the chooser uses,
+with the same Wgov passed down from the caller. Recomputing them here against locally-guessed
+weights would produce a ranking that disagrees with the engine's for reasons no reader could
+see — worse than omitting them, because it would carry the engine's authority.
+
+Only genuinely buildable projects are offered: `can_build` is the engine's own availability
+test, the same gate the chooser applies. An option the engine would refuse is not an option, and
+offering one invites the brain to "decide" something that was never available (the base.hurry
+affordability lesson).
+*/
+static void na_build_base_project(NaBuf* w, int base_id, int chosen, bool declined,
+                                  WItem& Wgov) {
+    BASE& base = Bases[base_id];
+    const int faction_id = base.faction_id;
+
+    na_write_head(w, "base.project", "base", faction_id);
+    na_buf_printf(w, ",\"base_id\":%d", base_id);
+    na_buf_puts(w, ",\"base\":\"");
+    na_buf_escaped(w, base.name);
+    na_buf_puts(w, "\"");
+    na_buf_printf(w, ",\"minerals_accumulated\":%d", base.minerals_accumulated);
+
+    na_write_metrics(w, faction_id, base_id);
+    na_write_base_state(w, base_id);
+
+    na_buf_puts(w, ",\"action_space\":[{\"id\":\"project:none\"");
+    na_buf_puts(w, ",\"action\":\"Start no secret project here\",\"category\":\"project\"}");
+    int offered = 1;
+    for (int i = SP_ID_First; i <= SP_ID_Last && offered < 32; i++) {
+        if (!can_build(base_id, i)) {
+            continue;
+        }
+        na_buf_printf(w, ",{\"id\":\"project:%d\",\"action\":\"", i);
+        na_buf_escaped(w, prod_name(-i));
+        na_buf_puts(w, "\",\"category\":\"project\"");
+        // The engine's own valuation under THIS base's governor weights — the number the
+        // chooser actually maximises, not a reconstruction of it.
+        na_buf_printf(w, ",\"engine_score\":%d", facility_score((FacilityId)i, Wgov));
+        // How many of our own bases are already on it. The chooser caps duplicates; this is
+        // the fact behind the cap rather than the cap itself.
+        na_buf_printf(w, ",\"already_building\":%d", prod_count(-i, faction_id, base_id));
+        na_buf_puts(w, "}");
+        offered++;
+    }
+    na_buf_printf(w, "],\"action_space_size\":%d", offered);
+    // Says so when the walk stopped early rather than presenting a truncated list as the whole
+    // one — the rule na_audit already follows for its id lists.
+    na_buf_printf(w, ",\"action_space_truncated\":%s", offered >= 32 ? "true" : "false");
+
+    /*
+    Projects ARE nodes in the datalinks — unlike "continue"/"switch" or "staple" — so naming
+    them is what makes the grounding hop reachable at all (decision-inputs.md).
+    */
+    na_buf_puts(w, ",\"subjects\":[");
+    int named = 0;
+    for (int i = SP_ID_First; i <= SP_ID_Last && named < 32; i++) {
+        if (!can_build(base_id, i)) {
+            continue;
+        }
+        na_buf_printf(w, "%s\"", named ? "," : "");
+        na_buf_escaped(w, prod_name(-i));
+        na_buf_puts(w, "\"");
+        named++;
+    }
+    na_buf_puts(w, "]");
+
+    if (declined) {
+        na_buf_puts(w, ",\"native_choice\":\"project:none\"");
+    } else if (chosen < 0) {
+        // A negated facility id. Covers the projects themselves and the chooser's two
+        // PREREQUISITE answers — Skunkworks and the Subspace Generator — which are named as
+        // themselves rather than flattened into a decline, for the reason base.satellite names
+        // the aerospace complex.
+        na_buf_printf(w, ",\"native_choice\":\"project:%d\"", -chosen);
+    } else {
+        // find_project can also answer with a MISSILE unit id. Kept distinct: a base told to
+        // build a planet buster neither declined a project nor started one.
+        na_buf_printf(w, ",\"native_choice\":\"unit:%d\"", chosen);
+    }
+    na_buf_printf(w, ",\"native_choice_item\":%d", chosen);
+    na_buf_puts(w, ",\"native_choice_name\":\"");
+    na_buf_escaped(w, prod_name(chosen));
+    na_buf_puts(w, "\"");
+}
+
+void na_observe_base_project(int base_id, int chosen, bool declined, WItem& Wgov) {
+    if (base_id < 0 || base_id >= *BaseCount || base_id >= MaxBaseNum) {
+        return;
+    }
+    NaBuf wb;
+    NaBuf* w = &wb;
+    na_buf_init(w);
+    na_build_base_project(w, base_id, chosen, declined, Wgov);
+    na_buf_puts(w, ",\"tier\":\"deterministic\",\"applied\":\"native\"}");
+    na_log_record(w);
+    na_buf_free(w);
+}
+
+/*
 base.satellite — which orbital to build, from na-yd4's 27.
 
 Unusual in this bucket for having a genuinely ENUMERABLE action space. Most surfaces here are
@@ -5073,6 +5180,37 @@ void na_command_tick(void* hwnd_raw) {
                     cost, plr.energy_credits);
             fputs(",\"tier\":\"llm\",\"applied\":\"llm\"}\n", lf);
             fflush(lf);
+        }
+        return;
+    }
+
+    /*
+    "observe-project <base_id>" — the base.project probe.
+
+    Serialiser only, and it reports a DECLINE for the same reason observe-satellite does:
+    find_project reads `random()` in two places, so calling it here could both give an answer
+    the game will not repeat and consume a roll the real decision was going to make.
+
+    The weights come from `governor_priorities`, which is exactly how select_build builds the
+    Wgov it hands the chooser — so the engine_score column the probe prints is the real one,
+    not an approximation of it. That column is the part worth verifying: it is the engine's own
+    ranking, and getting it from a different weight source would make the probe agree with
+    nothing.
+    */
+    if (strncmp(line, "observe-project ", 16) == 0) {
+        int base_id = -1;
+        if (sscanf(line + 16, "%d", &base_id) == 1
+        && base_id >= 0 && base_id < *BaseCount) {
+            WItem Wgov;
+            governor_priorities(Bases[base_id], Wgov);
+            na_observe_base_project(base_id, 0, true, Wgov);
+            char detail[96];
+            snprintf(detail, sizeof(detail), "base_id=%d (reported as a decline)", base_id);
+            na_cmd_result("observe-project", detail, true);
+        } else {
+            char detail[96];
+            snprintf(detail, sizeof(detail), "need 0 <= base_id < %d", *BaseCount);
+            na_cmd_result("observe-project", detail, false);
         }
         return;
     }

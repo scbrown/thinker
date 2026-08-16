@@ -270,6 +270,20 @@ in the table.
 void na_observe_dialog(const char* file, const char* label, int chosen);
 
 /*
+Record a base.project decision — which secret project a base starts (na-yd4).
+
+OBSERVATION ONLY. find_project already chooses; this writes down what it chose along with the
+engine's own `facility_score` for every buildable project under the SAME governor weights the
+chooser used — which is why Wgov is passed in rather than reconstructed.
+
+`chosen` has three shapes and they are kept distinct: a negated facility id (a project, or the
+chooser's Skunkworks / Subspace Generator prerequisite answers), a positive missile unit id, or
+the GOV_NONE sentinel — the last translated by the caller into `declined`, since that sentinel
+is file-local to build.cpp.
+*/
+void na_observe_base_project(int base_id, int chosen, bool declined, WItem& Wgov);
+
+/*
 Record a base.satellite decision — which orbital this base builds (na-yd4).
 
 OBSERVATION ONLY. find_satellite already chooses; this writes down what it chose and, unusually

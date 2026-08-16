@@ -298,6 +298,14 @@ struct Config {
     rather than an absent decision.
     */
     int na_satellite_observe = 0;
+    /*
+    Neural Amplifier: record base.project — which secret project a base starts (na-yd4). 0
+    keeps stock behaviour.
+
+    Observation only, and the richest action space of the bucket: every buildable project with
+    the engine's own facility_score under this base's governor weights.
+    */
+    int na_project_observe = 0;
     int social_ai = 1;
     int social_ai_bias = 10;
     int tech_balance = 0;
