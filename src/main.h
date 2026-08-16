@@ -323,6 +323,14 @@ struct Config {
     list, and the record carries the score and cohort that produced it.
     */
     int na_defend_goal_observe = 0;
+    /*
+    Neural Amplifier: record base.name naming events (na-yd4). 0 keeps stock behaviour.
+
+    The payload is which name POOL was used, not the name. "sector_fallback" means every named
+    pool was exhausted — a content problem that otherwise shows up only as bases called
+    "Sector 41".
+    */
+    int na_name_observe = 0;
     int social_ai = 1;
     int social_ai_bias = 10;
     int tech_balance = 0;

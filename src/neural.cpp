@@ -2644,6 +2644,47 @@ static void na_build_base_retool(NaBuf* w, int base_id, int prev_id, int chosen)
 }
 
 /*
+base.name — what a new base is called, from na-yd4's 27.
+
+The lowest-stakes surface in the bucket and instrumented last for exactly that reason, under
+this bead's own rule. It earns its record on a different axis: WHICH POOL the name came from is
+an operational signal nothing else reports.
+
+`mod_name_base` falls through four sources in order — the faction's water list, the faction's
+land list, generic two-word combinations, and finally "Sector N". A base called "Sector 41" means
+every named pool was exhausted, which is a content problem surfacing as gameplay and is otherwise
+invisible. So the record's real payload is `source`, not the name.
+
+NO ACTION SPACE, and that is deliberate rather than an omission. The candidate names come from
+files read inside this function; enumerating them would mean re-reading those files on every
+base founding to build a list nobody applies. This is an observation of a naming EVENT, and it
+takes the compact shape the dialog and divergence records use — no tier, no applied, so nothing
+counts it as a decision that was made.
+*/
+void na_name_base_observed(int faction_id, const char* name, bool sea_base, const char* source) {
+    if (!conf.na_name_observe || faction_id <= 0 || faction_id >= MaxPlayerNum) {
+        return;
+    }
+    NaBuf wb;
+    NaBuf* w = &wb;
+    na_buf_init(w);
+    na_buf_puts(w, "{\"record\":\"base_name\",\"engine\":\"thinker\"");
+    na_buf_printf(w, ",\"surface_id\":\"base.name\"");
+    na_buf_printf(w, ",\"turn\":%d,\"faction_id\":%d", *CurrentTurn, faction_id);
+    na_buf_puts(w, ",\"name\":\"");
+    na_buf_escaped(w, name ? name : "");
+    na_buf_puts(w, "\"");
+    na_buf_printf(w, ",\"sea_base\":%s", sea_base ? "true" : "false");
+    na_buf_printf(w, ",\"source\":\"%s\"", source);
+    // The flag that makes this actionable: everything named has run out.
+    na_buf_printf(w, ",\"pools_exhausted\":%s",
+                  strcmp(source, "sector_fallback") == 0 ? "true" : "false");
+    na_buf_puts(w, "}");
+    na_log_record(w);
+    na_buf_free(w);
+}
+
+/*
 base.defend_goal — how many defenders a base should hold, from na-yd4's 27.
 
 A RELATIVE decision, and that is the whole character of it. move_upkeep scores every base of a

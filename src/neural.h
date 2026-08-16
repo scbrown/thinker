@@ -270,6 +270,21 @@ in the table.
 void na_observe_dialog(const char* file, const char* label, int chosen);
 
 /*
+Record a base.name naming event (na-yd4).
+
+NOT a world view and NOT a decision record: no action space, no tier, no applied. The candidate
+names live in files read inside mod_name_base, so enumerating them would mean re-reading those
+files per base founding to build a list nobody applies.
+
+The payload is `source` — which of the four pools the name came from. "sector_fallback" means
+every named pool was exhausted, a content problem that otherwise surfaces only as bases called
+"Sector 41".
+
+Checks conf.na_name_observe itself, so the four call sites in mod_name_base stay one line each.
+*/
+void na_name_base_observed(int faction_id, const char* name, bool sea_base, const char* source);
+
+/*
 Record a base.defend_goal decision — how many defenders a base should hold (na-yd4).
 
 OBSERVATION ONLY. move_upkeep already assigns the tier by percentile across the faction's whole

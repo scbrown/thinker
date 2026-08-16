@@ -2141,6 +2141,7 @@ void __cdecl mod_name_base(int faction_id, char* name, bool save_offset, bool se
                         if (save_offset) {
                             f.base_sea_name_offset++;
                         }
+                        na_name_base_observed(faction_id, name, sea_base, "faction_sea");
                         return;
                     }
                 }
@@ -2162,6 +2163,7 @@ void __cdecl mod_name_base(int faction_id, char* name, bool save_offset, bool se
                 std::advance(it, seed);
                 if (!has_item(all_names, it->c_str())) {
                     strcpy_n(name, MaxBaseNameLen, it->c_str());
+                    na_name_base_observed(faction_id, name, sea_base, "faction_land");
                     return;
                 }
             }
@@ -2195,6 +2197,7 @@ void __cdecl mod_name_base(int faction_id, char* name, bool save_offset, bool se
             snprintf(name, MaxBaseNameLen, "%s", land_names[a].c_str());
         }
         if (strlen(name) >= 2 && !all_names.count(name)) {
+            na_name_base_observed(faction_id, name, sea_base, "generic_pool");
             return;
         }
     }
@@ -2202,6 +2205,13 @@ void __cdecl mod_name_base(int faction_id, char* name, bool save_offset, bool se
         name[0] = '\0';
         snprintf(name, MaxBaseNameLen, "Sector %d", i);
         if (!all_names.count(name)) {
+            /*
+            Neural Amplifier (na-yd4): the LAST resort, and the one worth seeing in a log. A
+            base called "Sector 41" means every named pool was exhausted — the faction list,
+            the generic combinations, all of it. That is a content problem showing up as
+            gameplay, and it is invisible unless the source is recorded.
+            */
+            na_name_base_observed(faction_id, name, sea_base, "sector_fallback");
             return;
         }
     }

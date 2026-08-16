@@ -87,6 +87,8 @@ int option_handler(void* user, const char* section, const char* name, const char
         cf->na_tech_steal_observe = atoi(value);
     } else if (MATCH("na_defend_goal_observe")) {
         cf->na_defend_goal_observe = atoi(value);
+    } else if (MATCH("na_name_observe")) {
+        cf->na_name_observe = atoi(value);
     } else if (MATCH("llm_endpoint")) {
         char* p = strtrim(buf);
         if (strlen(p)) {
