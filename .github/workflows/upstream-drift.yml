@@ -1,0 +1,108 @@
+name: Upstream drift
+
+# Answers one question on a schedule: would merging induktio/thinker still
+# produce an adapter that builds and keeps all of its seams?
+#
+# v5.5 was six commits and +5163/-2190 by the time anyone looked, and it had
+# moved the entire turn loop into a new file. That would have been a far smaller
+# thing to absorb at commit one. Nothing told us it had happened, so this job's
+# only job is to notice.
+#
+# It never pushes and never resolves anything. A red run is an invitation to
+# sync, not a failure of this branch.
+
+on:
+  schedule:
+    # Weekly, Monday 06:00 UTC. Upstream tags a release every few months, so
+    # anything more frequent is noise; anything less and the gap is a refactor
+    # again rather than a handful of commits.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  trial-merge:
+    name: Trial-merge upstream and re-check the adapter
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: a merge base cannot be computed from a shallow clone.
+          fetch-depth: 0
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/induktio/thinker
+          git fetch --no-tags upstream master
+
+      - name: Report the gap
+        run: |
+          base=$(git merge-base HEAD upstream/master)
+          ahead=$(git rev-list --count "$base"..upstream/master)
+          echo "upstream is $ahead commit(s) ahead of the merge base"
+          git log --oneline "$base"..upstream/master
+          git diff --stat "$base" upstream/master
+          echo "UPSTREAM_AHEAD=$ahead" >> "$GITHUB_ENV"
+
+      - name: Trial-merge
+        id: merge
+        run: |
+          git config user.name "upstream-drift"
+          git config user.email "noreply@github.com"
+          if git merge --no-commit --no-ff upstream/master; then
+            echo "clean=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "clean=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::upstream/master no longer merges cleanly"
+            echo "conflicted files:"
+            git diff --name-only --diff-filter=U
+          fi
+
+      # A conflicted merge is expected news, not a crash — the interesting
+      # question is what happens to the seams, and that needs a resolved tree.
+      # So stop here and say so, rather than building a tree with markers in it.
+      - name: Stop if the merge conflicted
+        if: steps.merge.outputs.clean == 'false'
+        run: |
+          echo "Conflicts above. Sync by hand; the seam and build checks below"
+          echo "cannot say anything useful about a tree with conflict markers."
+          exit 1
+
+      # The cheap check first: it needs no toolchain and catches the failure a
+      # compiler cannot see. v5.5 deleted four seam host functions outright.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Seams survive the merge
+        run: |
+          python3 tests/check_seams.py
+          python3 tests/test_check_seams.py
+          python3 tests/check_native_choice_withheld.py
+
+      - name: Install the 32-bit MinGW toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential ninja-build g++-mingw-w64-i686-posix
+      - name: Install CMake
+        # CMakePresets.json requires >= 3.31; the runner image's cmake lags.
+        uses: lukka/get-cmake@latest
+        with:
+          cmakeVersion: "3.31.6"
+
+      - name: Build the merged tree
+        run: |
+          cmake --preset ninja-develop
+          cmake --build --preset ninja-develop
+
+      - name: Summarise
+        if: always()
+        run: |
+          {
+            echo "### Upstream drift"
+            echo
+            echo "- upstream ahead of merge base: **${UPSTREAM_AHEAD:-unknown}** commit(s)"
+            echo "- trial merge: **${{ steps.merge.outputs.clean == 'true' && 'clean' || 'CONFLICTED' }}**"
+          } >> "$GITHUB_STEP_SUMMARY"
