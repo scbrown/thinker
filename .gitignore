@@ -10,4 +10,4 @@ utils/
 .idea/
 
 # CMake work dir
-.cmake/
+.cmake/__pycache__/

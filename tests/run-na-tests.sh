@@ -1,10 +1,18 @@
 #!/usr/bin/env bash
-# Build and run the Neural Amplifier wire tests.
+# Build and run the Neural Amplifier checks that need no game.
 #
-# Needs a 32-bit MinGW cross-compiler and Wine, and NO game: src/na_http.cpp
-# links no engine headers, so the DLL's one piece of network code runs as a
-# standalone exe. Everything else in the adapter needs a real SMAC install to
-# exercise; this does not, which is why it is the part that can regress in CI.
+# Two kinds, and the first kind is the cheap one:
+#
+#   SOURCE PROPERTIES — read the tree, assert something structural about it.
+#     No build, no Wine, no network. These catch the failures that are
+#     invisible to a compiler: a seam dropped by a merge, the native answer
+#     leaking into a request body.
+#
+#   WIRE TESTS — src/na_http.cpp links no engine headers, so the DLL's one
+#     piece of network code builds standalone and runs under Wine against a
+#     stub server. Everything else in the adapter needs a real SMAC install to
+#     exercise; this does not, which is why it is the part that can regress
+#     in CI.
 #
 #   tests/run-na-tests.sh              stub server only
 #   tests/run-na-tests.sh --with-orchestrator
@@ -19,6 +27,14 @@ root="$(dirname "$here")"
 na="${NA_DIR:-$root/../NeuralAmplifier}"
 stub_port="${NA_STUB_PORT:-8099}"
 orch_port="${NA_ORCH_PORT:-8077}"
+
+# Source properties first: they need nothing, they run in under a second, and
+# a tree that fails them is not worth spending a build on.
+python3 "$here/check_seams.py"
+python3 "$here/test_check_seams.py" >/dev/null && echo "ok    the seam guard can still fail (11 mutations refused)"
+python3 "$here/check_native_choice_withheld.py" >/dev/null \
+    && echo "ok    every decide surface withholds the native answer"
+echo
 
 # Presets resolve against the working directory, not the -S path, so this has to
 # run from the Thinker root — the caller's cwd is usually a NeuralAmplifier checkout.
