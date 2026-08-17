@@ -69,7 +69,7 @@ void governor_priorities(BASE& base, WItem& Wgov) {
     Faction& f = Factions[base.faction_id];
     uint32_t gov = base.governor_flags;
     if (is_human(base.faction_id)) {
-        if (conf.na_governor_policy && !na_gov_priorities_set(gov)) {
+        if (conf.na.governor_policy && !na_gov_priorities_set(gov)) {
             na_governor_policy(base, Wgov);
         } else {
             Wgov.AI_growth = (gov & GOV_PRIORITY_EXPLORE ? 4 : 1);
@@ -88,7 +88,7 @@ void governor_priorities(BASE& base, WItem& Wgov) {
         of this surface; the flags alone would only record the input.
         */
         na_observe_base_governor_config(&base - Bases,
-            conf.na_governor_policy && !na_gov_priorities_set(gov) ? 1
+            conf.na.governor_policy && !na_gov_priorities_set(gov) ? 1
                 : (na_gov_priorities_set(gov) ? 2 : 0),
             Wgov.AI_growth, Wgov.AI_tech, Wgov.AI_wealth,
             Wgov.AI_power, Wgov.AI_fight);

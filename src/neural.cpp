@@ -6,6 +6,7 @@
 #include "build.h"
 #include "basewin.h"
 #include "gui_dialog.h"
+#include "lib/ini.h"
 
 /*
 The observation sink.
@@ -259,7 +260,7 @@ static void na_write_head(NaBuf* w, const char* surface_id, const char* scope, i
         na_trace_seq, (unsigned)(*CurrentTurn + 1));
     na_buf_printf(w, ",\"trace\":{\"traceparent\":\"%s\"}", na_last_trace);
     na_write_fairness(w, faction_id);
-    if (conf.na_board_state) {
+    if (conf.na.board_state) {
         na_write_bases(w, faction_id);
     }
 }
@@ -268,7 +269,7 @@ static void na_write_head(NaBuf* w, const char* surface_id, const char* scope, i
 Tell the orchestrator how long this adapter will wait before it stops caring.
 
 Not a request and not a hint: it is a statement of fact about this engine thread. After
-conf.llm_timeout_ms the socket read gives up, the deterministic tier's answer is applied, and
+conf.na.llm_timeout_ms the socket read gives up, the deterministic tier's answer is applied, and
 the turn moves on (invariant 9). Anything that arrives afterwards reaches nobody.
 
 Written because the orchestrator had no way to learn that number, and the cost of not knowing
@@ -299,8 +300,8 @@ contract, which is exactly true here. The orchestrator also collapses <= 0 to ab
 (contract.py decision_deadline_seconds), so both ends agree even if one is older than the other.
 */
 static void na_write_decision_deadline(NaBuf* w) {
-    if (conf.llm_timeout_ms > 0) {
-        na_buf_printf(w, ",\"decision_deadline_ms\":%d", conf.llm_timeout_ms);
+    if (conf.na.llm_timeout_ms > 0) {
+        na_buf_printf(w, ",\"decision_deadline_ms\":%d", conf.na.llm_timeout_ms);
     }
 }
 
@@ -1096,7 +1097,7 @@ void na_observe_base_governor_config(int base_id, int applied, int growth,
     BASE& b = Bases[base_id];
     if (!na_gov_probing) {
         // Opt-in only: an unconfigured build writes nothing at all.
-        if (!conf.na_governor_policy && !llm_enabled(b.faction_id)) {
+        if (!conf.na.governor_policy && !llm_enabled(b.faction_id)) {
             return;
         }
         if (!na_gov_seen_init) {
@@ -1169,7 +1170,7 @@ void na_observe_base_abandon(int base_id, int abandon, int item_id) {
         return;
     }
     BASE& b = Bases[base_id];
-    if (!na_abandon_probing && !conf.na_abandon_policy && !llm_enabled(b.faction_id)) {
+    if (!na_abandon_probing && !conf.na.abandon_policy && !llm_enabled(b.faction_id)) {
         return;
     }
     NaBuf w;
@@ -1235,7 +1236,7 @@ void na_observe_base_hq_escape(int base_id, int dest_base_id, int relocate) {
         return;
     }
     BASE& b = Bases[base_id];
-    if (!na_hq_probing && !conf.na_hq_escape_policy && !llm_enabled(b.faction_id)) {
+    if (!na_hq_probing && !conf.na.hq_escape_policy && !llm_enabled(b.faction_id)) {
         return;
     }
     Faction& plr = Factions[b.faction_id];
@@ -1521,7 +1522,7 @@ Everything this reports is already computed and already written to na-observatio
 orchestrator never read that file, so its picture of its own effect was absent rather than
 incomplete — it could not tell an applied order from one the engine silently dropped.
 
-BOUNDED HARD, and deliberately not on conf.llm_timeout_ms. A decision may block the game for as
+BOUNDED HARD, and deliberately not on conf.na.llm_timeout_ms. A decision may block the game for as
 long as an agent needs to think, because a turn-based game pausing for a player is what it
 already does. Reporting what already happened has earned no such licence: it runs after the
 decision, several times per base-turn, and a slow or absent collector must cost the game
@@ -1550,7 +1551,7 @@ cannot parse, an id that is not legal here. That is invariant 9 stated as
 control flow: there is exactly one `return` that is not the native choice, and it
 is guarded by both a parse and a legality check.
 
-The call is synchronous on the engine thread, bounded by conf.llm_timeout_ms.
+The call is synchronous on the engine thread, bounded by conf.na.llm_timeout_ms.
 Synchronous because the engine is not thread-safe and mod_base_build's signature
 (one int in, one int out) has nowhere to park a decision and resume it later;
 bounded because a turn-based game can afford a short pause and cannot afford an
@@ -1632,7 +1633,7 @@ int na_decide_base_production(int base_id, int native_choice, int has_gov) {
         na_buf_puts(&w, "}");
         NaBuf body;
         if (!w.failed && na_http_post(llm_endpoint.c_str(), "/decide", w.data,
-                                      conf.llm_timeout_ms, &body)) {
+                                      conf.na.llm_timeout_ms, &body)) {
             char action_id[64];
             int item = 0;
             if (!na_json_string(body.data, "action_id", action_id, sizeof(action_id))) {
@@ -2057,7 +2058,7 @@ int na_decide_faction_tech(int faction_id, int native_choice) {
         na_buf_puts(&w, "}");
         NaBuf body;
         if (!w.failed && na_http_post(llm_endpoint.c_str(), "/decide", w.data,
-                                      conf.llm_timeout_ms, &body)) {
+                                      conf.na.llm_timeout_ms, &body)) {
             char action_id[64];
             int tech_id = 0;
             if (!na_json_string(body.data, "action_id", action_id, sizeof(action_id))) {
@@ -2347,7 +2348,7 @@ void na_decide_faction_se(int faction_id, int* field, int* model) {
         na_buf_puts(&w, "}");
         NaBuf body;
         if (!w.failed && na_http_post(llm_endpoint.c_str(), "/decide", w.data,
-                                      conf.llm_timeout_ms, &body)) {
+                                      conf.na.llm_timeout_ms, &body)) {
             char action_id[64];
             int f = -1;
             int m = -1;
@@ -2662,7 +2663,7 @@ What it records is the RESULT plus the inputs that constrain it, which is what a
 surface would compare: the tile bitmask, the specialist split, and the three yields.
 */
 void na_observe_base_yield(int base_id) {
-    if (!conf.na_yield_observe || base_id < 0 || base_id >= *BaseCount
+    if (!conf.na.yield_observe || base_id < 0 || base_id >= *BaseCount
     || base_id >= MaxBaseNum) {
         return;
     }
@@ -2726,7 +2727,7 @@ takes the compact shape the dialog and divergence records use — no tier, no ap
 counts it as a decision that was made.
 */
 void na_name_base_observed(int faction_id, const char* name, bool sea_base, const char* source) {
-    if (!conf.na_name_observe || faction_id <= 0 || faction_id >= MaxPlayerNum) {
+    if (!conf.na.name_observe || faction_id <= 0 || faction_id >= MaxPlayerNum) {
         return;
     }
     NaBuf wb;
@@ -3360,7 +3361,7 @@ int na_decide_base_hurry(int base_id, int item, int minerals_before, int credits
         na_buf_puts(&w, "}");
         NaBuf body;
         if (!w.failed && na_http_post(llm_endpoint.c_str(), "/decide", w.data,
-                                      conf.llm_timeout_ms, &body)) {
+                                      conf.na.llm_timeout_ms, &body)) {
             char action_id[64];
             if (!na_json_string(body.data, "action_id", action_id, sizeof(action_id))) {
                 snprintf(detail, sizeof(detail), "no action_id in reply");
@@ -4826,7 +4827,7 @@ void na_observe_dialog(const char* file, const char* label, int chosen) {
 The hook itself. Calls through FIRST and records the result, because the engine's return is the
 answer and an observation written before the answer exists would have nothing to say.
 
-Reads `conf.na_dialog_observe` per call rather than deciding at install time, so the flag can
+Reads `conf.na.dialog_observe` per call rather than deciding at install time, so the flag can
 be toggled without a restart and so an unconfigured build does exactly what it did before.
 */
 /*
@@ -4886,7 +4887,7 @@ static int na_route_dialog(const NaDialogEntry* entry, int base_id) {
     int button = -1;
     NaBuf body;
     if (!w.failed && na_http_post(llm_endpoint.c_str(), "/decide", w.data,
-                                  conf.llm_timeout_ms, &body)) {
+                                  conf.na.llm_timeout_ms, &body)) {
         char action_id[64];
         if (na_json_string(body.data, "action_id", action_id, sizeof(action_id))) {
             if (strcmp(action_id, "staple:now") == 0) {
@@ -4928,7 +4929,7 @@ int __cdecl na_popp(const char* filename, const char* label, int a3, const char*
     adapter refuses to do everywhere else. An unrecognised dialog is not auto-answered either,
     for the same reason: the table cannot vouch for a label it does not know.
 
-    ONLY WHEN ASKED. conf.na_dialog_auto is off by default, so an unconfigured build reaches the
+    ONLY WHEN ASKED. conf.na.dialog_auto is off by default, so an unconfigured build reaches the
     engine exactly as before.
     */
     /*
@@ -4937,20 +4938,20 @@ int __cdecl na_popp(const char* filename, const char* label, int a3, const char*
     DECISION entries and auto-answer only to NOTICE — but relying on that would make the two
     features' correctness depend on the table's shape rather than on their own conditions.
     */
-    if (conf.na_dialog_route) {
+    if (conf.na.dialog_route) {
         const int routed = na_route_dialog(na_dialog_lookup(filename, label), *CurrentBaseID);
         if (routed >= 0) {
-            if (conf.na_dialog_observe) {
+            if (conf.na.dialog_observe) {
                 na_observe_dialog_routed(filename, label, routed);
             }
             return routed;
         }
     }
-    if (conf.na_dialog_auto && na_headless()) {
+    if (conf.na.dialog_auto && na_headless()) {
         const NaDialogEntry* entry = na_dialog_lookup(filename, label);
         if (entry && entry->kind == NA_DIALOG_NOTICE) {
             na_dialog_auto_answered++;
-            if (conf.na_dialog_observe) {
+            if (conf.na.dialog_observe) {
                 // Recorded BEFORE returning, and flagged, so a run's log shows exactly which
                 // dialogs were answered on its behalf rather than by the engine.
                 na_observe_dialog_auto(filename, label, 0);
@@ -4959,7 +4960,7 @@ int __cdecl na_popp(const char* filename, const char* label, int a3, const char*
         }
     }
     const int chosen = na_engine_popp(filename, label, a3, pcx_filename, fn);
-    if (conf.na_dialog_observe) {
+    if (conf.na.dialog_observe) {
         na_observe_dialog(filename, label, chosen);
     }
     return chosen;
@@ -6234,4 +6235,71 @@ void na_input_start(void* hwnd_raw) {
     if (h) {
         CloseHandle(h);
     }
+}
+
+// ---------------------------------------------------------------- config
+
+/*
+thinker.ini -> NaConfig, kept here rather than in main.cpp's option_handler.
+
+The 22 settings used to be fifty lines of `else if (MATCH(...))` inside that
+function, in a file upstream edits constantly. A table says the same thing in
+one line each and puts the whole ini-key-to-field mapping somewhere a reader can
+see at once.
+
+The KEYS still carry the na_ prefix the fields dropped. That asymmetry is
+deliberate: thinker.ini is a user-facing contract, and renaming its keys would
+silently reset every configured option to its default on the next launch — the
+worst kind of breakage, because the game would start and play, just not the way
+it was configured to.
+*/
+struct NaOption {
+    const char* key;
+    int NaConfig::* field;
+};
+
+static const NaOption NaOptions[] = {
+    {"llm_factions", &NaConfig::llm_factions},
+    {"llm_timeout_ms", &NaConfig::llm_timeout_ms},
+    {"na_governor_policy", &NaConfig::governor_policy},
+    {"na_abandon_policy", &NaConfig::abandon_policy},
+    {"na_hq_escape_policy", &NaConfig::hq_escape_policy},
+    {"na_odp_attack_policy", &NaConfig::odp_attack_policy},
+    {"na_tech_trade_policy", &NaConfig::tech_trade_policy},
+    {"na_energy_loan_policy", &NaConfig::energy_loan_policy},
+    {"na_base_swap_policy", &NaConfig::base_swap_policy},
+    {"na_board_state", &NaConfig::board_state},
+    {"na_retool_observe", &NaConfig::retool_observe},
+    {"na_dialog_observe", &NaConfig::dialog_observe},
+    {"na_dialog_auto", &NaConfig::dialog_auto},
+    {"na_dialog_route", &NaConfig::dialog_route},
+    {"na_staple_observe", &NaConfig::staple_observe},
+    {"na_endgame_observe", &NaConfig::endgame_observe},
+    {"na_satellite_observe", &NaConfig::satellite_observe},
+    {"na_project_observe", &NaConfig::project_observe},
+    {"na_tech_steal_observe", &NaConfig::tech_steal_observe},
+    {"na_defend_goal_observe", &NaConfig::defend_goal_observe},
+    {"na_name_observe", &NaConfig::name_observe},
+    {"na_yield_observe", &NaConfig::yield_observe},};
+
+bool na_option_handler(Config* cf, const char* name, const char* value) {
+    for (const NaOption& opt : NaOptions) {
+        if (strcmp(name, opt.key) == 0) {
+            cf->na.*opt.field = atoi(value);
+            return true;
+        }
+    }
+    // The one option that is not an int, and not in NaConfig: it is a
+    // std::string global because Config is memcpy-ed around by engine code.
+    if (strcmp(name, "llm_endpoint") == 0) {
+        char buf[INI_MAX_LINE];
+        strcpy_n(buf, INI_MAX_LINE, value);
+        char* p = strtrim(buf);
+        if (strlen(p)) {
+            llm_endpoint = p;
+        }
+        debug("llm_endpoint %s\n", llm_endpoint.c_str());
+        return true;
+    }
+    return false;
 }

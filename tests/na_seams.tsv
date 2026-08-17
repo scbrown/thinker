@@ -65,6 +65,7 @@ gui_dialog.cpp	na_tech_purchase_price	na_tech_purchase_price	def	1	-
 main.cpp	DllMain	na_message_box	call	4	-
 main.cpp	exit_fail	na_message_box	call	1	-
 main.cpp	opt_handle_error	na_message_box	call	1	-
+main.cpp	option_handler	na_option_handler	call	1	-
 move.cpp	move_upkeep	na_observe_base_defend_goal	call	1	-
 patch.cpp	init_video_config	na_message_box	call	2	-
 patch.cpp	patch_setup	na_install_dialog_hook	call	1	before:write_(call|jump)\(

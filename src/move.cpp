@@ -1100,7 +1100,7 @@ void move_upkeep(int faction_id, UpdateMode mode) {
                 same score lands in a different tier in a bigger empire. A record without the
                 cohort cannot be compared across turns, which is exactly what na-6db needs to do.
                 */
-                if (conf.na_defend_goal_observe) {
+                if (conf.na.defend_goal_observe) {
                     na_observe_base_defend_goal(i, base->defend_goal, value, (int)num);
                 }
             }

@@ -1586,7 +1586,7 @@ void __cdecl faction_upkeep(int faction_id) {
         do_all_non_input();
         enemy_strategy(faction_id);
         do_all_non_input();
-        if (conf.na_odp_attack_policy) {
+        if (conf.na.odp_attack_policy) {
             na_odp_attack_upkeep(faction_id);
             do_all_non_input();
         }
@@ -1612,7 +1612,7 @@ void __cdecl faction_upkeep(int faction_id) {
             const int na_credits_before = f->energy_credits;
             const bool na_cornered =
                 !victory_done() && f->corner_market_cost <= 0 && f->energy_credits > cost;
-            if (conf.na_endgame_observe) {
+            if (conf.na.endgame_observe) {
                 na_observe_corner_market(faction_id, cost, na_credits_before, na_cornered);
             }
             if (na_cornered) {
@@ -1667,7 +1667,7 @@ void __cdecl faction_upkeep(int faction_id) {
             can_call_council is asked only when observing, so an unconfigured build does not
             pay for a predicate it will not use.
             */
-            const bool na_observing = conf.na_endgame_observe != 0;
+            const bool na_observing = conf.na.endgame_observe != 0;
             const bool na_eligible = na_observing && can_call_council(faction_id, 0);
             const bool na_convened_before = (*GameState & STATE_COUNCIL_HAS_CONVENED) != 0;
             call_council(faction_id);

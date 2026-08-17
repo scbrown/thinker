@@ -107,7 +107,7 @@ def break_before(root):
     # Sample the corner-market reserve AFTER the deduction — the exact error
     # the invariant exists to prevent, and one that still compiles and runs.
     edit(root, "src/gameturn.cpp", lambda t: t.replace(
-        "            if (conf.na_endgame_observe) {\n"
+        "            if (conf.na.endgame_observe) {\n"
         "                na_observe_corner_market(faction_id, cost, na_credits_before, na_cornered);\n"
         "            }\n", ""))
     edit(root, "src/gameturn.cpp", lambda t: t.replace(

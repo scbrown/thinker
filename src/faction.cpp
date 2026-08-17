@@ -170,7 +170,7 @@ handicaps instead. Faction 0 is native life and is always excluded.
 */
 bool llm_enabled(int faction_id) {
     return faction_id > 0 && faction_id < MaxPlayerNum
-        && (conf.llm_factions & (1 << faction_id));
+        && (conf.na.llm_factions & (1 << faction_id));
 }
 
 bool thinker_move_upkeep(int faction_id) {
@@ -789,7 +789,7 @@ int __cdecl steal_tech(int faction_id, int faction_id_tgt, int is_steal) {
     base capture acquiring (base.cpp). Same chooser, different provenance, and an eval that
     could not tell them apart would be comparing a deliberate operation against a side effect.
     */
-    if (conf.na_tech_steal_observe) {
+    if (conf.na.tech_steal_observe) {
         na_observe_faction_tech_steal(faction_id, faction_id_tgt, tech_id, is_steal);
     }
     if (*MultiplayerActive && faction_id == *CurrentPlayerFaction) {

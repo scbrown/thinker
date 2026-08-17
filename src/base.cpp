@@ -588,7 +588,7 @@ void __cdecl mod_capture_base(int base_id, int faction_id_atk, int is_probe) {
                 bool relocate = true;
                 if (!*MultiplayerActive && faction_id == player_id) {
                     relocate = X_pop("ESCAPE", 0);
-                } else if (conf.na_hq_escape_policy) {
+                } else if (conf.na.hq_escape_policy) {
                     // Everyone who is NOT asked: the deterministic tier answers
                     // instead of the bare literal, and the surface is recorded.
                     // Same answer as stock — see na_should_escape_hq.
@@ -624,7 +624,7 @@ void __cdecl mod_capture_base(int base_id, int faction_id_atk, int is_probe) {
                     would overwrite a choice the player made by hand.
                     */
                     if (!is_human(faction_id)
-                    || (conf.na_hq_escape_policy && conf.manage_player_bases)) {
+                    || (conf.na.hq_escape_policy && conf.manage_player_bases)) {
                         mod_base_reset(best_base_id, 0);
                     }
                 }
@@ -2143,7 +2143,7 @@ void __cdecl mod_base_yield() {
     Placed after base_update so the yields reported are the ones the allocation actually
     produced, not the running totals it passed through on the way.
     */
-    if (conf.na_yield_observe) {
+    if (conf.na.yield_observe) {
         na_observe_base_yield(base_id);
     }
 
@@ -3519,7 +3519,7 @@ int __cdecl mod_base_production() {
                     item left in the queue is re-offered every turn, which is the
                     defect this surface actually has.
                     */
-                    if (conf.na_abandon_policy) {
+                    if (conf.na.abandon_policy) {
                         bool abandon = na_should_abandon_base(*CurrentBaseID);
                         na_observe_base_abandon(*CurrentBaseID, abandon ? 1 : 0, item_id);
                         if (!abandon) {

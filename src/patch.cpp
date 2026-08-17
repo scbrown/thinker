@@ -394,7 +394,7 @@ bool patch_setup(Config* cf) {
 
     /*
     Neural Amplifier: install the dialog hook (invariant 7, na-4lr). Unconditional, and that is
-    on purpose — the wrapper reads conf.na_dialog_observe per call, so installing it always
+    on purpose — the wrapper reads conf.na.dialog_observe per call, so installing it always
     means the flag can be toggled without a restart while an unconfigured build still behaves
     exactly as before. Installing only when the flag is set would make the flag a launch-time
     decision, which is a worse contract for something whose whole job is observation.

@@ -303,7 +303,7 @@ int consider_staple(int base_id) {
     almost entirely "stapling was not an option here", which is not a decision anyone made and
     would swamp the log — the same reason base.retool records only when the penalty applies.
     */
-    if (conf.na_staple_observe && eligible) {
+    if (conf.na.staple_observe && eligible) {
         na_observe_base_staple(base_id, stapled);
     }
     return 0;
@@ -1075,7 +1075,7 @@ static int select_build_inner(int base_id) {
             decision existed at all, whereas this gate has already opened by the time
             find_satellite runs, so "nothing this turn" is an answer rather than an absence.
             */
-            if (conf.na_satellite_observe) {
+            if (conf.na.satellite_observe) {
                 // GOV_NONE is file-local to build.cpp, so the sentinel is translated HERE
                 // rather than spelled again in the emitter. One definition of "declined".
                 na_observe_base_satellite(base_id, choice, choice == GOV_NONE);
@@ -1095,7 +1095,7 @@ static int select_build_inner(int base_id) {
 
             GOV_NONE is file-local here, so the sentinel is translated at this call site.
             */
-            if (conf.na_project_observe) {
+            if (conf.na.project_observe) {
                 na_observe_base_project(base_id, choice, choice == GOV_NONE, Wgov);
             }
             if (choice != GOV_NONE) {
@@ -1383,7 +1383,7 @@ answer either way since nothing in the chooser touches minerals_accumulated.
 Off by default, and when off this is one branch on a config int.
 */
 int select_build(int base_id) {
-    if (!conf.na_retool_observe || base_id < 0 || base_id >= *BaseCount) {
+    if (!conf.na.retool_observe || base_id < 0 || base_id >= *BaseCount) {
         return select_build_inner(base_id);
     }
     const int prev_id = Bases[base_id].production_id_last;

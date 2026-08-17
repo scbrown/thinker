@@ -54,56 +54,13 @@ int option_handler(void* user, const char* section, const char* name, const char
         cf->autosave_interval = atoi(value);
     } else if (MATCH("warn_on_former_replace")) {
         cf->warn_on_former_replace = atoi(value);
-    } else if (MATCH("llm_factions")) {
-        cf->llm_factions = atoi(value);
-    } else if (MATCH("llm_timeout_ms")) {
-        cf->llm_timeout_ms = atoi(value);
-    } else if (MATCH("na_governor_policy")) {
-        cf->na_governor_policy = atoi(value);
-    } else if (MATCH("na_abandon_policy")) {
-        cf->na_abandon_policy = atoi(value);
-    } else if (MATCH("na_hq_escape_policy")) {
-        cf->na_hq_escape_policy = atoi(value);
-    } else if (MATCH("na_odp_attack_policy")) {
-        cf->na_odp_attack_policy = atoi(value);
-    } else if (MATCH("na_tech_trade_policy")) {
-        cf->na_tech_trade_policy = atoi(value);
-    } else if (MATCH("na_energy_loan_policy")) {
-        cf->na_energy_loan_policy = atoi(value);
-    } else if (MATCH("na_base_swap_policy")) {
-        cf->na_base_swap_policy = atoi(value);
-    } else if (MATCH("na_board_state")) {
-        cf->na_board_state = atoi(value);
-    } else if (MATCH("na_retool_observe")) {
-        cf->na_retool_observe = atoi(value);
-    } else if (MATCH("na_dialog_observe")) {
-        cf->na_dialog_observe = atoi(value);
-    } else if (MATCH("na_dialog_auto")) {
-        cf->na_dialog_auto = atoi(value);
-    } else if (MATCH("na_dialog_route")) {
-        cf->na_dialog_route = atoi(value);
-    } else if (MATCH("na_staple_observe")) {
-        cf->na_staple_observe = atoi(value);
-    } else if (MATCH("na_endgame_observe")) {
-        cf->na_endgame_observe = atoi(value);
-    } else if (MATCH("na_satellite_observe")) {
-        cf->na_satellite_observe = atoi(value);
-    } else if (MATCH("na_project_observe")) {
-        cf->na_project_observe = atoi(value);
-    } else if (MATCH("na_tech_steal_observe")) {
-        cf->na_tech_steal_observe = atoi(value);
-    } else if (MATCH("na_defend_goal_observe")) {
-        cf->na_defend_goal_observe = atoi(value);
-    } else if (MATCH("na_name_observe")) {
-        cf->na_name_observe = atoi(value);
-    } else if (MATCH("na_yield_observe")) {
-        cf->na_yield_observe = atoi(value);
-    } else if (MATCH("llm_endpoint")) {
-        char* p = strtrim(buf);
-        if (strlen(p)) {
-            llm_endpoint = p;
-        }
-        debug("llm_endpoint %s\n", llm_endpoint.c_str());
+    /*
+    Neural Amplifier options. One line rather than fifty: the 22 settings and
+    their thinker.ini keys live in na_option_handler (neural.cpp), so this
+    function — which upstream edits constantly — no longer carries them.
+    Returns true when it consumed the name.
+    */
+    } else if (na_option_handler(cf, name, value)) {
     } else if (MATCH("manage_player_bases")) {
         cf->manage_player_bases = atoi(value);
     } else if (MATCH("manage_player_units")) {

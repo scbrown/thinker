@@ -32,6 +32,7 @@ orch_port="${NA_ORCH_PORT:-8077}"
 # a tree that fails them is not worth spending a build on.
 python3 "$here/check_seams.py"
 python3 "$here/test_check_seams.py" >/dev/null && echo "ok    the seam guard can still fail (11 mutations refused)"
+python3 "$here/check_na_options.py"
 python3 "$here/check_native_choice_withheld.py" >/dev/null \
     && echo "ok    every decide surface withholds the native answer"
 echo

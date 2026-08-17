@@ -296,7 +296,7 @@ one answer — leftovers from the loop ARE the specialists. One record carries b
 NOT a world view. The contract's action_space is pick-one and an allocation over 21 tiles does
 not fit that shape, so this is a compact outcome record and neither id enters OBSERVED.
 
-Checks conf.na_yield_observe itself; the call site stays one line.
+Checks conf.na.yield_observe itself; the call site stays one line.
 */
 void na_observe_base_yield(int base_id);
 
@@ -311,7 +311,7 @@ The payload is `source` — which of the four pools the name came from. "sector_
 every named pool was exhausted, a content problem that otherwise surfaces only as bases called
 "Sector 41".
 
-Checks conf.na_name_observe itself, so the four call sites in mod_name_base stay one line each.
+Checks conf.na.name_observe itself, so the four call sites in mod_name_base stay one line each.
 */
 void na_name_base_observed(int faction_id, const char* name, bool sea_base, const char* source);
 
@@ -461,6 +461,9 @@ the run stops instead. See the definition for why suppression is deliberately no
 allowed to know which sites are fatal.
 */
 int na_message_box(HWND hwnd, const char* text, const char* caption, UINT type);
+
+// thinker.ini -> NaConfig. True when the name was one of ours (see neural.cpp).
+bool na_option_handler(Config* cf, const char* name, const char* value);
 
 /*
 Exit the process once -na-exit-turn turns are complete. No-op when the flag is

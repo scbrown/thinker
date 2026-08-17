@@ -264,10 +264,10 @@ int __cdecl mod_base_swap(int faction1, int faction2)
             X_dialog("NOBASESWAP", faction2);
             return 0;
         }
-        int accept = conf.na_base_swap_policy
+        int accept = conf.na.base_swap_policy
             ? na_should_buy_base(faction1, cost_ask)
             : X_dialog("PAYBASESWAP", faction2);
-        if (conf.na_base_swap_policy) {
+        if (conf.na.base_swap_policy) {
             na_observe_diplo_base_swap(faction1, faction2, *diplo_ask_base_swap_id,
                 cost_ask, f_plr.hurry_cost_total, accept, accept);
         }
@@ -438,10 +438,10 @@ int __cdecl mod_energy_trade(int faction1, int faction2)
         ParseNumTable[2] = turns;
         parse_gen_name(faction1, 0, 1);
 
-        int value = conf.na_energy_loan_policy
+        int value = conf.na.energy_loan_policy
             ? (terms.available_income >= payment ? 1 : 0)
             : X_dialog(random(2) ? "ENERGYLOAN1" : "ENERGYLOAN2", faction2);
-        if (conf.na_energy_loan_policy) {
+        if (conf.na.energy_loan_policy) {
             na_observe_diplo_energy_loan(faction1, faction2, score, amount, turns,
                 payment, terms.available_income, value == 1, value == 1);
         }
@@ -602,9 +602,9 @@ int __cdecl mod_buy_tech(int faction1, int faction2, int counter_id, int high_pr
             X_dialog(random(2) ? "BUYTECHHIGH0" : "BUYTECHHIGH1", faction2);
             return 1;
         }
-        int accept = conf.na_tech_trade_policy
+        int accept = conf.na.tech_trade_policy
             ? 1 : X_dialog(random(2) ? "BUYTECH0" : "BUYTECH1", faction2) == 1;
-        if (conf.na_tech_trade_policy) {
+        if (conf.na.tech_trade_policy) {
             na_observe_diplo_tech_trade(
                 faction1, faction2, *diplo_tech_id1, value, accept, accept);
         }

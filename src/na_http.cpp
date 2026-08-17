@@ -283,7 +283,7 @@ bool na_http_post(const char* endpoint, const char* path, const char* body,
     }
     /*
     timeout_ms <= 0 means wait indefinitely. That is the INTENDED default and it is
-    NOT what ships: `conf.llm_timeout_ms` defaults to 2500 (main.h), and thinker.ini
+    NOT what ships: `conf.na.llm_timeout_ms` defaults to 2500 (main.h), and thinker.ini
     now states that same 2500 explicitly at the point of use, so an unconfigured run
     gives the agent 2.5 seconds either way.
 
