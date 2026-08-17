@@ -24,7 +24,7 @@
 #pragma once
 
 #ifdef BUILD_REL
-    #define MOD_VERSION "Thinker Mod v5.4"
+    #define MOD_VERSION "Thinker Mod v5.5"
 #else
     #define MOD_VERSION "Thinker Mod develop build"
 #endif
@@ -99,8 +99,7 @@
 #endif
 #endif
 
-const bool DEF = true;
-const bool ATT = false;
+const int8_t NetVersion = 15; // Network multiplayer
 
 enum VideoMode {
     VM_Native = 0,
@@ -548,9 +547,10 @@ struct AIPlans {
 #include "config.h"
 #include "strings.h"
 #include "savegame.h"
+#include "random.h"
 #include "patch.h"
 #include "game.h"
-#include "random.h"
+#include "gameturn.h"
 #include "faction.h"
 #include "base.h"
 #include "basewin.h"
@@ -572,6 +572,9 @@ struct AIPlans {
 #include "tech.h"
 #include "test.h"
 #include "debug.h"
+
+const bool DEF = true;
+const bool ATT = false;
 
 extern FILE* debug_log;
 extern Config conf;
@@ -624,6 +627,9 @@ else is happening.
 extern int na_auto_turn;
 extern int na_enter_arg;
 extern map_str_t musiclabels;
+extern std::string startup_load_path;
+extern std::vector<std::pair<std::string,std::string>> faction_pool;
+extern std::vector<std::pair<size_t,size_t>> faction_pair;
 
 DLL_EXPORT DWORD ThinkerModule();
 bool FileExists(const char* path);

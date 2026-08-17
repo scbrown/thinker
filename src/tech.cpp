@@ -218,7 +218,7 @@ void __cdecl tech_research(int faction_id, int value) {
                 plr.tech_accumulated = 0;
                 if (!revised_tech_cost()) {
                     plr.tech_cost = -1; // Must be negative to reset the cost
-                    plr.tech_cost = tech_rate(faction_id);
+                    plr.tech_cost = mod_tech_rate(faction_id);
                 }
             }
             if (plr.player_flags & PFLAG_FIRST_SECRETS) {
@@ -903,8 +903,8 @@ void __cdecl tech_achieved(int faction_id, int tech_id, int faction_id_2, int is
             StrBuffer[0] = 0;
             strcat(StrBuffer, "WEGETSHARETECH");
         }
-        cur_popup.field_2144 = (cur_popup.dialogs.data[41] == 0 ? TechIcons[tech_id] : 0);
-        SpriteBox_sprite((SpriteBox*)&cur_popup.dialogs.data[28], TechIcons[tech_id], 0, tech_id);
+        cur_popup.field_2144 = (cur_popup.dialogs.spriteBox[13] == 0 ? TechIcons[tech_id] : 0);
+        SpriteBox_sprite((SpriteBox*)&cur_popup.dialogs.spriteBox, TechIcons[tech_id], 0, tech_id);
         cur_popup.field_3104 = 1;
         cur_popup.field_3108 = 2;
         Popup_start(&cur_popup, PopupScriptFile, StrBuffer, -1, 0, pop_flag, 0);
