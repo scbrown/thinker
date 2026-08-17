@@ -17,10 +17,17 @@ import re
 OURS = {"neural.cpp", "na_http.cpp"}
 
 # A function definition at file scope: starts in column 0, has a parameter list,
-# and opens a brace on the same line. Indented code (if/while/else, member
-# functions) is deliberately excluded — every seam host in this codebase is a
-# file-scope function, and a looser pattern starts matching control flow.
-FN_DEF = re.compile(r"^[A-Za-z_][A-Za-z0-9_:\*\s&<>,]*\b(\w+)\s*\([^;]*\)\s*(?:const)?\s*\{")
+# and is not a declaration (no trailing semicolon). Indented code (if/while/else,
+# member functions) is deliberately excluded — every seam host in this codebase
+# is a file-scope function, and a looser pattern starts matching control flow.
+#
+# The brace is optional here because this codebase mixes both styles: gui.cpp,
+# gui_dialog.cpp, faction.cpp, base.cpp, game.cpp and patch.cpp put the opening
+# brace on the FOLLOWING line for 55 functions between them. Requiring it on the
+# signature line silently attributed every seam in those functions to whichever
+# function was declared above — which is worse than not attributing them at all,
+# because the manifest then reads as confident and specific while being wrong.
+FN_DEF = re.compile(r"^[A-Za-z_][A-Za-z0-9_:\*\s&<>,]*\b(\w+)\s*\([^;]*\)\s*(?:const)?\s*(\{)?\s*$")
 
 NA_SYMBOL = re.compile(r"\bna_[a-z0-9_]+\s*\(")
 
@@ -58,19 +65,48 @@ def strip_code(lines):
         yield i, line
 
 
+def definitions(lines):
+    """Return [(signature_lineno, name, body_open_lineno)] for file-scope functions.
+
+    Handles both brace styles: `) {` on the signature line, or a bare `{` on the
+    next non-blank line. A signature whose next line is anything else is a
+    declaration or a call, not a definition, and is skipped.
+    """
+    stripped = list(strip_code(lines))
+    out = []
+    for idx, (lineno, code) in enumerate(stripped):
+        m = FN_DEF.match(code)
+        if not m:
+            continue
+        if m.group(2):
+            out.append((lineno, m.group(1), lineno))
+            continue
+        for nxt_lineno, nxt in stripped[idx + 1:]:
+            if not nxt.strip():
+                continue
+            if nxt.strip() == "{":
+                out.append((lineno, m.group(1), nxt_lineno))
+            break
+    return out
+
+
 def extract(path):
     """Return a list of seam dicts for one source file."""
     lines = path.read_text().splitlines()
-    host = "<file-scope>"
+    defs = definitions(lines)
     seams = []
     for lineno, code in strip_code(lines):
-        m = FN_DEF.match(code)
-        if m:
-            host = m.group(1)
+        # Host is the last function definition at or above this line.
+        host = "<file-scope>"
+        for sig_lineno, name, _ in defs:
+            if sig_lineno <= lineno:
+                host = name
+            else:
+                break
+        on_signature = any(sig == lineno for sig, _, _ in defs)
         for hit in NA_SYMBOL.finditer(code):
             sym = hit.group(0)[:-1].strip()
-            # On a definition line the host was just set to this same symbol.
-            kind = "def" if (m and sym == host) else "call"
+            kind = "def" if (on_signature and sym == host) else "call"
             seams.append({"file": path.name, "host": host, "symbol": sym,
                           "kind": kind, "line": lineno})
     return seams
@@ -93,10 +129,9 @@ def function_body(lines, host):
     """
     stripped = list(strip_code(lines))
     start = None
-    for lineno, code in stripped:
-        m = FN_DEF.match(code)
-        if m and m.group(1) == host:
-            start = lineno
+    for _, name, body_open in definitions(lines):
+        if name == host:
+            start = body_open
             break
     if start is None:
         return None
