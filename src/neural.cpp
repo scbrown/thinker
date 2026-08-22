@@ -1423,6 +1423,51 @@ not merely unlikely — and the second half of it is the caller's membership che
 against the action space, because a well-formed "unit:99" is still not buildable
 in this base.
 */
+/*
+"Ask me later", on the wire.
+
+Door 1 has no return value meaning that — mod_base_build takes one int and gives one back, and
+na_decide_base_production's own comment says there is nowhere to park a decision and resume it.
+So a deferral is not a different KIND of answer here; it is a normal answer (the engine's own
+pick, applied immediately) recorded under a different TIER, with the orchestrator holding the
+decision open for the agent to revise through door 2.
+
+Why it must not fall through to the unparseable branch, even though the outcome would be
+identical: `fallback_reason="unparseable action_id defer"` says the orchestrator malfunctioned.
+Nothing malfunctioned. An agent read the world view and decided it wanted longer than the
+engine's clock allows, and the record has to be able to tell that from a bad model day — which is
+what `tier` is for. Every metric we have flows from that field.
+
+Matched leniently on case and surrounding space, deliberately unlike the action ids around it:
+those are checked against a list the engine supplied, so a near-miss is caught and reported, while
+this one is checked against nothing and a near-miss would silently become "unparseable".
+*/
+static bool na_action_is_defer(const char* id) {
+    if (!id) {
+        return false;
+    }
+    while (*id == ' ' || *id == '\t') {
+        id++;
+    }
+    // Lowercased by hand rather than with tolower(): no <ctype.h> dependency to inherit
+    // transitively, and no locale to change the answer for an ASCII keyword on the wire.
+    static const char kDefer[] = "defer";
+    size_t i = 0;
+    for (; i < sizeof(kDefer) - 1; i++) {
+        char c = id[i];
+        if (c >= 'A' && c <= 'Z') {
+            c = (char)(c - 'A' + 'a');
+        }
+        if (c != kDefer[i]) {
+            return false;
+        }
+    }
+    while (id[i] == ' ' || id[i] == '\t') {
+        i++;
+    }
+    return id[i] == '\0';
+}
+
 static bool na_parse_item_id(const char* id, int* item) {
     if (!id) {
         return false;
@@ -1638,6 +1683,13 @@ int na_decide_base_production(int base_id, int native_choice, int has_gov) {
             int item = 0;
             if (!na_json_string(body.data, "action_id", action_id, sizeof(action_id))) {
                 snprintf(detail, sizeof(detail), "no action_id in reply");
+            } else if (na_action_is_defer(action_id)) {
+                /*
+                Deferred, not failed. `applied` and `how` are left exactly as the deterministic
+                tier set them — the engine's own pick, applied now, because the game cannot wait —
+                and `detail` is left EMPTY so no fallback_reason is written. Only the tier moves.
+                */
+                tier = "deferred";
             } else if (!na_parse_item_id(action_id, &item)) {
                 snprintf(detail, sizeof(detail), "unparseable action_id %.48s", action_id);
             } else if (!na_item_is_legal(base_id, item)) {
@@ -2063,6 +2115,13 @@ int na_decide_faction_tech(int faction_id, int native_choice) {
             int tech_id = 0;
             if (!na_json_string(body.data, "action_id", action_id, sizeof(action_id))) {
                 snprintf(detail, sizeof(detail), "no action_id in reply");
+            } else if (na_action_is_defer(action_id)) {
+                /*
+                Deferred, not failed. `applied` and `how` are left exactly as the deterministic
+                tier set them — the engine's own pick, applied now, because the game cannot wait —
+                and `detail` is left EMPTY so no fallback_reason is written. Only the tier moves.
+                */
+                tier = "deferred";
             } else if (!na_parse_tech_id(action_id, &tech_id)) {
                 snprintf(detail, sizeof(detail), "unparseable action_id %.48s", action_id);
             } else if (!na_tech_is_legal(faction_id, tech_id)) {
@@ -2354,6 +2413,13 @@ void na_decide_faction_se(int faction_id, int* field, int* model) {
             int m = -1;
             if (!na_json_string(body.data, "action_id", action_id, sizeof(action_id))) {
                 snprintf(detail, sizeof(detail), "no action_id in reply");
+            } else if (na_action_is_defer(action_id)) {
+                /*
+                Deferred, not failed. `applied` and `how` are left exactly as the deterministic
+                tier set them — the engine's own pick, applied now, because the game cannot wait —
+                and `detail` is left EMPTY so no fallback_reason is written. Only the tier moves.
+                */
+                tier = "deferred";
             } else if (!na_parse_se_id(action_id, &f, &m)) {
                 snprintf(detail, sizeof(detail), "unparseable action_id %.48s", action_id);
             } else if (f >= 0 && !society_avail(f, m, faction_id)) {
@@ -3365,6 +3431,16 @@ int na_decide_base_hurry(int base_id, int item, int minerals_before, int credits
             char action_id[64];
             if (!na_json_string(body.data, "action_id", action_id, sizeof(action_id))) {
                 snprintf(detail, sizeof(detail), "no action_id in reply");
+            } else if (na_action_is_defer(action_id)) {
+                /*
+                Deferred, not failed. `applied` and `how` are left exactly as the deterministic
+                tier set them — the engine's own pick, applied now, because the game cannot wait —
+                and `detail` is left EMPTY so no fallback_reason is written. Only the tier moves.
+                */
+                tier = "deferred";
+                // `decided` stays false, so mod_base_hurry() below decides and spends exactly as
+                // it would have. The record then reports what the deterministic tier did, under
+                // the deferred tier — which is the truth on both counts.
             } else if (strcmp(action_id, "hurry:none") == 0) {
                 decided = true;
                 rc = 0;

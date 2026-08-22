@@ -35,6 +35,8 @@ python3 "$here/test_check_seams.py" >/dev/null && echo "ok    the seam guard can
 python3 "$here/check_na_options.py"
 python3 "$here/check_native_choice_withheld.py" >/dev/null \
     && echo "ok    every decide surface withholds the native answer"
+python3 "$here/check_defer_recognised.py" >/dev/null \
+    && echo "ok    every decide surface recognises defer before calling it unparseable"
 echo
 
 # Presets resolve against the working directory, not the -S path, so this has to
