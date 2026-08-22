@@ -69,6 +69,25 @@ target_link_options(thinkerlib PRIVATE
 )
 target_compile_definitions(thinkerlib PRIVATE BUILD_DLL)
 set_target_properties(thinkerlib PROPERTIES PREFIX "" OUTPUT_NAME "thinker" SUFFIX ".dll")
+
+# The mod's popup layouts are DATA, and since v5.5 the DLL cannot start without them:
+# top_menu is our code now, and it builds the main menu by asking Popup_start for the
+# #TOPMENU section of modmenu.txt. A play directory holding an older modmenu.txt has no
+# such section, the menu cannot be built, and the engine dies on the splash screen with
+# "Unable to allocate draw-buffer; terminating program." — a message that says nothing
+# about a missing menu definition and sends everyone looking at video settings (na-nnn).
+#
+# So the file ships with the binary that needs it. Copying it into the build directory is
+# what makes that possible for EVERY installer — play-thinker.sh copies from here, and so
+# does `just game stage`, whose --mod overlay is this directory. Before this, the DLL was
+# an artifact and its menu definitions were a file in the repo that nothing installed.
+add_custom_command(TARGET thinkerlib POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/docs/modmenu.txt"
+        "$<TARGET_FILE_DIR:thinkerlib>/modmenu.txt"
+    COMMENT "Staging modmenu.txt (the DLL's menu definitions) next to thinker.dll"
+    VERBATIM
+)
 target_link_libraries(thinkerlib PRIVATE user32 gdi32 winmm psapi ws2_32)
 
 # ---------- Launch executable ----------

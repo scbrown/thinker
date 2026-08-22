@@ -722,7 +722,17 @@ int __cdecl top_menu(int flag) {
         if (!flag) {
             cur_popup.field_A44 = DefaultPrefs->top_menu;
         }
-        int menu_choice = SetupWin_do_menu_2(&cur_setup, &cur_popup, 1, 0);
+        /*
+        -na-autoload names the item it wants; everyone else is shown the menu. Answering here
+        rather than letting na_autoload_tick aim a click at a screen fraction is what makes an
+        unattended launch independent of the menu's layout — see na_autoload_menu_choice
+        (na-nnn, where a coordinate measured against the engine's seven-item menu kept clicking
+        after #TOPMENU replaced it with eight, and selected SCENARIO for a week).
+        */
+        int menu_choice = na_autoload_menu_choice();
+        if (menu_choice < 0) {
+            menu_choice = SetupWin_do_menu_2(&cur_setup, &cur_popup, 1, 0);
+        }
         debug("menu_choice %d\n", menu_choice);
         // show_credits() moved from 5 to 6, and exit game becomes 7
         if (menu_choice < 0 || menu_choice == 7) {

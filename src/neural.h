@@ -510,6 +510,7 @@ void na_accumulate_end(int faction_id);
 True once the -na-autoload sequence has finished, however it finished, and when
 no autoload was requested at all.
 */
+int na_autoload_menu_choice();
 bool na_autoload_settled();
 
 /*

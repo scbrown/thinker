@@ -3646,7 +3646,20 @@ int na_audit(int faction_id) {
 /*
 Startup screen button positions as fractions of the client area, measured at 2560x1440.
 Fractions rather than pixels so a different window size does not silently click empty
-space. QUICK START is the fourth of seven right-aligned buttons.
+space. QUICK START was the fourth of seven right-aligned buttons.
+
+FALLBACK ONLY since na-nnn. A screen fraction identifies a menu ITEM only for as long as
+the menu keeps the shape it was measured against, and it does not announce when it stops:
+the click still lands, on whatever has moved under it. v5.5 replaced the engine's menu with
+our own #TOPMENU (modmenu.txt), bottom-anchored at eight items where the engine drew seven,
+so every entry moved up one row and this coordinate began selecting SCENARIO — which opens
+a file browser, produces no session, and reads in the log as "no session after quickstart".
+Photographed at 2560x1440 while diagnosing it.
+
+na_autoload_menu_choice() below is the real path now: top_menu is our code, so the autoload
+names the item it wants instead of aiming at where the item used to be drawn. These stay for
+a menu we did not build (an older DLL, a hand-edited modmenu.txt), where aiming is all there
+is.
 */
 static const double NA_QUICKSTART_FX = 2370.0 / 2560.0;
 static const double NA_QUICKSTART_FY = 1034.0 / 1440.0;
@@ -3695,6 +3708,39 @@ exactly like the harness working while the run it produced was of the wrong game
 static int na_autoload_state = NA_AS_WAIT_STARTUP;
 
 /*
+Set once top_menu has answered the main menu on the autoload's behalf, so na_autoload_tick
+knows not to also click at NA_QUICKSTART_F*. Both would be wrong: the click would land in a
+session that had already started.
+*/
+static bool na_autoload_menu_taken = false;
+
+/*
+The menu item -na-autoload wants, or -1 for "nobody is asking, show the menu".
+
+Called by top_menu instead of aiming a synthetic click at a pixel. The autoload's whole job
+at the main menu is to pick QUICK START, and since v5.5 the code drawing that menu is ours —
+so it can be told which item, rather than made to guess where the item is. That removes the
+class of failure na-nnn was: a coordinate measured against one menu layout, still clicking
+confidently after the layout changed underneath it.
+
+Index 1 is QUICK START in #TOPMENU (modmenu.txt), and top_menu's own switch reads it the same
+way: `case 0: case 1: map_menu(menu_choice == 1)`. The two agree because they read the same
+list; nothing here depends on where it is drawn, or at what resolution.
+
+Answers exactly once. A second call returns -1, so returning to the menu — the quickstart
+having failed, or the player quitting to it — shows the human the menu rather than silently
+starting another game.
+*/
+int na_autoload_menu_choice() {
+    if (na_autoload.empty() || na_autoload_menu_taken) {
+        return -1;
+    }
+    na_autoload_menu_taken = true;
+    na_autoload_log("menu_choice", "QUICK START (#TOPMENU index 1)", 1);
+    return 1;
+}
+
+/*
 True once -na-autoload has finished, either by loading or by giving up, and
 trivially true when no autoload was asked for.
 */
@@ -3730,6 +3776,22 @@ void na_autoload_tick() {
 
     switch (state) {
     case NA_AS_WAIT_STARTUP:
+        /*
+        Two ways past the main menu, and the first one skips the wait entirely.
+
+        If top_menu already answered for us (na_autoload_menu_choice), there is nothing to
+        click and nothing to wait for — the quickstart is under way, and clicking now would
+        put a stray press into a starting session. Note this must be checked BEFORE the
+        GameHalted guard below: a quickstart that reaches a session quickly clears
+        GameHalted, and a guard waiting for it to be SET would then hold this state forever,
+        which is a hang rather than the give-up it would resemble.
+        */
+        if (na_autoload_menu_taken) {
+            na_autoload_log("quickstart_selected", "top_menu answered directly", 1);
+            state = NA_AS_WAIT_PLANETFALL;
+            state_since = now;
+            return;
+        }
         /*
         Wait for the engine to FINISH starting, not merely to have started. Firing early
         produced a perfect log and a main menu, because the engine's own startup drew

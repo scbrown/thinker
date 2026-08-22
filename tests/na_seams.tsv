@@ -32,6 +32,7 @@ build.cpp	select_build_inner	na_observe_base_satellite	call	1	-
 faction.cpp	mod_social_ai	na_decide_faction_se	call	1	-
 faction.cpp	steal_tech	na_observe_faction_tech_steal	call	1	-
 game.cpp	mod_name_base	na_name_base_observed	call	4	-
+game.cpp	top_menu	na_autoload_menu_choice	call	1	-
 gameturn.cpp	allocate_energy	na_observe_econ_energy_sliders	call	1	last
 gameturn.cpp	faction_upkeep	na_observe_corner_market	call	1	before:f->energy_credits -= cost
 gameturn.cpp	faction_upkeep	na_observe_council_call	call	1	-
