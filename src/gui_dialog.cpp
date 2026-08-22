@@ -416,8 +416,10 @@ int __cdecl mod_energy_trade(int faction1, int faction2)
         int turns = terms.turns;
         int payment = terms.payment;
 
-        debug("energy_trade %s score: %d friction: %d credits: %d reserve: %d amount: %d turns: %d payment: %d\n",
-        MFactions[faction2].filename, score, friction, f_cmp.energy_credits, reserve, amount, turns, payment);
+        debug("energy_trade %s score: %d friction: %d credits: %d available_income: %d"
+        " amount: %d turns: %d payment: %d\n",
+        MFactions[faction2].filename, score, friction, f_cmp.energy_credits,
+        terms.available_income, amount, turns, payment);
         flushlog();
 
         if (f_plr.sanction_turns > 0 || score < -15) {
