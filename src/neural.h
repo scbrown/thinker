@@ -552,6 +552,17 @@ enum NaMoveEvent {
     NA_MOVE_COLONY,
     NA_MOVE_COLONY_GAVEUP,
     NA_MOVE_COLONY_BUILT,
+    /*
+    Calls into colony_move from na_settle_player_colonies (na-bg4 follow-up).
+
+    NA_MOVE_COLONY counts the veh_turn.cpp entry, which the player faction never reaches — so
+    for the faction we drive it is structurally 0 and says nothing about whether the settle pass
+    is working. Measured on ladder row 1 at turn 83: `colony_move=0 colony_gaveup=0
+    colony_built=2` with at least two live pods and `cap=19` blocking further production. Those
+    three numbers are consistent with "the pass ran 166 times and never found a site" AND with
+    "the pass barely ran", and they want opposite fixes.
+    */
+    NA_MOVE_COLONY_PASS,
 };
 void na_move_note(int faction_id, int what);
 
@@ -627,6 +638,7 @@ extern int na_move_upkeep_ok;
 extern int na_move_colony;
 extern int na_move_colony_gaveup;
 extern int na_move_colony_built;
+extern int na_move_colony_pass;
 extern int na_pod_build_run;
 extern int na_pod_reset_enter;
 extern int na_pod_reset_enter_ai;

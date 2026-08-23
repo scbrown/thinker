@@ -5394,6 +5394,7 @@ int na_move_upkeep_ok = 0;
 int na_move_colony = 0;
 int na_move_colony_gaveup = 0;
 int na_move_colony_built = 0;
+int na_move_colony_pass = 0;
 
 /*
 Settle the human faction's colony pods, because nothing else does (na-ywn).
@@ -5437,6 +5438,7 @@ void na_settle_player_colonies() {
         // iter_count is colony_move's own give-up counter; clearing it each turn is what makes
         // this a retry rather than one attempt that sticks forever.
         veh->iter_count = 0;
+        na_move_note(faction_id, NA_MOVE_COLONY_PASS);
         colony_move(i);
     }
 }
@@ -5619,6 +5621,7 @@ void na_move_note(int faction_id, int what) {
         case NA_MOVE_COLONY: na_move_colony++; break;
         case NA_MOVE_COLONY_GAVEUP: na_move_colony_gaveup++; break;
         case NA_MOVE_COLONY_BUILT: na_move_colony_built++; break;
+        case NA_MOVE_COLONY_PASS: na_move_colony_pass++; break;
         default: break;
     }
 }
@@ -6760,9 +6763,10 @@ void na_command_tick(void* hwnd_raw) {
         char detail[192];
         snprintf(detail, sizeof(detail),
                  "player=%d enemy_move=%d upkeep_ok=%d colony_move=%d colony_gaveup=%d "
-                 "colony_built=%d",
+                 "colony_built=%d colony_pass=%d",
                  *CurrentPlayerFaction, na_move_enemy, na_move_upkeep_ok,
-                 na_move_colony, na_move_colony_gaveup, na_move_colony_built);
+                 na_move_colony, na_move_colony_gaveup, na_move_colony_built,
+                 na_move_colony_pass);
         na_cmd_result("move-stats", detail, true);
         return;
     }
