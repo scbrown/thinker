@@ -683,6 +683,7 @@ extern int na_move_colony_retarget;
 extern int na_move_colony_tobase;
 extern int na_move_colony_left_alone;
 extern int na_move_colony_unaffordable;
+extern int na_pod_spent_at_seam;
 extern volatile int na_settle_mode;
 extern int na_pod_build_run;
 extern int na_pod_reset_enter;

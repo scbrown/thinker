@@ -5402,6 +5402,15 @@ int na_move_colony_left_alone = 0;
 int na_move_colony_unaffordable = 0;
 
 /*
+The first pod's `moves_spent` as our settle pass FINDS it, before we touch anything (na-1lj).
+
+`move-stats` reads the value at probe time, which is after everything has run — so it cannot say
+whether the allowance was already gone when we arrived, or whether our own pass spent it. Those
+two want opposite fixes: one is something in the engine's turn, the other is us.
+*/
+int na_pod_spent_at_seam = -1;
+
+/*
 How the settle pass treats a pod that is already on its way (na-1lj).
 
     0  call colony_move every turn for every pod         — what the fork has always done
@@ -5474,10 +5483,15 @@ void na_settle_player_colonies() {
     if (faction_id <= 0 || faction_id >= MaxPlayerNum) {
         return;
     }
+    bool first_pod = true;
     for (int i = *VehCount - 1; i >= 0; i--) {
         VEH* veh = &Vehs[i];
         if (veh->faction_id != faction_id || !veh->is_colony()) {
             continue;
+        }
+        if (first_pod) {
+            na_pod_spent_at_seam = veh->moves_spent;
+            first_pod = false;
         }
         /*
         THE na-1lj FIX: a destination whose FIRST STEP the pod cannot afford is not a destination.
@@ -7293,14 +7307,15 @@ void na_command_tick(void* hwnd_raw) {
                  "player=%d enemy_move=%d upkeep_ok=%d colony_move=%d colony_gaveup=%d "
                  "colony_built=%d colony_pass=%d enroute=%d retarget=%d tobase=%d "
                  "pod=%d,%d wp=%d,%d order=%d spent=%d speed=%d reg=%d wpreg=%d triad=%d "
-                 "mode=%d left_alone=%d unafford=%d at_base=%d defend=%d iter=%d unit_turn=%d zoc=%d "
+                 "mode=%d left_alone=%d unafford=%d seam_spent=%d at_base=%d defend=%d iter=%d unit_turn=%d zoc=%d "
                  "state=0x%X fung=%d fung_dir=%d fung_adj=%d fung_wp=%d path=%d path1=%d step=%d,%d dir=%d cost=%d sfung=%d",
                  *CurrentPlayerFaction, na_move_enemy, na_move_upkeep_ok,
                  na_move_colony, na_move_colony_gaveup, na_move_colony_built,
                  na_move_colony_pass, na_move_colony_enroute, na_move_colony_retarget,
                  na_move_colony_tobase, pod_x, pod_y, pod_wx, pod_wy,
                  pod_order, pod_spent, pod_speed, pod_reg, pod_wpreg, pod_triad,
-                 na_settle_mode, na_move_colony_left_alone, na_move_colony_unaffordable, pod_at_base, pod_defend, pod_iter,
+                 na_settle_mode, na_move_colony_left_alone, na_move_colony_unaffordable,
+                 na_pod_spent_at_seam, pod_at_base, pod_defend, pod_iter,
                  na_unit_turn_mode, pod_zoc, pod_state,
                  pod_fung, pod_fung_dir, pod_fung_adj, pod_fung_wp, pod_path, pod_path1,
                  pod_step_x, pod_step_y, pod_step_dir, pod_step_cost, pod_step_fung);
