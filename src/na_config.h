@@ -138,6 +138,30 @@ struct NaConfig {
     */
     int dialog_route = 0;
     /*
+    Neural Amplifier: hook popp's ENTRY POINT instead of the `popp` pointer (invariant 7,
+    na-4lr). 0 keeps the pointer swap, which is what every build has shipped.
+
+    OFF BY DEFAULT DELIBERATELY, and the reason is a measurement rather than caution in general.
+
+    The pointer swap reaches the dialogs the FORK raises — engine.cpp binds `popp` and the fork
+    calls through it. The engine calls the function directly, and there are 194 such call sites
+    in .text (measured on the shipped binary after applying Scient's patch table). Patching the
+    entry point reaches all of them without needing a single call-site address, which is the
+    thing na-4lr records as the blocker.
+
+    But when it was measured, a full turn holding a NETFLASH notice and a COMMUNICATIONS OFFICER
+    dialog produced `seen=0` with the entry hook installed and the observer's own probe proving
+    the path works. So neither of the dialogs anyone cares about goes through `popp` at all, and
+    the extra reach bought nothing THAT RUN — the trampoline has never actually carried a real
+    dialog.
+
+    Shipping an unexercised patch of a hot engine entry point, into a game a person plays, is
+    not a trade worth making for a benefit nobody has observed. So the mechanism is here,
+    reviewable and one ini key away, and the default does not change anyone's game. `dialog-stats`
+    reports `reach=entry` or `reach=pointer`, so which one is live is never a guess.
+    */
+    int dialog_entry_hook = 0;
+    /*
     Neural Amplifier: record base.staple decisions — nerve stapling (na-yd4). 0 keeps stock
     behaviour.
 

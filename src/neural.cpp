@@ -5171,12 +5171,108 @@ Captures whatever engine.cpp bound rather than naming the address again here. A 
 for the same function is how the wrapper and the engine come to disagree about which one is
 being wrapped.
 */
+/*
+The engine's popp entry point, and the nine bytes we relocate to reach it (na-4lr).
+
+    55                push ebp
+    8B EC             mov  ebp, esp
+    64 A1 00 00 00 00 mov  eax, fs:[0]      <- SEH setup; 9 bytes, ends on a boundary
+
+Five bytes is all a `jmp rel32` needs, but it may not SPLIT an instruction, and byte 5 is in
+the middle of the fs-relative move. So nine is the smallest legal prologue to relocate. None of
+the three is relative — there is no rip-relative addressing in 32-bit x86 and `fs:[0]` is
+absolute — so copying them elsewhere and continuing at popp+9 is safe without any fixups. That
+is the entire reason this is a hand-written trampoline and not a general one: a general
+trampoline needs a length disassembler, and this needs a verified constant.
+
+VERIFIED BEFORE PATCHING, in the spirit of `write_call` / `write_jump`. A build whose prologue
+differs is not one these bytes describe, and guessing would corrupt the dialog path of a game
+that otherwise runs.
+*/
+static const uint8_t NaPoppPrologue[] = {0x55, 0x8B, 0xEC, 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00};
+static const int32_t NaPoppEntryAddr = 0x48C0A0;
+
+//: Which door the dialog hook actually sits behind. Reported by `dialog-stats`, because
+//: "installed" was ambiguous exactly where it mattered: the pointer swap reaches only the
+//: dialogs THINKER raises, and there is no way to tell that from a log of zero dialogs.
+static const char* na_popp_reach = "none";
+
+/*
+Patch popp's entry point so EVERY caller reaches the hook — the engine's own included.
+
+The pointer swap this replaces was correct and reached about a fiftieth of the problem.
+`engine.cpp` binds `popp` to 0x48C0A0 and the fork calls through that pointer, so replacing it
+catches every call the FORK makes. The engine calls the function directly: measured on the
+shipped binary, after applying Scient's patch table, **194 direct call sites** in .text that the
+pointer never sees. Those are the council votes, the diplomacy offers and the random events —
+the surfaces na-4lr is actually after.
+
+Patching the entry point costs no call-site addresses at all, which is what made this look
+impossible: the bead records the remaining criterion as needing every site's address, hence a
+copy of terranx.exe the repo deliberately does not have. It needs neither. One address, already
+in `engine.cpp`, and nine bytes verified against the binary.
+
+Returns false rather than failing hard, so a build whose prologue does not match degrades to the
+pointer swap — today's behaviour — instead of losing dialog observation altogether.
+*/
+static bool na_install_popp_trampoline() {
+    uint8_t* entry = (uint8_t*)NaPoppEntryAddr;
+    DWORD oldattr = 0, tmp = 0;
+
+    // Its own VirtualProtect rather than relying on patch_setup's: this runs BEFORE that call
+    // (see the comment at its call site), and a hook whose correctness depends on where in a
+    // 300-line function it is invoked from is a trap for whoever moves it next.
+    if (!VirtualProtect(entry, sizeof(NaPoppPrologue), PAGE_EXECUTE_READWRITE, &oldattr)) {
+        return false;
+    }
+    if (memcmp(entry, NaPoppPrologue, sizeof(NaPoppPrologue)) != 0) {
+        VirtualProtect(entry, sizeof(NaPoppPrologue), oldattr, &tmp);
+        return false;
+    }
+    uint8_t* tramp = (uint8_t*)VirtualAlloc(
+        nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!tramp) {
+        VirtualProtect(entry, sizeof(NaPoppPrologue), oldattr, &tmp);
+        return false;
+    }
+    // The relocated prologue, then back to the instruction after it.
+    memcpy(tramp, NaPoppPrologue, sizeof(NaPoppPrologue));
+    tramp[sizeof(NaPoppPrologue)] = 0xE9;
+    *(int32_t*)(tramp + sizeof(NaPoppPrologue) + 1) =
+        (NaPoppEntryAddr + (int32_t)sizeof(NaPoppPrologue))
+        - (int32_t)(tramp + sizeof(NaPoppPrologue)) - 5;
+
+    // And the entry point itself. The four bytes past the jump are dead — nothing branches into
+    // the middle of a prologue — but they are nopped rather than left as the tail of an
+    // instruction that no longer starts here, so a disassembly of this address reads honestly.
+    entry[0] = 0xE9;
+    *(int32_t*)(entry + 1) = (int32_t)na_popp - NaPoppEntryAddr - 5;
+    memset(entry + 5, 0x90, sizeof(NaPoppPrologue) - 5);
+
+    VirtualProtect(entry, sizeof(NaPoppPrologue), oldattr, &tmp);
+    FlushInstructionCache(GetCurrentProcess(), entry, sizeof(NaPoppPrologue));
+
+    na_engine_popp = (Fpopp)tramp;
+    return true;
+}
+
 void na_install_dialog_hook() {
     if (na_engine_popp) {
         return;
     }
+    if (conf.na.dialog_entry_hook && na_install_popp_trampoline()) {
+        /*
+        The `popp` POINTER IS DELIBERATELY LEFT ALONE. Every caller now arrives through the
+        entry point, so swapping the pointer as well would send the fork's own calls through
+        na_popp twice — once via the pointer and once via the entry — double-counting every
+        dialog it raises and running auto-answer and routing on it twice.
+        */
+        na_popp_reach = "entry";
+        return;
+    }
     na_engine_popp = popp;
     popp = na_popp;
+    na_popp_reach = "pointer";
 }
 
 static bool na_is_order_line(const char* line) {
@@ -6063,10 +6159,11 @@ void na_command_tick(void* hwnd_raw) {
     if (strcmp(line, "dialog-stats") == 0) {
         char detail[128];
         snprintf(detail, sizeof(detail),
-                 "seen=%d unmapped=%d auto=%d routed=%d route_refused=%d table=%d installed=%d",
+                 "seen=%d unmapped=%d auto=%d routed=%d route_refused=%d table=%d installed=%d "
+                 "reach=%s",
                  na_dialog_seen, na_dialog_unmapped, na_dialog_auto_answered,
                  na_dialog_routed, na_dialog_route_refused,
-                 NaDialogTableSize, na_engine_popp ? 1 : 0);
+                 NaDialogTableSize, na_engine_popp ? 1 : 0, na_popp_reach);
         na_cmd_result("dialog-stats", detail, true);
         return;
     }
@@ -6488,6 +6585,7 @@ static const NaOption NaOptions[] = {
     {"na_dialog_observe", &NaConfig::dialog_observe},
     {"na_dialog_auto", &NaConfig::dialog_auto},
     {"na_dialog_route", &NaConfig::dialog_route},
+    {"na_dialog_entry_hook", &NaConfig::dialog_entry_hook},
     {"na_staple_observe", &NaConfig::staple_observe},
     {"na_endgame_observe", &NaConfig::endgame_observe},
     {"na_satellite_observe", &NaConfig::satellite_observe},
