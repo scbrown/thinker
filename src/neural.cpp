@@ -718,6 +718,38 @@ static void na_write_metrics(NaBuf* w, int faction_id, int base_id) {
     }
     na_buf_printf(w, ",\"units_in_foreign_territory\":%d", trespassing);
     /*
+    How many factions we are at war with (na-tit) — the metric behind the design's most-cited
+    review trigger.
+
+    na-7bk's conditional queued answers and unit-intent triggers must name something in
+    metrics.py, and metrics.py only admits names an adapter emits. `at_war` was the first
+    example in the design comment and the first thing refused: a standing answer that should
+    stop when war breaks out could not say so, so it went on standing.
+
+    A COUNT, not a flag, and the count is what makes it usable. The comparators are numeric, so
+    a boolean would only support "is at war" — while what the design actually asks for is
+    "re-raise when the war state CHANGES", and a second front is a change a boolean cannot see.
+    Zero reads as peace without needing a special case.
+
+    Commlink-gated, the same fog rule `units_in_foreign_territory` follows through
+    whose_territory. A faction we have never met must not appear in a number the brain reads,
+    even as an increment — that is the existence of a faction leaking through a count. In
+    practice vendetta implies contact, so this is expected to change nothing; it is here because
+    "expected to" is not a reason to leave a fog gate out of a fog-relevant sweep.
+
+    `better` is left None in the vocabulary on purpose: fewer fronts is safer, more is sometimes
+    the plan, and the trigger this exists for is about the number MOVING rather than about which
+    way is good.
+    */
+    int wars = 0;
+    for (int i = 0; i < MaxPlayerNum; i++) {
+        if (i != faction_id && at_war(faction_id, i)
+        && has_treaty(faction_id, i, DIPLO_COMMLINK)) {
+            wars++;
+        }
+    }
+    na_buf_printf(w, ",\"factions_at_war\":%d", wars);
+    /*
     Base-scope metrics on base-scope surfaces only.
 
     A faction-scope decision has no single base to report these for, and emitting
