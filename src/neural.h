@@ -585,6 +585,8 @@ enum NaMoveEvent {
     NA_MOVE_COLONY_NOWHERE,
     //: the settle pass deliberately left an en-route pod alone (settle-mode 1)
     NA_MOVE_COLONY_LEFT_ALONE,
+    //: the pod's next step cost more than its whole allowance, so its target was excluded
+    NA_MOVE_COLONY_UNAFFORDABLE,
 };
 void na_move_note(int faction_id, int what);
 
@@ -680,6 +682,7 @@ extern int na_move_colony_enroute;
 extern int na_move_colony_retarget;
 extern int na_move_colony_tobase;
 extern int na_move_colony_left_alone;
+extern int na_move_colony_unaffordable;
 extern volatile int na_settle_mode;
 extern int na_pod_build_run;
 extern int na_pod_reset_enter;

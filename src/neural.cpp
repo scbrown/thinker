@@ -5399,6 +5399,7 @@ int na_move_colony_enroute = 0;
 int na_move_colony_retarget = 0;
 int na_move_colony_tobase = 0;
 int na_move_colony_left_alone = 0;
+int na_move_colony_unaffordable = 0;
 
 /*
 How the settle pass treats a pod that is already on its way (na-1lj).
@@ -5477,6 +5478,52 @@ void na_settle_player_colonies() {
         VEH* veh = &Vehs[i];
         if (veh->faction_id != faction_id || !veh->is_colony()) {
             continue;
+        }
+        /*
+        THE na-1lj FIX: a destination whose FIRST STEP the pod cannot afford is not a destination.
+
+        Measured on the `frozen-pod-seed1` fixture: `path=16` — a valid route, about six turns of
+        travel — and `step=134,84 dir=5 cost=6` against `speed=3`. The pathfinder's first step
+        costs double the pod's entire allowance, and movement does not accumulate across turns,
+        so that step can never be taken. The pod sat on one tile for nineteen turns holding a
+        perfectly valid route.
+
+        It explains every earlier observation at once: frozen indefinitely, frozen under every
+        configuration tried, unrelated to fungus / ZOC / bases / state bits, non-positional
+        (it depends on the terrain of one specific tile), and why other pods travel normally —
+        their first step is affordable.
+
+        Nothing in the site search knows about step cost. `select_colony` scores destinations and
+        `safe_path` checks the route is safe and unowned; neither asks whether the unit can take
+        the first stride of it. So the search will happily re-pick the same site forever.
+
+        The fix marks that site as taken — `NODE_BASE_SITE` is the mechanism `colony_move`'s own
+        search already uses to skip a tile — and clears the order so the pod re-plans this turn.
+        `mapnodes` is cleared every turn by `move_upkeep`, so this is a one-turn exclusion applied
+        immediately before the re-plan, not a permanent ban on a tile that may be reachable later
+        from somewhere else.
+
+        Deliberately in OUR pass and not in `colony_move`: the same search runs for AI factions,
+        which have working movement, and a change there would alter seven factions' behaviour to
+        fix one faction's stall.
+        */
+        if (veh->waypoint_x[0] >= 0 && !veh->at_target()) {
+            const int dir = Path_find(Paths, veh->x, veh->y, veh->waypoint_x[0],
+                                      veh->waypoint_y[0], veh->unit_id, faction_id, 0, -1);
+            if (dir >= 0 && dir < 8) {
+                const int sx = wrap(veh->x + BaseOffsetX[dir]);
+                const int sy = veh->y + BaseOffsetY[dir];
+                const int cost = mod_hex_cost(veh->unit_id, faction_id, veh->x, veh->y, sx, sy, 0);
+                if (cost > veh_speed(i, 0)) {
+                    na_move_note(faction_id, NA_MOVE_COLONY_UNAFFORDABLE);
+                    mapnodes.insert({veh->waypoint_x[0], veh->waypoint_y[0], NODE_BASE_SITE});
+                    set_order_none(i);
+                    veh->iter_count = 0;
+                    na_move_note(faction_id, NA_MOVE_COLONY_PASS);
+                    colony_move(i);
+                    continue;
+                }
+            }
         }
         /*
         Mode 1 (na-1lj A/B): a pod that has somewhere to be and is not there yet is left alone,
@@ -5766,6 +5813,7 @@ void na_move_note(int faction_id, int what) {
         case NA_MOVE_COLONY_RETARGET: na_move_colony_retarget++; break;
         case NA_MOVE_COLONY_TOBASE: na_move_colony_tobase++; break;
         case NA_MOVE_COLONY_LEFT_ALONE: na_move_colony_left_alone++; break;
+        case NA_MOVE_COLONY_UNAFFORDABLE: na_move_colony_unaffordable++; break;
         default: break;
     }
 }
@@ -7056,6 +7104,13 @@ void na_command_tick(void* hwnd_raw) {
         int pod_iter = -1;
         int pod_zoc = -1;
         int pod_state = 0;
+        int pod_path = -999;
+        int pod_path1 = -999;
+        int pod_step_dir = -1;
+        int pod_step_x = -1;
+        int pod_step_y = -1;
+        int pod_step_cost = -1;
+        int pod_step_fung = -1;
         int pod_fung = -1;
         int pod_fung_wp = -1;
         int pod_fung_adj = -1;
@@ -7149,6 +7204,56 @@ void na_command_tick(void* hwnd_raw) {
                 "one awkward tile" read differently. `fung_wp` covers the site itself being
                 fungus.
                 */
+                /*
+                IS THERE A PATH AT ALL? (na-1lj)
+
+                The fixture arms settle it that the freeze is not configuration: the same pod, on
+                the same tile, is frozen for seven turns under the default, under settle-mode 1,
+                and with the counters showing colony_move being called twice a turn. Same region
+                (`reg`==`wpreg`) only says both tiles are land in the same landmass — it does NOT
+                say a unit can walk between them. An isthmus held by another faction's units, a
+                one-tile neck, or terrain the pathfinder refuses all give "same region" and no
+                route.
+
+                `path_cost` returns negative when there is no path. If that is what this reads,
+                the pod is obeying an impossible order, `colony_move`'s en-route branch keeps
+                saying "carry on" because the DESTINATION is still buildable, and nothing in the
+                loop ever asks whether it can be reached.
+                */
+                /*
+                `max_cost` bounds the TOTAL path cost, so passing the unit's speed asks "can I
+                arrive THIS TURN" — which is -1 for almost any real journey and would have
+                manufactured exactly the answer being looked for. Caught before it was measured.
+                Two numbers instead: `path` with a cap far above any real route, where -1 means
+                genuinely no route; `path1` with the unit's own speed, which is the question
+                colony_move asks.
+                */
+                pod_path = path_cost(Vehs[i].x, Vehs[i].y, Vehs[i].waypoint_x[0],
+                                     Vehs[i].waypoint_y[0], Vehs[i].unit_id, faction, 9999);
+                pod_path1 = path_cost(Vehs[i].x, Vehs[i].y, Vehs[i].waypoint_x[0],
+                                      Vehs[i].waypoint_y[0], Vehs[i].unit_id, faction,
+                                      veh_speed(i, 0));
+                /*
+                THE FIRST STEP (na-1lj). `path=16` says a route exists and costs 16 movement
+                points — about six turns at speed 3 — so the destination is reachable and the pod
+                is not obeying an impossible order. It still does not move.
+
+                So ask about the STEP, not the journey: which direction does the engine's own
+                pathfinder choose, what tile is that, and what does it cost to enter. A step cost
+                above the unit's whole allowance is the one shape that stops a unit dead while
+                leaving the route valid — and it is the question every previous instrument here
+                asked one level too high.
+                */
+                pod_step_dir = Path_find(Paths, Vehs[i].x, Vehs[i].y, Vehs[i].waypoint_x[0],
+                                         Vehs[i].waypoint_y[0], Vehs[i].unit_id, faction, 0, -1);
+                if (pod_step_dir >= 0 && pod_step_dir < 8) {
+                    pod_step_x = wrap(Vehs[i].x + BaseOffsetX[pod_step_dir]);
+                    pod_step_y = Vehs[i].y + BaseOffsetY[pod_step_dir];
+                    pod_step_cost = mod_hex_cost(Vehs[i].unit_id, faction, Vehs[i].x, Vehs[i].y,
+                                                 pod_step_x, pod_step_y, 0);
+                    MAP* step = mapsq(pod_step_x, pod_step_y);
+                    pod_step_fung = step && step->is_fungus() ? 1 : 0;
+                }
                 MAP* dest = mapsq(Vehs[i].waypoint_x[0], Vehs[i].waypoint_y[0]);
                 pod_fung = here && here->is_fungus() ? 1 : 0;
                 pod_fung_wp = dest && dest->is_fungus() ? 1 : 0;
@@ -7188,16 +7293,17 @@ void na_command_tick(void* hwnd_raw) {
                  "player=%d enemy_move=%d upkeep_ok=%d colony_move=%d colony_gaveup=%d "
                  "colony_built=%d colony_pass=%d enroute=%d retarget=%d tobase=%d "
                  "pod=%d,%d wp=%d,%d order=%d spent=%d speed=%d reg=%d wpreg=%d triad=%d "
-                 "mode=%d left_alone=%d at_base=%d defend=%d iter=%d unit_turn=%d zoc=%d "
-                 "state=0x%X fung=%d fung_dir=%d fung_adj=%d fung_wp=%d",
+                 "mode=%d left_alone=%d unafford=%d at_base=%d defend=%d iter=%d unit_turn=%d zoc=%d "
+                 "state=0x%X fung=%d fung_dir=%d fung_adj=%d fung_wp=%d path=%d path1=%d step=%d,%d dir=%d cost=%d sfung=%d",
                  *CurrentPlayerFaction, na_move_enemy, na_move_upkeep_ok,
                  na_move_colony, na_move_colony_gaveup, na_move_colony_built,
                  na_move_colony_pass, na_move_colony_enroute, na_move_colony_retarget,
                  na_move_colony_tobase, pod_x, pod_y, pod_wx, pod_wy,
                  pod_order, pod_spent, pod_speed, pod_reg, pod_wpreg, pod_triad,
-                 na_settle_mode, na_move_colony_left_alone, pod_at_base, pod_defend, pod_iter,
+                 na_settle_mode, na_move_colony_left_alone, na_move_colony_unaffordable, pod_at_base, pod_defend, pod_iter,
                  na_unit_turn_mode, pod_zoc, pod_state,
-                 pod_fung, pod_fung_dir, pod_fung_adj, pod_fung_wp);
+                 pod_fung, pod_fung_dir, pod_fung_adj, pod_fung_wp, pod_path, pod_path1,
+                 pod_step_x, pod_step_y, pod_step_dir, pod_step_cost, pod_step_fung);
         na_cmd_result("move-stats", detail, true);
         return;
     }
