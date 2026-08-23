@@ -1,4 +1,5 @@
 
+#include "neural.h"
 #include "veh_turn.h"
 
 void __cdecl mod_enemy_turn(int faction_id) {
@@ -142,6 +143,7 @@ int __cdecl mod_enemy_move(int veh_id) {
     VEH* veh = &Vehs[veh_id];
     MAP* sq;
     bool plr_unit = veh->plr_owner();
+    na_move_note(veh->faction_id, NA_MOVE_ENEMY);  // na-ywn census
     debug("enemy_move %d %2d %2d %s\n", veh_id, veh->x, veh->y, veh->name());
 
     if (!(sq = mapsq(veh->x, veh->y))) {
@@ -162,6 +164,7 @@ int __cdecl mod_enemy_move(int veh_id) {
         }
     }
     if (thinker_move_upkeep(veh->faction_id)) {
+        na_move_note(veh->faction_id, NA_MOVE_UPKEEP_OK);  // na-ywn census
         int triad = veh->triad();
         if (plr_unit && veh->is_patrol_order()) {
             if (veh->need_refuel() && (sq->is_airbase()
@@ -173,6 +176,7 @@ int __cdecl mod_enemy_move(int veh_id) {
         } else if (!plr_unit && veh->flags & (VFLAG_LURKER|VFLAG_INVISIBLE)) {
             return mod_veh_skip(veh_id);
         } else if (veh->is_colony()) {
+            na_move_note(veh->faction_id, NA_MOVE_COLONY);  // na-ywn census
             return colony_move(veh_id);
         } else if (veh->is_former()) {
             return former_move(veh_id);

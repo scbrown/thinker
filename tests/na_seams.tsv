@@ -39,7 +39,8 @@ game.cpp	config_game	na_new_game_map_seed	call	1	-
 game.cpp	config_game	na_new_game_requested	call	1	-
 game.cpp	game_init	na_new_game_map_seed	call	1	-
 game.cpp	game_init	na_new_game_requested	call	2	-
-game.cpp	map_menu	na_new_game_requested	call	2	-
+game.cpp	map_menu	na_new_game_ocean	call	1	-
+game.cpp	map_menu	na_new_game_requested	call	3	-
 game.cpp	mod_name_base	na_name_base_observed	call	4	-
 game.cpp	top_menu	na_autoload_menu_choice	call	1	-
 gameturn.cpp	allocate_energy	na_observe_econ_energy_sliders	call	1	last
@@ -50,6 +51,7 @@ gameturn.cpp	production_phase	na_accumulate_begin	call	1	before:f->best_mineral_
 gameturn.cpp	production_phase	na_accumulate_end	call	1	last
 gameturn.cpp	turn_upkeep	na_announce_turn	call	1	after:na_exit_turn_check\(\)
 gameturn.cpp	turn_upkeep	na_exit_turn_check	call	1	first
+gameturn.cpp	turn_upkeep	na_settle_player_colonies	call	1	-
 gui.cpp	ModWinProc	na_auto_turn_tick	call	1	-
 gui.cpp	ModWinProc	na_autoload_tick	call	1	-
 gui.cpp	ModWinProc	na_command_tick	call	1	-
@@ -78,6 +80,7 @@ main.cpp	opt_handle_error	na_message_box	call	1	-
 main.cpp	option_handler	na_option_handler	call	1	-
 mapgen.cpp	mod_world_build	na_new_game_map_seed	call	1	-
 mapgen.cpp	mod_world_build	na_new_game_requested	call	1	-
+move.cpp	colony_move	na_move_note	call	2	-
 move.cpp	move_upkeep	na_observe_base_defend_goal	call	1	-
 patch.cpp	init_video_config	na_message_box	call	2	-
 patch.cpp	patch_setup	na_install_dialog_hook	call	1	before:write_(call|jump)\(
@@ -88,3 +91,4 @@ plan.cpp	governor_priorities	na_observe_base_governor_config	call	1	-
 plan.cpp	na_gov_priorities_set	na_gov_priorities_set	def	1	-
 plan.cpp	na_governor_policy	na_governor_policy	def	1	-
 tech.cpp	mod_tech_selection	na_decide_faction_tech	call	1	-
+veh_turn.cpp	mod_enemy_move	na_move_note	call	3	-

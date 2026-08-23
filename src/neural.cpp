@@ -3878,6 +3878,16 @@ int na_new_game_map_seed() {
 }
 
 /*
+Ocean coverage for a seeded map, 0 (most land) to 2 (most ocean). Default 1 — balanced.
+
+A constant rather than a draw, because a seeded ladder needs seeds to vary the terrain and not
+its viability (na-ywn). -na-map-ocean overrides it for anyone deliberately testing a water world.
+*/
+int na_new_game_ocean() {
+    return na_new_game_ocean_value;
+}
+
+/*
 True once -na-autoload has finished, either by loading or by giving up, and
 trivially true when no autoload was asked for.
 */
@@ -5259,6 +5269,81 @@ static const int32_t NaPoppEntryAddr = 0x48C0A0;
 static const char* na_popp_reach = "none";
 
 /*
+na-ywn census: the human faction's mover, counted rather than reasoned about.
+
+Only the CURRENT PLAYER's units are counted. Every AI faction settles normally, so mixing them
+in would bury the one faction the question is about under six that are fine.
+*/
+int na_move_enemy = 0;
+int na_move_upkeep_ok = 0;
+int na_move_colony = 0;
+int na_move_colony_gaveup = 0;
+int na_move_colony_built = 0;
+
+/*
+Settle the human faction's colony pods, because nothing else does (na-ywn).
+
+MEASURED, after reading the source wrong twice: `move-stats` reports `enemy_move=0` for the
+human faction. `mod_enemy_move` is never called for its units at all — so `colony_move` never
+runs, `defend_tile` and `iter_count` are irrelevant, and the "No Orders" on screen is simply the
+engine's default for a player unit nobody has ordered. Exactly what a human at the keyboard
+would see.
+
+`manage_player_units` does not change this. It gates `thinker_move_upkeep`, which only matters
+once `mod_enemy_move` has been entered — it is a "how to move" switch, not a "whether to move
+at all" one. That distinction is the whole bug, and it is invisible from either function.
+
+So an unattended run has to drive them. Deliberately NARROW, per the na-nmg ruling that
+promise-keeping goes native and there is no LLM surface for founding:
+
+  - colony pods only. Not a general player-unit AI — that is a much larger question and not
+    one an unattended harness should answer by accident.
+  - `colony_move`, the engine's own chooser, rather than a settling heuristic of our own. A
+    ladder measuring OUR expansion policy against Thinker's would not be measuring the brain.
+  - only when asked (`manage_player_units`), and only for the current player. An AI faction
+    already has a mover.
+
+Called from the between-turns seam, so a pod that could not settle this turn is asked again
+next turn rather than parked forever.
+*/
+void na_settle_player_colonies() {
+    if (!conf.manage_player_units) {
+        return;
+    }
+    const int faction_id = *CurrentPlayerFaction;
+    if (faction_id <= 0 || faction_id >= MaxPlayerNum) {
+        return;
+    }
+    for (int i = *VehCount - 1; i >= 0; i--) {
+        VEH* veh = &Vehs[i];
+        if (veh->faction_id != faction_id || !veh->is_colony()) {
+            continue;
+        }
+        // iter_count is colony_move's own give-up counter; clearing it each turn is what makes
+        // this a retry rather than one attempt that sticks forever.
+        veh->iter_count = 0;
+        colony_move(i);
+    }
+}
+
+void na_move_note(int faction_id, int what) {
+    if (faction_id != *CurrentPlayerFaction) {
+        return;
+    }
+    switch (what) {
+        case NA_MOVE_ENEMY: na_move_enemy++; break;
+        case NA_MOVE_UPKEEP_OK: na_move_upkeep_ok++; break;
+        case NA_MOVE_COLONY: na_move_colony++; break;
+        case NA_MOVE_COLONY_GAVEUP: na_move_colony_gaveup++; break;
+        case NA_MOVE_COLONY_BUILT: na_move_colony_built++; break;
+        default: break;
+    }
+}
+
+//: Ocean coverage for a -na-new-game map. 1 is balanced land/ocean; see na_new_game_ocean().
+int na_new_game_ocean_value = 1;
+
+/*
 Patch popp's entry point so EVERY caller reaches the hook — the engine's own included.
 
 The pointer swap this replaces was correct and reached about a fiftieth of the problem.
@@ -6257,6 +6342,28 @@ void na_command_tick(void* hwnd_raw) {
             n += snprintf(detail + n, sizeof(detail) - n, "%s%d:%d", f > 1 ? "," : "", f, owned);
         }
         na_cmd_result("game-state", detail, true);
+        return;
+    }
+
+    /*
+    `move-stats` — is the human faction's mover running, and where does a colony pod stop?
+
+    Reading the source has now failed twice on this question (na-ywn): first "it must be
+    manage_player_units", then "it must be the island". Both were wrong, and both were arrived
+    at by reading code that plainly supports the conclusion. A counter at the call site is the
+    only thing that has settled a question of this shape here before (na-4zs).
+
+    Four numbers, so that "the mover never ran" and "the mover ran and gave up" are different
+    facts rather than one empty log.
+    */
+    if (strcmp(line, "move-stats") == 0) {
+        char detail[192];
+        snprintf(detail, sizeof(detail),
+                 "player=%d enemy_move=%d upkeep_ok=%d colony_move=%d colony_gaveup=%d "
+                 "colony_built=%d",
+                 *CurrentPlayerFaction, na_move_enemy, na_move_upkeep_ok,
+                 na_move_colony, na_move_colony_gaveup, na_move_colony_built);
+        na_cmd_result("move-stats", detail, true);
         return;
     }
 

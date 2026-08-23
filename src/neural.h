@@ -543,6 +543,30 @@ at seed 0 lives in one place instead of at every call site.
 */
 bool na_new_game_requested();
 int na_new_game_map_seed();
+int na_new_game_ocean();
+
+//: na-ywn census points. See na_move_note / the `move-stats` command.
+enum NaMoveEvent {
+    NA_MOVE_ENEMY = 0,
+    NA_MOVE_UPKEEP_OK,
+    NA_MOVE_COLONY,
+    NA_MOVE_COLONY_GAVEUP,
+    NA_MOVE_COLONY_BUILT,
+};
+void na_move_note(int faction_id, int what);
+
+/*
+Settle the human faction's colony pods on an unattended run (na-ywn). No-op unless
+manage_player_units is set. See the definition for why this is needed at all — the engine never
+calls mod_enemy_move for a player unit.
+*/
+void na_settle_player_colonies();
+extern int na_move_enemy;
+extern int na_move_upkeep_ok;
+extern int na_move_colony;
+extern int na_move_colony_gaveup;
+extern int na_move_colony_built;
+extern int na_new_game_ocean_value;
 bool na_autoload_settled();
 
 /*

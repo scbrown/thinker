@@ -1415,6 +1415,15 @@ void __cdecl turn_upkeep() {
     */
     na_exit_turn_check();
     /*
+    Neural Amplifier: settle the human faction's colony pods (na-ywn).
+
+    Here because it is the one seam that runs every turn regardless of who is playing, and
+    because a pod that had nowhere to go this turn should be asked again next turn. See
+    na_settle_player_colonies for why anything is needed: the engine never calls mod_enemy_move
+    for a player unit, so nothing moves them at all on an unattended run.
+    */
+    na_settle_player_colonies();
+    /*
     Neural Amplifier: forecast the COMING turn to the orchestrator.
 
     Same seam, same reason, opposite direction: the exit check reads the turn that just finished,

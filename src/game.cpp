@@ -638,6 +638,32 @@ int __cdecl map_menu(int flag) {
                     if (custom_planet(1, flag)) {
                         retry = true;
                     }
+                } else if (na_new_game_requested()) {
+                    /*
+                    A seeded ladder pins the map PARAMETERS and varies only the terrain
+                    (na-ywn, sattler's ruling).
+
+                    Quickstart draws ocean coverage and erosion from the RNG, so a seed decides
+                    not only what the world looks like but whether it is playable at all.
+                    Measured on seed 4242: our faction started on a handful of land tiles in
+                    open ocean, colony pods with nowhere to go. A ladder scores that as a loss,
+                    the fairness profile is identical, and nothing downstream can tell it from
+                    a brain that played badly.
+
+                    So these become fixed arguments. Two seeds now differ in the shape of the
+                    land and not in whether there is any — which is what makes a seed a
+                    controlled variable rather than a second, invisible one.
+
+                    NA_MAP_OCEAN overrides for anyone deliberately testing a water world.
+                    */
+                    const int ocean = clamp(na_new_game_ocean(), 0, 2);
+                    *MapOceanCoverage = ocean;
+                    *MapLandCoverage = 2 - ocean;
+                    *MapPlanetaryOrbit = 1;
+                    *MapCloudCover = 1;
+                    *MapNativeLifeForms = 1;
+                    // Fixed, not drawn: erosion changes how much of the land is usable.
+                    *MapErosiveForces = 1;
                 } else {
                     int ocean;
                     if (*MultiplayerActive) {

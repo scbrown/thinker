@@ -1424,12 +1424,17 @@ int colony_move(const int id) {
     int triad = veh->triad();
     TileSearch ts;
     if (defend_tile(veh, sq) || veh->iter_count >= 4) {
+        // na-ywn census: this is the "No Orders" the screen shows. Counted separately from
+        // reaching colony_move at all, because "the mover never ran" and "the mover ran and
+        // gave up here" are the two answers and they want opposite fixes.
+        na_move_note(faction_id, NA_MOVE_COLONY_GAVEUP);
         return set_order_none(id);
     }
     if (mapdata[{veh->x, veh->y}].safety < PM_SAFE && !veh->plr_owner()) {
         return escape_move(id);
     }
     if (can_build_base(veh->x, veh->y, faction_id, triad)) {
+        na_move_note(faction_id, NA_MOVE_COLONY_BUILT);  // na-ywn census: a legal site here
         if (triad == TRIAD_LAND && (veh->at_target()
         || ocean_coast_tiles(veh->x, veh->y) || !near_ocean_coast(veh->x, veh->y))) {
             return net_action_build(id, 0);

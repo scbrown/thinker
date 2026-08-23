@@ -507,6 +507,12 @@ int cmd_parse(Config* cf) {
             */
             na_new_game_seed = _wtoi(argv[i+1]);
             i++;
+        } else if (wcscmp(argv[i], L"-na-map-ocean") == 0 && i + 1 < argc) {
+            // Ocean coverage for a -na-new-game map, 0 (most land) to 2 (most ocean).
+            // Pinned rather than drawn so a seed varies the terrain and not its viability
+            // (na-ywn). Only meaningful alongside -na-new-game.
+            na_new_game_ocean_value = _wtoi(argv[i+1]);
+            i++;
         } else if (wcscmp(argv[i], L"-na-exit-turn") == 0 && i + 1 < argc) {
             /*
             Neural Amplifier: end the process cleanly once this many turns have
