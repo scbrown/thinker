@@ -5395,6 +5395,9 @@ int na_move_colony = 0;
 int na_move_colony_gaveup = 0;
 int na_move_colony_built = 0;
 int na_move_colony_pass = 0;
+int na_move_colony_enroute = 0;
+int na_move_colony_retarget = 0;
+int na_move_colony_tobase = 0;
 
 /*
 Settle the human faction's colony pods, because nothing else does (na-ywn).
@@ -5670,6 +5673,9 @@ void na_move_note(int faction_id, int what) {
         case NA_MOVE_COLONY_GAVEUP: na_move_colony_gaveup++; break;
         case NA_MOVE_COLONY_BUILT: na_move_colony_built++; break;
         case NA_MOVE_COLONY_PASS: na_move_colony_pass++; break;
+        case NA_MOVE_COLONY_ENROUTE: na_move_colony_enroute++; break;
+        case NA_MOVE_COLONY_RETARGET: na_move_colony_retarget++; break;
+        case NA_MOVE_COLONY_TOBASE: na_move_colony_tobase++; break;
         default: break;
     }
 }
@@ -6814,13 +6820,40 @@ void na_command_tick(void* hwnd_raw) {
     facts rather than one empty log.
     */
     if (strcmp(line, "move-stats") == 0) {
-        char detail[192];
+        /*
+        The first colony pod's POSITION and its waypoint, live (na-bg4 follow-up).
+
+        `enroute=13` with `retarget=1` is consistent with two opposite stories: a pod walking a
+        long way, and a pod not moving at all. A colony pod covers one tile a turn, so thirteen
+        turns of travel is perfectly ordinary — which is why the counter alone cannot settle it
+        and why reading the source instead would be the fourth wrong answer on this workstream.
+
+        Two readings of `pod=x,y` a few turns apart settle it with no new state and no guesswork.
+        `wp=` is where it thinks it is going, so "not moving" and "arrived and did not build" are
+        also distinguishable.
+        */
+        int pod_x = -1;
+        int pod_y = -1;
+        int pod_wx = -1;
+        int pod_wy = -1;
+        for (int i = 0; i < *VehCount; i++) {
+            if (Vehs[i].faction_id == *CurrentPlayerFaction && Vehs[i].is_colony()) {
+                pod_x = Vehs[i].x;
+                pod_y = Vehs[i].y;
+                pod_wx = Vehs[i].waypoint_x[0];
+                pod_wy = Vehs[i].waypoint_y[0];
+                break;
+            }
+        }
+        char detail[256];
         snprintf(detail, sizeof(detail),
                  "player=%d enemy_move=%d upkeep_ok=%d colony_move=%d colony_gaveup=%d "
-                 "colony_built=%d colony_pass=%d",
+                 "colony_built=%d colony_pass=%d enroute=%d retarget=%d tobase=%d "
+                 "pod=%d,%d wp=%d,%d",
                  *CurrentPlayerFaction, na_move_enemy, na_move_upkeep_ok,
                  na_move_colony, na_move_colony_gaveup, na_move_colony_built,
-                 na_move_colony_pass);
+                 na_move_colony_pass, na_move_colony_enroute, na_move_colony_retarget,
+                 na_move_colony_tobase, pod_x, pod_y, pod_wx, pod_wy);
         na_cmd_result("move-stats", detail, true);
         return;
     }

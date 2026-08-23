@@ -1465,6 +1465,7 @@ int colony_move(const int id) {
             mapnodes.insert({m.x, m.y, NODE_BASE_SITE});
         }
         ts.connect_roads(mapdata, veh->waypoint_x[0], veh->waypoint_y[0], faction_id);
+        na_move_note(faction_id, NA_MOVE_COLONY_ENROUTE);  // na-bg4 census
         return VEH_SYNC;
     }
     bool at_base = sq->is_base() && sq->owner == faction_id;
@@ -1513,15 +1514,37 @@ int colony_move(const int id) {
             return VEH_SKIP;
         }
         debug("colony_move %2d %2d -> %2d %2d\n", veh->x, veh->y, tx, ty);
-        // Set these flags to disable any non-Thinker unit automation.
-        veh->state |= VSTATE_UNK_40000;
-        veh->state &= ~VSTATE_UNK_2000;
+        /*
+        Set these flags to disable any non-Thinker unit automation.
+
+        NOT for a player-owned unit (na-bg4). These flags hand the unit to Thinker's mover, and
+        for the human slot that mover NEVER RUNS — the engine does not call `mod_enemy_move` for
+        a player unit (na-ywn measured `enemy_move=0` across a whole game). So on an unattended
+        run this turned the engine's own goto execution off and handed the pod to nobody.
+
+        MEASURED, two readings five turns apart on ladder seed 1:
+
+            turn 24   pod=40,96  wp=-1,-1
+            turn 29   pod=40,96  wp=41,101     enroute 2 -> 9
+
+        Nine passes, a destination five tiles away, and not one tile of movement. `colony_move`
+        issues the order; something else has to walk it, and for us that something is the
+        engine's own automation — which this line was switching off.
+
+        The flags stay for AI units, where the mover that replaces the automation does run.
+        */
+        if (!veh->plr_owner()) {
+            veh->state |= VSTATE_UNK_40000;
+            veh->state &= ~VSTATE_UNK_2000;
+        }
         ts.connect_roads(mapdata, tx, ty, faction_id);
+        na_move_note(faction_id, NA_MOVE_COLONY_RETARGET);  // na-bg4 census
         return set_move_to(id, tx, ty);
     }
     if (!at_base) {
         if (search_base(ts, id, false, &tx, &ty)) {
             debug("colony_base %2d %2d -> %2d %2d\n", veh->x, veh->y, tx, ty);
+            na_move_note(faction_id, NA_MOVE_COLONY_TOBASE);  // na-bg4 census
             return set_move_to(id, tx, ty);
         }
     }

@@ -563,6 +563,26 @@ enum NaMoveEvent {
     "the pass barely ran", and they want opposite fixes.
     */
     NA_MOVE_COLONY_PASS,
+    /*
+    WHERE colony_move leaves a pod that does not settle (na-bg4 follow-up).
+
+    `colony_pass=13 colony_built=2 colony_gaveup=0` at turn 24 says the pass runs and the pods do
+    not settle, and it cannot say why. colony_move has four non-settling exits and they want
+    different fixes:
+
+        ENROUTE    it has a waypoint and is walking      -> is anything actually moving it?
+        RETARGET   it picked a NEW destination this turn -> it is oscillating, not travelling
+        TOBASE     search_base fallback                  -> it gave up on sites, heading home
+        NOWHERE    fell through all of them              -> no reachable site at all
+
+    ENROUTE every turn with the count of RETARGET flat is a pod that is not moving. RETARGET
+    every turn is a pod that re-picks its destination before it can arrive. Both look identical
+    from outside as "the base count did not go up".
+    */
+    NA_MOVE_COLONY_ENROUTE,
+    NA_MOVE_COLONY_RETARGET,
+    NA_MOVE_COLONY_TOBASE,
+    NA_MOVE_COLONY_NOWHERE,
 };
 void na_move_note(int faction_id, int what);
 
@@ -647,6 +667,9 @@ extern int na_move_colony;
 extern int na_move_colony_gaveup;
 extern int na_move_colony_built;
 extern int na_move_colony_pass;
+extern int na_move_colony_enroute;
+extern int na_move_colony_retarget;
+extern int na_move_colony_tobase;
 extern int na_pod_build_run;
 extern int na_pod_reset_enter;
 extern int na_pod_reset_enter_ai;
