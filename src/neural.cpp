@@ -4913,6 +4913,7 @@ static int na_dialog_route_refused = 0;
 //: The engine's own popp, captured at install time. Held separately so the wrapper calls the
 //: ENGINE and not the pointer it just installed itself into — which would recurse forever.
 static Fpopp na_engine_popp = nullptr;
+static FPopup_start na_engine_popup_start = nullptr;
 
 /*
 base.hurry routing census (na-4zs). See the note in neural.h for why this is counted.
@@ -5350,6 +5351,38 @@ int __cdecl na_popp(const char* filename, const char* label, int a3, const char*
 }
 
 /*
+The engine's real dialog choke point. Popup_start is __thiscall, so `This` arrives in ECX;
+declaring the wrapper with the same ABI lets GCC preserve that contract while the trampoline
+continues to the original function. This repeats na_popp's three dispositions at the lower
+door, where direct engine callers and popp callers both arrive.
+*/
+int __thiscall na_popup_start(Popup* This, const char* filename, const char* label,
+                              int a4, char* a5, int a6, GraphicWin* a7) {
+    const NaDialogEntry* entry = na_dialog_lookup(filename, label);
+    if (conf.na.dialog_route) {
+        const int routed = na_route_dialog(entry, *CurrentBaseID);
+        if (routed >= 0) {
+            if (conf.na.dialog_observe) {
+                na_observe_dialog_routed(filename, label, routed);
+            }
+            return routed;
+        }
+    }
+    if (conf.na.dialog_auto && na_headless() && entry && entry->kind == NA_DIALOG_NOTICE) {
+        na_dialog_auto_answered++;
+        if (conf.na.dialog_observe) {
+            na_observe_dialog_auto(filename, label, 0);
+        }
+        return 0;
+    }
+    const int chosen = na_engine_popup_start(This, filename, label, a4, a5, a6, a7);
+    if (conf.na.dialog_observe) {
+        na_observe_dialog(filename, label, chosen);
+    }
+    return chosen;
+}
+
+/*
 Install the wrapper into the `popp` pointer. Idempotent: a second call is a no-op rather than
 chaining the wrapper onto itself, which would double every record and, worse, recurse.
 
@@ -5377,6 +5410,10 @@ that otherwise runs.
 */
 static const uint8_t NaPoppPrologue[] = {0x55, 0x8B, 0xEC, 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00};
 static const int32_t NaPoppEntryAddr = 0x48C0A0;
+static const uint8_t NaPopupStartPrologue[] = {
+    0x55, 0x8B, 0xEC, 0x51, 0xA1, 0x0C, 0x1B, 0x69, 0x00
+};
+static const int32_t NaPopupStartEntryAddr = 0x406380;
 
 //: Which door the dialog hook actually sits behind. Reported by `dialog-stats`, because
 //: "installed" was ambiguous exactly where it mattered: the pointer swap reaches only the
@@ -5742,18 +5779,55 @@ static bool na_install_popp_trampoline() {
     return true;
 }
 
+static bool na_install_popup_start_trampoline() {
+    uint8_t* entry = (uint8_t*)NaPopupStartEntryAddr;
+    DWORD oldattr = 0, tmp = 0;
+    if (!VirtualProtect(entry, sizeof(NaPopupStartPrologue), PAGE_EXECUTE_READWRITE, &oldattr)) {
+        return false;
+    }
+    if (memcmp(entry, NaPopupStartPrologue, sizeof(NaPopupStartPrologue)) != 0) {
+        VirtualProtect(entry, sizeof(NaPopupStartPrologue), oldattr, &tmp);
+        return false;
+    }
+    uint8_t* tramp = (uint8_t*)VirtualAlloc(
+        nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!tramp) {
+        VirtualProtect(entry, sizeof(NaPopupStartPrologue), oldattr, &tmp);
+        return false;
+    }
+    memcpy(tramp, NaPopupStartPrologue, sizeof(NaPopupStartPrologue));
+    tramp[sizeof(NaPopupStartPrologue)] = 0xE9;
+    *(int32_t*)(tramp + sizeof(NaPopupStartPrologue) + 1) =
+        (NaPopupStartEntryAddr + (int32_t)sizeof(NaPopupStartPrologue))
+        - (int32_t)(tramp + sizeof(NaPopupStartPrologue)) - 5;
+    entry[0] = 0xE9;
+    *(int32_t*)(entry + 1) = (int32_t)na_popup_start - NaPopupStartEntryAddr - 5;
+    memset(entry + 5, 0x90, sizeof(NaPopupStartPrologue) - 5);
+    VirtualProtect(entry, sizeof(NaPopupStartPrologue), oldattr, &tmp);
+    FlushInstructionCache(GetCurrentProcess(), entry, sizeof(NaPopupStartPrologue));
+    na_engine_popup_start = (FPopup_start)tramp;
+    return true;
+}
+
 void na_install_dialog_hook() {
     if (na_engine_popp) {
         return;
     }
-    if (conf.na.dialog_entry_hook && na_install_popp_trampoline()) {
+    if (conf.na.dialog_entry_hook && na_install_popup_start_trampoline()) {
         /*
         The `popp` POINTER IS DELIBERATELY LEFT ALONE. Every caller now arrives through the
         entry point, so swapping the pointer as well would send the fork's own calls through
         na_popp twice — once via the pointer and once via the entry — double-counting every
         dialog it raises and running auto-answer and routing on it twice.
         */
-        na_popp_reach = "entry";
+        na_engine_popp = popp; // installed sentinel; leave the pointer untouched to avoid doubles.
+        na_popp_reach = "popup_start";
+        return;
+    }
+    // A changed Popup_start prologue must not make observation disappear. The older popp entry
+    // hook still reaches every popp caller and is a stronger fallback than the pointer alone.
+    if (conf.na.dialog_entry_hook && na_install_popp_trampoline()) {
+        na_popp_reach = "popp_entry_fallback";
         return;
     }
     na_engine_popp = popp;
