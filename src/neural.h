@@ -583,6 +583,8 @@ enum NaMoveEvent {
     NA_MOVE_COLONY_RETARGET,
     NA_MOVE_COLONY_TOBASE,
     NA_MOVE_COLONY_NOWHERE,
+    //: the settle pass deliberately left an en-route pod alone (settle-mode 1)
+    NA_MOVE_COLONY_LEFT_ALONE,
 };
 void na_move_note(int faction_id, int what);
 
@@ -635,6 +637,13 @@ mod_enemy_move, which the engine never calls for a player unit, so `mapdata` and
 void na_upkeep_player();
 
 /*
+Run the human faction's unit turn — `mod_enemy_turn`, the pass that both DECIDES and EXECUTES
+(na-1lj). Off unless `unit-turn 1`; see the definition for why it is behind a switch.
+*/
+void na_run_player_unit_turn();
+extern volatile int na_unit_turn_mode;
+
+/*
 Native-tier enforcement of a withdrawal promise (na-nmg, sattler's ruling of 2026-08-23).
 
 A diplomacy answer is a PROMISE about later turns. The ruling is that KEEPING one is mechanical
@@ -670,6 +679,8 @@ extern int na_move_colony_pass;
 extern int na_move_colony_enroute;
 extern int na_move_colony_retarget;
 extern int na_move_colony_tobase;
+extern int na_move_colony_left_alone;
+extern volatile int na_settle_mode;
 extern int na_pod_build_run;
 extern int na_pod_reset_enter;
 extern int na_pod_reset_enter_ai;

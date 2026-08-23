@@ -1433,6 +1433,14 @@ void __cdecl turn_upkeep() {
     na_upkeep_player();
     na_settle_player_colonies();
     /*
+    Neural Amplifier: run the human faction's unit turn (na-1lj). Off by default.
+
+    After the colony pass rather than instead of it while this is being measured: the pass is
+    what the fork has been shipping, and replacing it in the same change as switching this on
+    would make the A/B meaningless.
+    */
+    na_run_player_unit_turn();
+    /*
     Neural Amplifier: choose production for the human faction's bases (na-bg4).
 
     After the settle pass, not before: settling can create a base this turn, and a base created

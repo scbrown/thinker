@@ -5398,6 +5398,28 @@ int na_move_colony_pass = 0;
 int na_move_colony_enroute = 0;
 int na_move_colony_retarget = 0;
 int na_move_colony_tobase = 0;
+int na_move_colony_left_alone = 0;
+
+/*
+How the settle pass treats a pod that is already on its way (na-1lj).
+
+    0  call colony_move every turn for every pod         — what the fork has always done
+    1  leave a pod alone while it has somewhere to be    — issue once, let the engine walk it
+
+An A/B, flippable at run time by the `settle-mode` command, and it exists as a switch rather
+than an edit so both arms can be measured IN ONE GAME. Two runs on two maps is what this
+workstream keeps mistaking for a comparison; the pod's start position, the terrain and the AI
+neighbours all differ between runs, and the effect being chased is a few tiles of movement.
+
+The hypothesis mode 1 tests: `colony_move` ISSUES orders and the engine EXECUTES them, so
+re-issuing every turn may be resetting the journey — which would explain movement that is
+INTERMITTENT rather than absent, the signature measured on this bead.
+
+Mode 1 still re-plans every 8th turn, so a pod that is genuinely stuck cannot sit on a dead
+order forever. That is the failure na-ywn's iter_count clearing was there to prevent, and this
+must not reintroduce it.
+*/
+volatile int na_settle_mode = 0;
 
 /*
 Settle the human faction's colony pods, because nothing else does (na-ywn).
@@ -5436,6 +5458,16 @@ void na_settle_player_colonies() {
     for (int i = *VehCount - 1; i >= 0; i--) {
         VEH* veh = &Vehs[i];
         if (veh->faction_id != faction_id || !veh->is_colony()) {
+            continue;
+        }
+        /*
+        Mode 1 (na-1lj A/B): a pod that has somewhere to be and is not there yet is left alone,
+        so the order it was already given can be executed instead of replaced. Re-planned every
+        8th turn regardless, so a dead order cannot strand a pod forever.
+        */
+        if (na_settle_mode == 1 && !veh->at_target() && veh->waypoint_x[0] >= 0
+        && (*CurrentTurn % 8) != 0) {
+            na_move_note(faction_id, NA_MOVE_COLONY_LEFT_ALONE);
             continue;
         }
         // iter_count is colony_move's own give-up counter; clearing it each turn is what makes
@@ -5508,6 +5540,45 @@ this exact configuration; nothing ever called it.
 Gated on `manage_player_units`, which is the same condition `thinker_move_upkeep` applies to a
 human faction, so an unattended run opts in and a real player is untouched.
 */
+/*
+Run the human faction's UNIT TURN (na-1lj). Off by default; `unit-turn 1` switches it on.
+
+FIFTH instance of the pattern this workstream keeps finding, and the top-level one.
+`mod_enemy_turn(faction_id)` IS the per-faction unit turn: it walks the faction's units in ten
+priority passes and calls `mod_enemy_veh` on each, in a loop, while the unit still has moves.
+`mod_enemy_veh` is where execution lives — it calls `mod_enemy_move` for the DECISION and then
+`action(veh_id)` to CARRY IT OUT, falling back to `veh_skip`.
+
+The engine calls it for AI factions only. Nothing runs it for the human slot, so for the faction
+we drive there is no unit turn at all: `na_settle_player_colonies` was a hand-rolled substitute
+that covered colony pods and only the decision half. That is exactly what na-1lj measured — a
+pod with a stable waypoint three tiles away, on the same land region, not in a base, not held to
+defend, iter_count 0, full movement budget, frozen for 23 turns. The order was issued every turn
+and never executed, because `action()` was never called.
+
+FOUR hypotheses died before this one, each by measurement, each recorded on the bead: a
+destination on another landmass (`reg`==`wpreg`), our own driver's SPACE skip (`--no-space`, no
+change), the movement budget (`speed=3`, and it covers three tiles when it does move), and our
+own per-turn re-issue resetting the journey (`settle-mode` A/B in one game, no change). So this
+one ships behind a switch and gets measured the same way, rather than being believed because it
+is the fifth and most plausible.
+
+Gated on `manage_player_units` — the flag whose whole meaning is "Thinker manages my units" —
+so a real player is untouched and an unattended run opts in.
+*/
+volatile int na_unit_turn_mode = 0;
+
+void na_run_player_unit_turn() {
+    if (!conf.manage_player_units || na_unit_turn_mode != 1) {
+        return;
+    }
+    const int faction_id = *CurrentPlayerFaction;
+    if (faction_id <= 0 || faction_id >= MaxPlayerNum) {
+        return;
+    }
+    mod_enemy_turn(faction_id);
+}
+
 void na_upkeep_player() {
     if (!conf.manage_player_units) {
         return;
@@ -5676,6 +5747,7 @@ void na_move_note(int faction_id, int what) {
         case NA_MOVE_COLONY_ENROUTE: na_move_colony_enroute++; break;
         case NA_MOVE_COLONY_RETARGET: na_move_colony_retarget++; break;
         case NA_MOVE_COLONY_TOBASE: na_move_colony_tobase++; break;
+        case NA_MOVE_COLONY_LEFT_ALONE: na_move_colony_left_alone++; break;
         default: break;
     }
 }
@@ -6720,6 +6792,47 @@ void na_command_tick(void* hwnd_raw) {
     because "nobody was trespassing" and "somebody was and had nowhere to go" both leave the
     metric unchanged and only one of them is the promise being kept.
     */
+    /*
+    `settle-mode <0|1>` — flip the na-1lj A/B without restarting the game.
+
+    Both arms in ONE game is the point. Two runs on two maps is what this workstream keeps
+    mistaking for a comparison: the pod's start, the terrain and the AI neighbours all differ,
+    and the effect being chased is a few tiles of movement.
+    */
+    if (strncmp(line, "unit-turn", 9) == 0) {
+        const char* arg = line + 9;
+        while (*arg == ' ') {
+            arg++;
+        }
+        int mode = 0;
+        if (sscanf(arg, "%d", &mode) != 1 || mode < 0 || mode > 1) {
+            na_cmd_result("unit-turn", "usage: unit-turn <0|1>", false);
+            return;
+        }
+        na_unit_turn_mode = mode;
+        char detail[96];
+        snprintf(detail, sizeof(detail), "unit_turn=%d turn=%d", mode, *CurrentTurn);
+        na_cmd_result("unit-turn", detail, true);
+        return;
+    }
+
+    if (strncmp(line, "settle-mode", 11) == 0) {
+        const char* arg = line + 11;
+        while (*arg == ' ') {
+            arg++;
+        }
+        int mode = 0;
+        if (sscanf(arg, "%d", &mode) != 1 || mode < 0 || mode > 1) {
+            na_cmd_result("settle-mode", "usage: settle-mode <0|1>", false);
+            return;
+        }
+        na_settle_mode = mode;
+        char detail[96];
+        snprintf(detail, sizeof(detail), "settle_mode=%d turn=%d", mode, *CurrentTurn);
+        na_cmd_result("settle-mode", detail, true);
+        return;
+    }
+
     if (strncmp(line, "withdraw-stats", 14) == 0) {
         char detail[192];
         snprintf(detail, sizeof(detail),
@@ -6840,6 +6953,11 @@ void na_command_tick(void* hwnd_raw) {
         int pod_reg = -1;
         int pod_wpreg = -1;
         int pod_triad = -1;
+        int pod_at_base = -1;
+        int pod_defend = -1;
+        int pod_iter = -1;
+        int pod_zoc = -1;
+        const int faction = *CurrentPlayerFaction;
         int pod_spent = -1;
         int pod_speed = -1;
         for (int i = 0; i < *VehCount; i++) {
@@ -6872,7 +6990,34 @@ void na_command_tick(void* hwnd_raw) {
 
                 Cheap to ask and it either closes the question or eliminates the likeliest cause.
                 */
+                /*
+                Is the pod standing IN A BASE, and does the engine consider it needed there?
+                (na-1lj)
+
+                The series says a pod that ARRIVES in the field founds its base and a pod that
+                is PRODUCED sits still: one pod walked (68,92)->(66,92)->(64,90) and founded a
+                base at turn 13, and the next pod sat on that same tile from turn 14 to turn 36
+                with a stable waypoint three tiles away. 23 turns, then one tile.
+
+                `defend_tile` is colony_move's own first test and it returns the unit to no
+                orders — the one hold in our own code that could do this. `at_base` separates
+                "pods do not leave bases" from "this particular pod is stuck".
+                */
                 MAP* here = mapsq(Vehs[i].x, Vehs[i].y);
+                pod_at_base = here && here->is_base() ? 1 : 0;
+                pod_defend = here && defend_tile(&Vehs[i], here) ? 1 : 0;
+                pod_iter = Vehs[i].iter_count;
+                /*
+                ZONE OF CONTROL (na-1lj). The last cheap candidate, and the one that fits the
+                whole signature: a unit in an enemy ZOC cannot step between tiles adjacent to
+                enemy units, so it can be given an order, attempt it, spend its allowance and end
+                the turn where it started — intermittently, freeing up when the enemy unit moves.
+
+                `mod_zoc_any` is the same test `mod_enemy_veh` consults when it decides whether a
+                unit with a MOVE_TO order can be skipped, so this is the engine's own notion and
+                not a second one.
+                */
+                pod_zoc = mod_zoc_any(Vehs[i].x, Vehs[i].y, faction) ? 1 : 0;
                 MAP* there = mapsq(Vehs[i].waypoint_x[0], Vehs[i].waypoint_y[0]);
                 pod_reg = here ? here->region : -1;
                 pod_wpreg = there ? there->region : -1;
@@ -6880,16 +7025,22 @@ void na_command_tick(void* hwnd_raw) {
                 break;
             }
         }
-        char detail[256];
+        // 256 was too small the moment `zoc` was added and the field came back EMPTY rather than
+        // wrong — snprintf truncated at the boundary and the value that vanished was the one
+        // being measured. A silent truncation in a diagnostic is worse than a missing field.
+        char detail[512];
         snprintf(detail, sizeof(detail),
                  "player=%d enemy_move=%d upkeep_ok=%d colony_move=%d colony_gaveup=%d "
                  "colony_built=%d colony_pass=%d enroute=%d retarget=%d tobase=%d "
-                 "pod=%d,%d wp=%d,%d order=%d spent=%d speed=%d reg=%d wpreg=%d triad=%d",
+                 "pod=%d,%d wp=%d,%d order=%d spent=%d speed=%d reg=%d wpreg=%d triad=%d "
+                 "mode=%d left_alone=%d at_base=%d defend=%d iter=%d unit_turn=%d zoc=%d",
                  *CurrentPlayerFaction, na_move_enemy, na_move_upkeep_ok,
                  na_move_colony, na_move_colony_gaveup, na_move_colony_built,
                  na_move_colony_pass, na_move_colony_enroute, na_move_colony_retarget,
                  na_move_colony_tobase, pod_x, pod_y, pod_wx, pod_wy,
-                 pod_order, pod_spent, pod_speed, pod_reg, pod_wpreg, pod_triad);
+                 pod_order, pod_spent, pod_speed, pod_reg, pod_wpreg, pod_triad,
+                 na_settle_mode, na_move_colony_left_alone, pod_at_base, pod_defend, pod_iter,
+                 na_unit_turn_mode, pod_zoc);
         na_cmd_result("move-stats", detail, true);
         return;
     }
