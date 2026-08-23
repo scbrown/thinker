@@ -4893,6 +4893,14 @@ static const NaDialogEntry NaDialogTable[] = {
     {nullptr,   "LOSEPROJECT",     "base.project",       NA_DIALOG_NOTICE, -1, -1},
     {"modmenu", "SPYFOUND",        "probe.action",       NA_DIALOG_NOTICE, -1, -1},
     {"modmenu", "SPYLOST",         "probe.action",       NA_DIALOG_NOTICE, -1, -1},
+
+    // demand_withdrawal constructs GETOUT1..5 at run time. Script.txt defines the same
+    // three zero-based buttons for every variant: comply, demand reciprocity, refuse.
+    {nullptr,   "GETOUT1",          "diplo.tribute",      NA_DIALOG_DECISION, 0, 2},
+    {nullptr,   "GETOUT2",          "diplo.tribute",      NA_DIALOG_DECISION, 0, 2},
+    {nullptr,   "GETOUT3",          "diplo.tribute",      NA_DIALOG_DECISION, 0, 2},
+    {nullptr,   "GETOUT4",          "diplo.tribute",      NA_DIALOG_DECISION, 0, 2},
+    {nullptr,   "GETOUT5",          "diplo.tribute",      NA_DIALOG_DECISION, 0, 2},
 };
 
 static const int NaDialogTableSize = (int)(sizeof(NaDialogTable) / sizeof(NaDialogTable[0]));
@@ -5241,6 +5249,9 @@ and its emitter already exists. That is deliberate: a per-dialog action space is
 work, and inventing one for a dialog nobody has looked at would be the same mistake as guessing
 its buttons.
 */
+extern volatile int na_withdraw_target;
+extern volatile int na_withdraw_until;
+
 static int na_route_dialog(const NaDialogEntry* entry, int base_id) {
     if (!entry || entry->kind != NA_DIALOG_DECISION || !entry->surface_id) {
         return -1;
@@ -5251,20 +5262,41 @@ static int na_route_dialog(const NaDialogEntry* entry, int base_id) {
         na_dialog_route_refused++;
         return -1;
     }
-    if (strcmp(entry->surface_id, "base.staple") != 0) {
-        na_dialog_route_refused++;
-        return -1;
-    }
-    if (base_id < 0 || base_id >= *BaseCount) {
-        na_dialog_route_refused++;
-        return -1;
-    }
-
     NaBuf w;
     na_buf_init(&w);
-    // The SAME world view base.staple already emits — not a second description of one
-    // decision. `stapled` is false because nothing has been chosen yet; this is the ask.
-    na_build_base_staple(&w, base_id, false);
+    const bool staple = strcmp(entry->surface_id, "base.staple") == 0;
+    const bool withdrawal = strcmp(entry->surface_id, "diplo.tribute") == 0;
+    if (staple) {
+        if (base_id < 0 || base_id >= *BaseCount) {
+            na_dialog_route_refused++;
+            return -1;
+        }
+        // The SAME world view base.staple already emits — not a second description of one
+        // decision. `stapled` is false because nothing has been chosen yet; this is the ask.
+        na_build_base_staple(&w, base_id, false);
+    } else if (withdrawal) {
+        const int faction_id = *CurrentPlayerFaction;
+        const int target_id = *diplo_second_faction;
+        if (faction_id <= 0 || faction_id >= MaxPlayerNum
+            || target_id <= 0 || target_id >= MaxPlayerNum || target_id == faction_id) {
+            na_dialog_route_refused++;
+            return -1;
+        }
+        na_write_head(&w, "diplo.tribute", "turn", faction_id);
+        na_write_metrics(&w, faction_id, -1);
+        na_buf_printf(&w, ",\"target_faction_id\":%d,\"target_faction\":\"", target_id);
+        na_buf_escaped(&w, MFactions[target_id].noun_faction);
+        na_buf_puts(&w, "\",\"subjects\":[\"");
+        na_buf_escaped(&w, MFactions[target_id].noun_faction);
+        na_buf_puts(&w, "\"],\"action_space\":["
+                       "{\"id\":\"withdraw:comply\",\"action\":\"withdraw troops to nearest base\","
+                       "\"effects\":{\"units_in_foreign_territory\":\"decrease\"}},"
+                       "{\"id\":\"withdraw:reciprocal\",\"action\":\"withdraw only if they reciprocate\"},"
+                       "{\"id\":\"withdraw:refuse\",\"action\":\"refuse the demand\"}]");
+    } else {
+        na_dialog_route_refused++;
+        return -1;
+    }
     na_write_decision_deadline(&w);
     na_buf_puts(&w, "}");
 
@@ -5278,6 +5310,17 @@ static int na_route_dialog(const NaDialogEntry* entry, int base_id) {
                 button = entry->button_affirm;
             } else if (strcmp(action_id, "staple:none") == 0) {
                 button = entry->button_decline;
+            } else if (withdrawal && strcmp(action_id, "withdraw:comply") == 0) {
+                button = 0;
+                // The dialog answer and native promise become visible atomically on the game
+                // thread. -1 matches the directive's faction-wide metric: leave ALL foreign
+                // territory, not merely the faction whose demand happened to expose it.
+                na_withdraw_until = 0;
+                na_withdraw_target = -1;
+            } else if (withdrawal && strcmp(action_id, "withdraw:reciprocal") == 0) {
+                button = 1;
+            } else if (withdrawal && strcmp(action_id, "withdraw:refuse") == 0) {
+                button = 2;
             }
             // Anything else is an id the action space never offered, and it stays -1.
         }
