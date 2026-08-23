@@ -6817,6 +6817,86 @@ void na_command_tick(void* hwnd_raw) {
     mistaking for a comparison: the pod's start, the terrain and the AI neighbours all differ,
     and the effect being chased is a few tiles of movement.
     */
+    /*
+    `pod-map [radius]` — the terrain around our first colony pod, from the ENGINE'S OWN MAP DATA
+    (na-1lj). Written to `na-podmap.txt` rather than returned inline, so no buffer can truncate
+    it the way `detail[256]` silently truncated `zoc`.
+
+    Stiwi asked for eyes on the board when the fungus hypothesis is tested, and for the terrain to
+    be verified from the save data and not only from pixels. This is the save-data half: a
+    screenshot shows what the renderer drew, this shows what the engine believes, and a
+    disagreement between them would itself be worth knowing.
+
+    SMAC's grid is diagonal — `mapsq` returns NULL for a coordinate whose parity does not match —
+    so half the cells in a rectangular sweep are not tiles at all. They are printed as spaces
+    rather than silently skipped, because a reader must be able to tell "no tile here" from "land".
+    */
+    if (strncmp(line, "pod-map", 7) == 0) {
+        int radius = 6;
+        const char* arg = line + 7;
+        while (*arg == ' ') {
+            arg++;
+        }
+        if (*arg) {
+            sscanf(arg, "%d", &radius);
+        }
+        radius = clamp(radius, 2, 12);
+        int px = -1, py = -1, wx = -1, wy = -1;
+        for (int i = 0; i < *VehCount; i++) {
+            if (Vehs[i].faction_id == *CurrentPlayerFaction && Vehs[i].is_colony()) {
+                px = Vehs[i].x;
+                py = Vehs[i].y;
+                wx = Vehs[i].waypoint_x[0];
+                wy = Vehs[i].waypoint_y[0];
+                break;
+            }
+        }
+        if (px < 0) {
+            na_cmd_result("pod-map", "no colony pod for this faction", false);
+            return;
+        }
+        FILE* fh = fopen("na-podmap.txt", "w");
+        if (!fh) {
+            na_cmd_result("pod-map", "could not open na-podmap.txt", false);
+            return;
+        }
+        fprintf(fh, "turn %d  faction %d  pod %d,%d  waypoint %d,%d  radius %d\n",
+                *CurrentTurn, *CurrentPlayerFaction, px, py, wx, wy, radius);
+        fprintf(fh, "P=pod  X=waypoint  F=fungus  ~=ocean  B=base  r=rocky  .=open land"
+                    "  (space = no tile at that parity)\n\n");
+        for (int y = py - radius; y <= py + radius; y++) {
+            for (int x = px - 2 * radius; x <= px + 2 * radius; x++) {
+                MAP* sq = mapsq(x, y);
+                char c = ' ';
+                if (sq) {
+                    if (x == px && y == py) {
+                        c = 'P';
+                    } else if (x == wx && y == wy) {
+                        c = 'X';
+                    } else if (sq->is_base()) {
+                        c = 'B';
+                    } else if (is_ocean(sq)) {
+                        c = '~';
+                    } else if (sq->is_fungus()) {
+                        c = 'F';
+                    } else if (sq->is_rocky()) {
+                        c = 'r';
+                    } else {
+                        c = '.';
+                    }
+                }
+                fputc(c, fh);
+            }
+            fputc('\n', fh);
+        }
+        fclose(fh);
+        char detail[160];
+        snprintf(detail, sizeof(detail), "na-podmap.txt pod=%d,%d wp=%d,%d radius=%d",
+                 px, py, wx, wy, radius);
+        na_cmd_result("pod-map", detail, true);
+        return;
+    }
+
     if (strncmp(line, "unit-turn", 9) == 0) {
         const char* arg = line + 9;
         while (*arg == ' ') {
@@ -6976,6 +7056,10 @@ void na_command_tick(void* hwnd_raw) {
         int pod_iter = -1;
         int pod_zoc = -1;
         int pod_state = 0;
+        int pod_fung = -1;
+        int pod_fung_wp = -1;
+        int pod_fung_adj = -1;
+        int pod_fung_dir = -1;
         const int faction = *CurrentPlayerFaction;
         int pod_spent = -1;
         int pod_speed = -1;
@@ -7049,6 +7133,46 @@ void na_command_tick(void* hwnd_raw) {
                 the engine's meaning, and the point is to SEE which bit differs.
                 */
                 pod_state = (int)Vehs[i].state;
+                /*
+                FUNGUS on the pod's tile, its neighbours, and its destination (na-1lj,
+                sattler's rules-derived hypothesis).
+
+                Pre-Centauri-Ecology, moving INTO fungus consumes a unit's ENTIRE remaining
+                allowance and the entry can fail outright — a per-attempt roll. It is the first
+                candidate that predicts the WHOLE signature rather than part of it: full budget
+                spent with zero displacement (the failed entry eats it), intermittent (a roll),
+                non-positional (it depends on the NEXT tile, which no instrument here had ever
+                looked at), and "several still turns then a full-speed sprint" (one roll lands).
+
+                `fung_dir` is the neighbour closest to the waypoint — the tile the pod is most
+                likely trying to enter. `fung_adj` counts all eight, so "boxed in by fungus" and
+                "one awkward tile" read differently. `fung_wp` covers the site itself being
+                fungus.
+                */
+                MAP* dest = mapsq(Vehs[i].waypoint_x[0], Vehs[i].waypoint_y[0]);
+                pod_fung = here && here->is_fungus() ? 1 : 0;
+                pod_fung_wp = dest && dest->is_fungus() ? 1 : 0;
+                pod_fung_adj = 0;
+                pod_fung_dir = -1;
+                {
+                    int best = 1 << 30;
+                    const int wx = Vehs[i].waypoint_x[0];
+                    const int wy = Vehs[i].waypoint_y[0];
+                    for (const auto& m : iterate_tiles(Vehs[i].x, Vehs[i].y, 1, 9)) {
+                        if (!m.sq) {
+                            continue;
+                        }
+                        const int fung = m.sq->is_fungus() ? 1 : 0;
+                        pod_fung_adj += fung;
+                        if (wx >= 0) {
+                            const int d = map_range(m.x, m.y, wx, wy);
+                            if (d < best) {
+                                best = d;
+                                pod_fung_dir = fung;
+                            }
+                        }
+                    }
+                }
                 MAP* there = mapsq(Vehs[i].waypoint_x[0], Vehs[i].waypoint_y[0]);
                 pod_reg = here ? here->region : -1;
                 pod_wpreg = there ? there->region : -1;
@@ -7065,14 +7189,15 @@ void na_command_tick(void* hwnd_raw) {
                  "colony_built=%d colony_pass=%d enroute=%d retarget=%d tobase=%d "
                  "pod=%d,%d wp=%d,%d order=%d spent=%d speed=%d reg=%d wpreg=%d triad=%d "
                  "mode=%d left_alone=%d at_base=%d defend=%d iter=%d unit_turn=%d zoc=%d "
-                 "state=0x%X",
+                 "state=0x%X fung=%d fung_dir=%d fung_adj=%d fung_wp=%d",
                  *CurrentPlayerFaction, na_move_enemy, na_move_upkeep_ok,
                  na_move_colony, na_move_colony_gaveup, na_move_colony_built,
                  na_move_colony_pass, na_move_colony_enroute, na_move_colony_retarget,
                  na_move_colony_tobase, pod_x, pod_y, pod_wx, pod_wy,
                  pod_order, pod_spent, pod_speed, pod_reg, pod_wpreg, pod_triad,
                  na_settle_mode, na_move_colony_left_alone, pod_at_base, pod_defend, pod_iter,
-                 na_unit_turn_mode, pod_zoc, pod_state);
+                 na_unit_turn_mode, pod_zoc, pod_state,
+                 pod_fung, pod_fung_dir, pod_fung_adj, pod_fung_wp);
         na_cmd_result("move-stats", detail, true);
         return;
     }
