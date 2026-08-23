@@ -10,4 +10,8 @@ utils/
 .idea/
 
 # CMake work dir
-.cmake/__pycache__/
+.cmake/
+
+# Python bytecode from the tests/ helpers
+__pycache__/
+*.pyc
