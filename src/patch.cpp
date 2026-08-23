@@ -5,6 +5,26 @@
 #include "neural.h"
 
 
+/*
+The engine's draw-buffer cleanup at 0x4BF400 checks its primary surface
+(object + 0x10C) before entering the cleanup path, but then releases the
+secondary surface (object + 0x110) without checking it.  Losing the human
+player's headquarters can leave that secondary surface null; dismissing the
+capture notice then crashes at 0x4BF423 while dereferencing it.
+
+The call site already pushes the surface pointer as a stdcall `this`
+argument.  Replacing only its five-byte indirect Release call with this helper
+preserves the stock call for a real surface and makes the missing one a no-op.
+*/
+static void __stdcall release_draw_surface_if_present(void* surface) {
+    if (surface) {
+        void** vtable = *(void***)surface;
+        typedef unsigned long (__stdcall *ReleaseFn)(void*);
+        ((ReleaseFn)vtable[2])(surface);
+    }
+}
+
+
 int __cdecl BaseWin_random_seed() {
     return *CurrentBaseID ^ *MapRandomSeed;
 }
@@ -427,6 +447,22 @@ bool patch_setup(Config* cf) {
         }
         *addr = item.new_byte;
     }
+
+    /*
+    Stock bytes are `8B 10 FF 52 08`: load the vtable from EAX, then call
+    vtable[2].  EAX was pushed immediately before this sequence, so a direct
+    stdcall helper consumes the same stack argument and returns to 0x4BF428.
+    */
+    byte* draw_surface_release = (byte*)0x4BF423;
+    const byte stock_draw_surface_release[] = {0x8B, 0x10, 0xFF, 0x52, 0x08};
+    if (memcmp(draw_surface_release, stock_draw_surface_release,
+        sizeof(stock_draw_surface_release)) != 0 && draw_surface_release[0] != 0xE8) {
+        exit_fail((int)draw_surface_release);
+    }
+    draw_surface_release[0] = 0xE8;
+    *(int32_t*)(draw_surface_release + 1) =
+        (int32_t)release_draw_surface_if_present - (int32_t)draw_surface_release - 5;
+
     if (cf->modify_unit_limit) {
         for (auto& item : VehPatchData) {
             int32_t* addr = (int32_t*)item[0];
@@ -1767,4 +1803,3 @@ bool patch_setup(Config* cf) {
     }
     return true;
 }
-
