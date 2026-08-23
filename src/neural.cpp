@@ -3840,12 +3840,41 @@ having failed, or the player quitting to it — shows the human the menu rather 
 starting another game.
 */
 int na_autoload_menu_choice() {
-    if (na_autoload.empty() || na_autoload_menu_taken) {
+    // -na-new-game answers the same menu with the same item, and that is the whole of the
+    // new-game path (na-px5): QUICK START already runs faction, map and difficulty setup with
+    // no dialogs, so a seeded start is that path plus a stated seed. Nothing new to drive.
+    const bool want_new_game = na_new_game_requested();
+    if ((na_autoload.empty() && !want_new_game) || na_autoload_menu_taken) {
         return -1;
     }
     na_autoload_menu_taken = true;
-    na_autoload_log("menu_choice", "QUICK START (#TOPMENU index 1)", 1);
+    na_autoload_log("menu_choice",
+                    want_new_game ? "QUICK START for -na-new-game (#TOPMENU index 1)"
+                                  : "QUICK START (#TOPMENU index 1)",
+                    1);
     return 1;
+}
+
+/*
+Whether this launch was asked to start a new seeded game (na-px5).
+
+A function rather than a bare `na_new_game_seed != 0` at each call site, because the two things
+a caller wants to know are different: *was a new game requested* and *what seed*. Reading the
+variable for the first question is how a seed of 0 — which is indistinguishable from "no flag"
+— becomes a bug spread across every site that checks it.
+
+Seed 0 cannot be requested. That is a real limitation, stated here rather than discovered: the
+sentinel and the value share a variable, and 1 is as good a first seed as 0.
+*/
+bool na_new_game_requested() {
+    return na_new_game_seed != 0;
+}
+
+/*
+The seed the engine should use, or 0 to leave it alone. Called from game_init.
+*/
+int na_new_game_map_seed() {
+    return na_new_game_seed;
 }
 
 /*
@@ -6198,12 +6227,17 @@ void na_command_tick(void* hwnd_raw) {
     if (strcmp(line, "game-state") == 0) {
         char detail[256];
         int n = snprintf(detail, sizeof(detail),
-                         "state=0x%X done=%d halted=%d turn=%d player=%d",
+                         "state=0x%X done=%d halted=%d turn=%d player=%d map_seed=%d",
                          *GameState,
                          (*GameState & STATE_GAME_DONE) ? 1 : 0,
                          *GameHalted,
                          *CurrentTurn,
-                         *CurrentPlayerFaction);
+                         *CurrentPlayerFaction,
+                         // The map seed, so "did -na-new-game take effect" is a number rather
+                         // than an eyeballed map. A seed that is accepted and ignored looks
+                         // exactly like one that works, which is the failure na-px5 must not
+                         // ship with.
+                         *MapRandomSeed);
         const char* kind = "none";
         if (*GameState & STATE_VICTORY_CONQUER) {
             kind = "conquest";

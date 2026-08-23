@@ -10,6 +10,7 @@ set_str_t movedlabels;
 std::string llm_endpoint = "http://127.0.0.1:8000";
 std::string na_autoload;
 int na_exit_turn = 0;
+int na_new_game_seed = 0;
 int na_auto_turn = 0;
 int na_enter_arg = 0;
 map_str_t musiclabels;
@@ -484,6 +485,27 @@ int cmd_parse(Config* cf) {
             if (n > 0) {
                 na_autoload = path_buf;
             }
+            i++;
+        } else if (wcscmp(argv[i], L"-na-new-game") == 0 && i + 1 < argc) {
+            /*
+            Neural Amplifier: start a NEW game on a stated map seed, with no dialogs (na-px5).
+
+            The win ladder needs seeded starts — "2 of 3 seeded wins" is the goal — and every
+            other way of starting a game asks a human for the faction, the map and the
+            difficulty. This asks for none of them: it reuses the engine's own QUICK START path,
+            which already runs the whole setup without dialogs, and only replaces the ONE thing
+            quickstart randomises without telling anyone: the seed.
+
+            So this flag is deliberately small. It does not add a new setup path, it makes the
+            existing one reproducible. Faction, map size and difficulty come from the same
+            preferences a quickstart already uses, which is also what keeps the fairness profile
+            stable across seeds — the property na-xb1 pins and the ladder refuses without.
+
+            _wtoi like -na-exit-turn: a seed is digits. A malformed value yields 0, which means
+            "no new game", so a mistyped seed launches exactly as it would have before this flag
+            existed rather than starting an unseeded game that looks seeded.
+            */
+            na_new_game_seed = _wtoi(argv[i+1]);
             i++;
         } else if (wcscmp(argv[i], L"-na-exit-turn") == 0 && i + 1 < argc) {
             /*

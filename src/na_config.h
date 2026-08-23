@@ -278,6 +278,19 @@ next interactive one.
 extern int na_exit_turn;
 
 /*
+Neural Amplifier: the map seed for a NEW game started by -na-new-game (na-px5).
+
+Launch-scoped like na_exit_turn, and for a sharper version of the same reason: a seed that
+survived into the next interactive session would silently make a human's game reproducible in a
+way they did not ask for.
+
+Zero means "no new game requested" and is also the value a malformed argument yields, which is
+the safe direction: the launch then behaves exactly as it did before this flag existed. A seed
+of 0 cannot be requested, which is a real if small limitation — see na_new_game_requested().
+*/
+extern int na_new_game_seed;
+
+/*
 Neural Amplifier: seconds of a live session with no turn change after which the
 run ends its own turn, from -na-auto-turn. Zero — the default — never does.
 

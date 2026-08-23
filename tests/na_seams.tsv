@@ -35,6 +35,11 @@ build.cpp	select_build_inner	na_observe_base_project	call	1	-
 build.cpp	select_build_inner	na_observe_base_satellite	call	1	-
 faction.cpp	mod_social_ai	na_decide_faction_se	call	1	-
 faction.cpp	steal_tech	na_observe_faction_tech_steal	call	1	-
+game.cpp	config_game	na_new_game_map_seed	call	1	-
+game.cpp	config_game	na_new_game_requested	call	1	-
+game.cpp	game_init	na_new_game_map_seed	call	1	-
+game.cpp	game_init	na_new_game_requested	call	2	-
+game.cpp	map_menu	na_new_game_requested	call	2	-
 game.cpp	mod_name_base	na_name_base_observed	call	4	-
 game.cpp	top_menu	na_autoload_menu_choice	call	1	-
 gameturn.cpp	allocate_energy	na_observe_econ_energy_sliders	call	1	last
@@ -71,6 +76,8 @@ main.cpp	DllMain	na_message_box	call	4	-
 main.cpp	exit_fail	na_message_box	call	1	-
 main.cpp	opt_handle_error	na_message_box	call	1	-
 main.cpp	option_handler	na_option_handler	call	1	-
+mapgen.cpp	mod_world_build	na_new_game_map_seed	call	1	-
+mapgen.cpp	mod_world_build	na_new_game_requested	call	1	-
 move.cpp	move_upkeep	na_observe_base_defend_goal	call	1	-
 patch.cpp	init_video_config	na_message_box	call	2	-
 patch.cpp	patch_setup	na_install_dialog_hook	call	1	before:write_(call|jump)\(

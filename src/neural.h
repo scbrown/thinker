@@ -534,6 +534,15 @@ True once the -na-autoload sequence has finished, however it finished, and when
 no autoload was requested at all.
 */
 int na_autoload_menu_choice();
+
+/*
+-na-new-game (na-px5): whether a seeded new game was asked for, and on what seed.
+
+`na_new_game_requested()` rather than testing the variable, so the sentinel-vs-value collision
+at seed 0 lives in one place instead of at every call site.
+*/
+bool na_new_game_requested();
+int na_new_game_map_seed();
 bool na_autoload_settled();
 
 /*

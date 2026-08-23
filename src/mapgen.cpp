@@ -1,4 +1,5 @@
 
+#include "neural.h"
 #include "mapgen.h"
 #include "lib/FastNoiseLite.h"
 
@@ -1349,12 +1350,29 @@ static void mod_world_fungus(FastNoiseLite& noise) {
 }
 
 void __cdecl mod_world_build() {
+    /*
+    -na-new-game states the world seed HERE, which is the only place it decides anything
+    (na-px5).
+
+    This one call is what a seeded ladder actually turns on, and finding it took three failed
+    attempts worth recording, because each one looked like it should have worked:
+
+      seeding game_srand in game_init      map_seed varied run to run — startup consumes an
+                                           unpredictable number of draws in between
+      re-seeding just before this call     still varied — world_generate does not read that
+                                           generator
+      writing *MapRandomSeed directly      still varied — the engine sets it during generation
+
+    `world_generate` takes its seed as an ARGUMENT, from `next_rand()` — a different generator
+    from `game_srand` entirely. Nothing upstream of this line can make the world reproducible,
+    and everything upstream of it looked like it might.
+    */
     if (!conf.new_world_builder) {
         ThinkerVars->map_random_value = 0;
         world_build();
         return;
     }
-    world_generate(next_rand());
+    world_generate(na_new_game_requested() ? (uint32_t)na_new_game_map_seed() : next_rand());
 }
 
 void console_world_generate(uint32_t seed) {

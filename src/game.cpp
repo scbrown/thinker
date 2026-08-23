@@ -589,15 +589,36 @@ int __cdecl map_menu(int flag) {
         *dword_945820 = 0;
         Popup_start(&cur_popup, PopupScriptFile, "MAPMENU", -1, 0, 0, 0);
         cur_popup.field_A44 = DefaultPrefs->map_type;
-        int choice = DefaultPrefs->map_type;
+        /*
+        -na-new-game forces a GENERATED map, and this is the line the seed actually needs
+        (na-px5).
+
+        Seeding the RNG is not enough on its own. QUICK START takes the map type from saved
+        preferences, and `map_type == 2` loads `maps\xplanet.mp` — a premade map. On a machine
+        whose prefs say that, every "seeded" launch produces the identical world and
+        *MapRandomSeed is whatever the map file carries.
+
+        Measured before this line existed: seeds 4242 and 9999 both produced map_seed 24262. The
+        flag was accepted, the RNG was seeded, and the map was constant — which is precisely the
+        accepted-and-ignored failure a seeded ladder must not ship with, and it is invisible
+        unless something compares two seeds.
+
+        Choice 0 is the generated map; the size, ocean coverage and erosion below are then drawn
+        from the RNG we seeded.
+        */
+        int choice = na_new_game_requested() ? 0 : DefaultPrefs->map_type;
         if (!flag) {
             choice = SetupWin_do_menu_2(&cur_setup, &cur_popup, 1, 0);
         }
         if (choice < 0) {
             return 1;
         }
-        DefaultPrefs->map_type = choice;
-        prefs_save(0);
+        // Not written back for a -na-new-game launch: the forced choice is a property of this
+        // run, and persisting it would change what the next interactive game defaults to.
+        if (!na_new_game_requested()) {
+            DefaultPrefs->map_type = choice;
+            prefs_save(0);
+        }
         bool restart_outer = false;
         bool reset_climate = false;
         bool retry;
@@ -873,10 +894,22 @@ int __cdecl top_menu(int flag) {
 
 int __cdecl game_init(int tgl_text, int tgl_rules) {
     *GameHalted = 1;
-    size_t seed = next_rand();
+    /*
+    -na-new-game states the seed; everything else keeps the engine's own randomness (na-px5).
+
+    This one line is what makes a seeded ladder possible. The QUICK START path already sets up
+    faction, map and difficulty without dialogs — the only thing it randomises silently is this
+    seed, and a ladder whose seeds are unrepeatable is not a ladder.
+
+    Here rather than after world_build, because the map is not the only thing downstream of it:
+    faction placement and base naming read *MapRandomSeed too (game.cpp:2105, 2204), and a seed
+    applied late would reproduce the terrain while moving the start positions — the most
+    convincing way to look reproducible and not be.
+    */
+    size_t seed = na_new_game_requested() ? (size_t)na_new_game_map_seed() : next_rand();
     game_srand(seed);
     game_reseed(seed);
-    debug("game_reseed %u\n", seed);
+    debug("game_reseed %u%s\n", seed, na_new_game_requested() ? " (-na-new-game)" : "");
     if (tgl_text) {
         Strings_init(TextTable, 0xC320u);
         if (labels_init()) {
@@ -1267,6 +1300,29 @@ CONF_FINAL:
         log_set_state(0);
         if (!(flag & 2)) {
             *VehCount = 0;
+            /*
+            -na-new-game re-seeds HERE, immediately before the map is built (na-px5).
+
+            Seeding once in game_init is not enough and the failure is instructive: startup
+            consumes an unpredictable number of draws between there and here — menus, sound,
+            timing-dependent paths — so the generator is at an arbitrary offset by the time the
+            map is made. Measured: seed 4242 produced map_seed 32030 on one launch and 7439 on
+            the next, from identical arguments.
+
+            Re-seeding at the point of use removes every intervening consumer from the question.
+            This is the only place where "the same seed gives the same world" can be true.
+            */
+            if (na_new_game_requested()) {
+                const size_t seed = (size_t)na_new_game_map_seed();
+                game_srand(seed);
+                game_reseed(seed);
+                // And the map seed ITSELF, not merely the generator that might feed it.
+                // *MapRandomSeed is read all over map generation and base naming
+                // (map.cpp:1275,1327, game.cpp:2105,2204) and is written by engine code we do
+                // not own, so seeding the RNG alone left it arbitrary — measured twice.
+                *MapRandomSeed = (int)seed;
+                debug("na_new_game reseed %u before world_build\n", seed);
+            }
             if (*dword_945820) {
                 mod_world_build();
             }
