@@ -4992,17 +4992,131 @@ static const NaDialogEntry* na_dialog_lookup(const char* file, const char* label
 }
 
 /*
-A dialog observation. NOT a world view, and that is deliberate.
+A dialog observation. Still NOT a world view, and the reason has changed — read the change.
 
-A world view has to carry an action space the brain could choose from, and this hook cannot
-build one: the buttons live in a game text file keyed by label, which is data we do not ship.
-Emitting a contract-shaped record with an invented or empty action space would be a decision
-record for a decision nobody could make, and it would count toward coverage.
+This said the hook "cannot build" an action space because the buttons live in a game text file
+we do not ship. The premise was right and the conclusion was wrong: we do not ship the file and
+we do not need to, because the adapter runs inside the game's own process in the game's own
+directory and popp hands us the file's name. `na_dialog_options` above reads it, so the record
+now CARRIES the action space where the label has one.
 
-So this takes the compact form the `na_verify_*` divergence records already use — a surface_id
-and the facts, no `tier` and no `applied` — which the harvester is documented to skip rather
-than mistake for a capture.
+What it still is not is a world view: no `tier`, no `applied`, no grounding, and the harvester
+is documented to skip this shape rather than mistake it for a capture. That distinction was
+always about the CONTRACT, not about the buttons — but as written, the missing buttons read as
+the reason, and that is what kept the routing half of na-4lr shelved as externally blocked.
 */
+/*
+The dialog's ACTION SPACE, read from the player's own install at run time (na-4lr).
+
+This bead recorded the action space as an EXTERNAL blocker — "the buttons live in a game text
+file keyed by label, which is data we do not ship" — and treated that as the end of the matter.
+The first half is true and the conclusion does not follow: we do not ship the file, and we do
+not need to. The adapter runs inside the game's own process, in the game's own directory, and
+the popp call hands us the script file's name as its first argument. The player's install has
+the file; reading it is not shipping it, and invariant 8 is about what this repo contains.
+
+MEASURED format (Script.txt, 4758 labels, CRLF):
+
+    #GOVCITIZENS                <- the label
+    #xs 440                     <- directives, always immediately after
+    #caption Operations Director
+    The Governor of $BASENAME0 is currently controlling citizen     <- prose
+    placement there. Do you wish to assume personal control?
+                                <- ONE blank line
+    Never mind.                 <- the options, in button order
+    Assume personal control.
+                                <- blank, or the next #LABEL
+
+The blank line is the whole grammar and it is load-bearing in both directions. `#PSYCHREQUEST`
+has prose, a blank, and then the NEXT label — zero options, an engine-supplied OK. `#ENDOFTURN`
+has two lines of prose that read exactly like two buttons ("All units have moved." / "Press
+ENTER for next turn.") and are not. A parser that took "the last non-blank group before the next
+label" would offer the brain that pair as a choice.
+
+Three outcomes, deliberately distinguishable, because they need different responses:
+
+    no `option_count`           the label was not found — the table or the file is wrong
+    `option_count: 0`           found, and it is a notice; there is nothing to choose
+    `option_count: N` + options a real action space
+
+and `options_source: "unreadable"` when the file itself would not open, which is neither of the
+three and must not read as "this dialog has no options".
+
+popp returns a ZERO-BASED index into this list. Evidence rather than assumption: at
+base.cpp's GOVPROJECT call site the engine loops while `value != 3` to show Datalinks — the
+fourth option — treats any nonzero value as a refusal, and clears the faction-wide advisory
+only when `value > 1`, which is the third. That is the 0-based reading and no other.
+*/
+static void na_dialog_options(NaBuf* w, const char* file, const char* label) {
+    if (!w || !file || !*file || !label || !*label) {
+        return;
+    }
+    char path[300];
+    snprintf(path, sizeof(path), "%s", file);
+    if (!strchr(path, '.')) {
+        // ScriptFile is "SCRIPT" with no extension; Wine resolves the case for us.
+        strncat(path, ".txt", sizeof(path) - strlen(path) - 1);
+    }
+    FILE* fh = fopen(path, "rb");
+    if (!fh) {
+        na_buf_puts(w, ",\"options_source\":\"unreadable\"");
+        return;
+    }
+    char want[160];
+    snprintf(want, sizeof(want), "#%s", label);
+    char line[1024];
+    bool found = false;
+    bool in_prose = false;
+    bool in_options = false;
+    bool opened = false;
+    int count = 0;
+    while (fgets(line, sizeof(line), fh)) {
+        size_t n = strlen(line);
+        while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r')) {
+            line[--n] = '\0';
+        }
+        if (!found) {
+            found = (strcmp(line, want) == 0);
+            continue;
+        }
+        if (!in_prose && !in_options) {
+            if (line[0] == '#') {
+                continue;   // #xs / #caption and friends
+            }
+            in_prose = true;
+        }
+        if (in_prose) {
+            if (n == 0) {
+                in_prose = false;
+                in_options = true;
+            } else if (line[0] == '#') {
+                break;      // ran straight into the next label: no options at all
+            }
+            continue;
+        }
+        if (n == 0 || line[0] == '#') {
+            break;
+        }
+        if (!opened) {
+            na_buf_puts(w, ",\"options\":[");
+            opened = true;
+        } else {
+            na_buf_puts(w, ",");
+        }
+        na_buf_puts(w, "\"");
+        na_buf_escaped(w, line);
+        na_buf_puts(w, "\"");
+        count++;
+    }
+    fclose(fh);
+    if (opened) {
+        na_buf_puts(w, "]");
+    }
+    if (found) {
+        na_buf_printf(w, ",\"option_count\":%d", count);
+    }
+}
+
 static void na_write_dialog(NaBuf* w, const NaDialogEntry* entry, const char* file,
                             const char* label, int chosen) {
     const int faction_id = *CurrentPlayerFaction;
@@ -5020,6 +5134,7 @@ static void na_write_dialog(NaBuf* w, const NaDialogEntry* entry, const char* fi
     // base.retool records native_choice — a surface with no baseline written down cannot be
     // measured against a brain later.
     na_buf_printf(w, ",\"native_choice\":%d", chosen);
+    na_dialog_options(w, file, label);
     na_buf_printf(w, ",\"mapped\":%s}", entry ? "true" : "false");
 }
 
@@ -6414,6 +6529,37 @@ void na_command_tick(void* hwnd_raw) {
     Counters are process-lifetime and reset on load, like move-stats. Read them from a run that
     PLAYED the turns, never from one that resumed into them.
     */
+    /*
+    `dialog-options <LABEL>` — read one label's action space out of the install (na-4lr).
+
+    Here so the parser is provable without waiting for the game to raise that dialog. The blank
+    line that separates prose from buttons is the entire grammar, and a parser that gets it wrong
+    fails in the direction that OFFERS THE BRAIN A CHOICE THAT IS NOT THERE — `#ENDOFTURN`'s two
+    prose lines look exactly like two buttons. Three labels settle it, and they are worth running
+    after any change here:
+
+        dialog-options GOVCITIZENS   -> option_count 2   ("Never mind." / "Assume personal control.")
+        dialog-options PSYCHREQUEST  -> option_count 0   prose, blank, then the next label
+        dialog-options ENDOFTURN     -> option_count 0   prose that reads like buttons
+
+    Uses the same ScriptFile the engine's own calls pass, so this asks the question the hook asks.
+    */
+    if (strncmp(line, "dialog-options", 14) == 0) {
+        const char* label = line + 14;
+        while (*label == ' ') {
+            label++;
+        }
+        NaBuf wb;
+        NaBuf* w = &wb;
+        na_buf_init(w);
+        na_buf_puts(w, "{");
+        na_dialog_options(w, ScriptFile, label);
+        na_buf_puts(w, "}");
+        na_cmd_result("dialog-options", (!w->failed && w->data) ? w->data : "{}", true);
+        na_buf_free(w);
+        return;
+    }
+
     if (strcmp(line, "build-stats") == 0) {
         char detail[256];
         snprintf(detail, sizeof(detail),
