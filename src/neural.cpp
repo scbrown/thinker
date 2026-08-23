@@ -5451,6 +5451,24 @@ void na_settle_player_colonies() {
     if (!conf.manage_player_units) {
         return;
     }
+    /*
+    Stand down when the real unit turn is running (na-1lj), and this is not tidiness — the two
+    passes FIGHT, in a way that reads as the unit turn not working.
+
+    `mod_enemy_turn`'s inner loop breaks the moment `veh_speed - moves_spent <= 0`, so a unit
+    that has already spent its allowance is never handed to `mod_enemy_veh` and never reaches
+    `action()`. This pass runs FIRST on the seam and calls `colony_move`, which can consume or
+    skip the pod's moves — so with both enabled the executor was being handed units it had to
+    skip. Measured: `enemy_move=2` and `colony_move=1` across fifteen turns with `unit-turn 1`
+    on, for a faction with several units. That is not "the executor does not work", it is "the
+    executor was given nothing to do".
+
+    An AI faction has exactly one of these: `mod_enemy_turn` decides AND executes in the same
+    call, which is the whole point of the pairing. The human slot should have one too.
+    */
+    if (na_unit_turn_mode == 1) {
+        return;
+    }
     const int faction_id = *CurrentPlayerFaction;
     if (faction_id <= 0 || faction_id >= MaxPlayerNum) {
         return;
@@ -6957,6 +6975,7 @@ void na_command_tick(void* hwnd_raw) {
         int pod_defend = -1;
         int pod_iter = -1;
         int pod_zoc = -1;
+        int pod_state = 0;
         const int faction = *CurrentPlayerFaction;
         int pod_spent = -1;
         int pod_speed = -1;
@@ -7018,6 +7037,18 @@ void na_command_tick(void* hwnd_raw) {
                 not a second one.
                 */
                 pod_zoc = mod_zoc_any(Vehs[i].x, Vehs[i].y, faction) ? 1 : 0;
+                /*
+                The unit's STATE BITS (na-1lj). Two pods on the same tile of the same base, one
+                turn apart, behave differently: the one placed at game start walks away and
+                settles, the one PRODUCED there holds ORDER_MOVE_TO, spends all three moves every
+                turn and never leaves. Whatever differs between them is in here — the automation
+                flags `colony_move` used to set (`VSTATE_UNK_40000` / `VSTATE_UNK_2000`) live in
+                this word, and 5b60ed2 stopped setting them for player units.
+
+                Printed raw rather than decoded: naming the bits would be this file's guess about
+                the engine's meaning, and the point is to SEE which bit differs.
+                */
+                pod_state = (int)Vehs[i].state;
                 MAP* there = mapsq(Vehs[i].waypoint_x[0], Vehs[i].waypoint_y[0]);
                 pod_reg = here ? here->region : -1;
                 pod_wpreg = there ? there->region : -1;
@@ -7033,14 +7064,15 @@ void na_command_tick(void* hwnd_raw) {
                  "player=%d enemy_move=%d upkeep_ok=%d colony_move=%d colony_gaveup=%d "
                  "colony_built=%d colony_pass=%d enroute=%d retarget=%d tobase=%d "
                  "pod=%d,%d wp=%d,%d order=%d spent=%d speed=%d reg=%d wpreg=%d triad=%d "
-                 "mode=%d left_alone=%d at_base=%d defend=%d iter=%d unit_turn=%d zoc=%d",
+                 "mode=%d left_alone=%d at_base=%d defend=%d iter=%d unit_turn=%d zoc=%d "
+                 "state=0x%X",
                  *CurrentPlayerFaction, na_move_enemy, na_move_upkeep_ok,
                  na_move_colony, na_move_colony_gaveup, na_move_colony_built,
                  na_move_colony_pass, na_move_colony_enroute, na_move_colony_retarget,
                  na_move_colony_tobase, pod_x, pod_y, pod_wx, pod_wy,
                  pod_order, pod_spent, pod_speed, pod_reg, pod_wpreg, pod_triad,
                  na_settle_mode, na_move_colony_left_alone, pod_at_base, pod_defend, pod_iter,
-                 na_unit_turn_mode, pod_zoc);
+                 na_unit_turn_mode, pod_zoc, pod_state);
         na_cmd_result("move-stats", detail, true);
         return;
     }

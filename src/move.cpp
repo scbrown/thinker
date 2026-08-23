@@ -1533,10 +1533,22 @@ int colony_move(const int id) {
 
         The flags stay for AI units, where the mover that replaces the automation does run.
         */
-        if (!veh->plr_owner()) {
-            veh->state |= VSTATE_UNK_40000;
-            veh->state &= ~VSTATE_UNK_2000;
-        }
+        /*
+        REVERTED for player units, on measurement (na-1lj). 5b60ed2 skipped these flags for a
+        player-owned pod, reasoning that they hand the unit to a mover that never runs for the
+        human slot. The state bits say otherwise, in the same run:
+
+            travelling pod   state=0x40000 in base, 0x70004 while moving, settles
+            frozen pod       state=0x10 — NO 0x40000 — never leaves the base
+
+        VSTATE_UNK_40000 is exactly the bit 5b60ed2 stopped setting, and the pod that has it is
+        the pod that moves. So the flags are not "automation off", or not only that, and the
+        reasoning behind that commit was wrong even though the commit produced movement where
+        there had been none — it was measured against a different configuration (settle-mode 0),
+        which is why it looked like an improvement.
+        */
+        veh->state |= VSTATE_UNK_40000;
+        veh->state &= ~VSTATE_UNK_2000;
         ts.connect_roads(mapdata, tx, ty, faction_id);
         na_move_note(faction_id, NA_MOVE_COLONY_RETARGET);  // na-bg4 census
         return set_move_to(id, tx, ty);
