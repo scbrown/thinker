@@ -6846,6 +6846,22 @@ void na_command_tick(void* hwnd_raw) {
         na_cmd_result("withdraw-stats", detail, true);
         return;
     }
+    if (strncmp(line, "probe-withdrawal-demand", 23) == 0) {
+        int faction = 0;
+        int target = 0;
+        if (sscanf(line + 23, "%d %d", &faction, &target) != 2
+            || faction <= 0 || faction >= MaxPlayerNum
+            || target <= 0 || target >= MaxPlayerNum || faction == target) {
+            na_cmd_result("probe-withdrawal-demand",
+                          "usage: probe-withdrawal-demand <faction> <target>", false);
+            return;
+        }
+        const int answer = demand_withdrawal(faction, target);
+        char detail[128];
+        snprintf(detail, sizeof(detail), "faction=%d target=%d answer=%d", faction, target, answer);
+        na_cmd_result("probe-withdrawal-demand", detail, true);
+        return;
+    }
     if (strncmp(line, "withdraw", 8) == 0) {
         const char* arg = line + 8;
         while (*arg == ' ') {
