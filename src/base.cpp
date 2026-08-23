@@ -1080,6 +1080,7 @@ void __cdecl mod_capture_base(int base_id, int faction_id_atk, int is_probe) {
 
 void __cdecl mod_base_reset(int base_id, int has_gov) {
     BASE& base = Bases[base_id];
+    na_pod_note(base.faction_id, NA_POD_RESET_ENTER);   // na-bg4: was it called at all?
     assert(base_id >= 0 && base_id < *BaseCount);
     assert(base.defend_goal >= 0 && base.defend_goal <= 5);
     print_base(base_id);
@@ -1091,6 +1092,7 @@ void __cdecl mod_base_reset(int base_id, int has_gov) {
         debug("SKIP BASE\n");
         base_reset(base_id, has_gov);
     } else {
+        na_pod_note(base.faction_id, NA_POD_RESET_MANAGED);   // na-bg4 control
         int choice = mod_base_build(base_id, has_gov);
         mod_base_change(base_id, choice);
         /*

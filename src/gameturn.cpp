@@ -1424,6 +1424,16 @@ void __cdecl turn_upkeep() {
     */
     na_settle_player_colonies();
     /*
+    Neural Amplifier: choose production for the human faction's bases (na-bg4).
+
+    After the settle pass, not before: settling can create a base this turn, and a base created
+    this turn should have its production chosen this turn rather than sit on the engine's default
+    for a turn. Measured cause in na_manage_player_bases — mod_base_reset is never called for a
+    human faction's bases at all, so nothing ever queues a colony pod and the faction stops at
+    one base.
+    */
+    na_manage_player_bases();
+    /*
     Neural Amplifier: forecast the COMING turn to the orchestrator.
 
     Same seam, same reason, opposite direction: the exit check reads the turn that just finished,

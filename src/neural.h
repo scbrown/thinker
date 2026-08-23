@@ -556,16 +556,61 @@ enum NaMoveEvent {
 void na_move_note(int faction_id, int what);
 
 /*
+na-bg4 census: WHY is a colony pod not queued?
+
+Seed 1 founded one base and never a second (na-clk: 7:1 at turn 13 and at turn 21 while every AI
+holds 2-3, 7:0 and eliminated at 123). Four independent conditions guard the ColonyUnit branch in
+`select_build_inner`, and reading the source cannot tell you which one fires — that was tried
+twice on na-ywn and was wrong both times. So each condition gets a counter and `build-stats`
+reports them, in the same shape as `move-stats`.
+
+REACHED is the control: if it is 0 the branch never ran for our faction and none of the other
+numbers mean anything.
+*/
+enum NaPodEvent {
+    NA_POD_BUILD_RUN = 0,   // select_build_inner entered for this faction — the outermost control
+    NA_POD_RESET_ENTER,     // mod_base_reset was called for a base of this faction at all
+    NA_POD_RESET_MANAGED,   // ...and routed it into mod_base_build rather than the SKIP branch
+    NA_POD_REACHED,
+    NA_POD_NO_EXPAND,   // allow_pods false — allow_expand(), or pop/nutrient too low
+    NA_POD_CAP,         // pods >= 2 already
+    NA_POD_NO_GOV,      // base governor does not permit colony pods
+    NA_POD_NO_SITE,     // select_colony() found nowhere to send one
+    NA_POD_QUEUED,      // a pod was actually pushed into the build list
+};
+void na_pod_note(int faction_id, int what);
+void na_pod_note_gov(int faction_id, int gov);
+
+/*
 Settle the human faction's colony pods on an unattended run (na-ywn). No-op unless
 manage_player_units is set. See the definition for why this is needed at all — the engine never
 calls mod_enemy_move for a player unit.
 */
 void na_settle_player_colonies();
+
+/*
+Choose production for the human faction's bases on an unattended run (na-bg4). No-op unless
+manage_player_bases is set. See the definition: mod_bases_reset returns early for a human
+faction, so mod_base_reset is never called for our bases and no colony pod is ever queued.
+*/
+void na_manage_player_bases();
 extern int na_move_enemy;
 extern int na_move_upkeep_ok;
 extern int na_move_colony;
 extern int na_move_colony_gaveup;
 extern int na_move_colony_built;
+extern int na_pod_build_run;
+extern int na_pod_reset_enter;
+extern int na_pod_reset_enter_ai;
+extern int na_pod_build_run_ai;
+extern int na_pod_reset_managed;
+extern int na_pod_reached;
+extern int na_pod_no_expand;
+extern int na_pod_cap;
+extern int na_pod_no_gov;
+extern int na_pod_no_site;
+extern int na_pod_queued;
+extern int na_pod_gov_last;
 extern int na_new_game_ocean_value;
 bool na_autoload_settled();
 

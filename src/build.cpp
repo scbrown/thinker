@@ -878,6 +878,7 @@ static void push_item(score_max_queue_t& builds, int base_id, int item_id, int r
 static int select_build_inner(int base_id) {
     BASE* base = &Bases[base_id];
     int faction_id = base->faction_id;
+    na_pod_note(faction_id, NA_POD_BUILD_RUN);   // na-bg4 outermost control
     Faction* f = &Factions[faction_id];
     AIPlans* p = &plans[faction_id];
     int retool = 0; // Skip retooling penalties
@@ -1202,13 +1203,30 @@ static int select_build_inner(int base_id) {
                 continue;
             }
         }
-        if (t == ColonyUnit && allow_pods && pods < 2 && gov & GOV_MAY_PROD_COLONY_POD) {
-            if ((choice = select_colony(base_id, pods, allow_ships)) >= 0) {
+        /*
+        na-bg4: same four conditions, attributed. The original was one `if` with four `&&`s, and
+        which of them fires is exactly the question — reading the source to answer it is what was
+        wrong twice on na-ywn. Behaviour is unchanged: a pod is still queued only when all four
+        hold, and only that case `continue`s.
+        */
+        if (t == ColonyUnit) {
+            na_pod_note(faction_id, NA_POD_REACHED);
+            na_pod_note_gov(faction_id, gov);
+            if (!allow_pods) {
+                na_pod_note(faction_id, NA_POD_NO_EXPAND);
+            } else if (pods >= 2) {
+                na_pod_note(faction_id, NA_POD_CAP);
+            } else if (!(gov & GOV_MAY_PROD_COLONY_POD)) {
+                na_pod_note(faction_id, NA_POD_NO_GOV);
+            } else if ((choice = select_colony(base_id, pods, allow_ships)) >= 0) {
+                na_pod_note(faction_id, NA_POD_QUEUED);
                 score += clamp(*MapAreaSqRoot*2 - f->base_count, 0, 80);
                 score += clamp(f->SE_effic_pending + 4, 0, 4)
                     * (pods ? 1 : 2) * (max(0, 16 - f->base_count));
                 push_item(builds, base_id, choice, retool, score, --Wt);
                 continue;
+            } else {
+                na_pod_note(faction_id, NA_POD_NO_SITE);
             }
         }
         if (t < 0) { // skip other conditions for units

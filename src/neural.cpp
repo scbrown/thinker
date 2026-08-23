@@ -5326,6 +5326,96 @@ void na_settle_player_colonies() {
     }
 }
 
+/*
+Choose production for the human faction's bases on an unattended run (na-bg4).
+
+MEASURED, with a positive control, on ladder seed 1 (`build-stats` at turn 10):
+
+    player=7  reset_enter=0 reset_managed=0 build_run=0 reached=0 queued=0
+              ai_reset_enter=33  ai_build_run=12
+
+`mod_base_reset` is never called for a base owned by the human faction at all — not "called and
+skipped", never called. Its only per-faction caller is `mod_bases_reset`, which opens with
+`if (is_human(faction_id)) return;`. So Thinker's production AI never runs for our base, the
+ColonyUnit branch in `select_build_inner` is never evaluated, no colony pod is ever queued, and
+the faction founds exactly one base and then stops — whatever `manage_player_bases` says.
+
+That is what seed 1 measured from the outside: 7:1 at turn 13 and at turn 21 while every AI holds
+two or three, 7:0 and eliminated at turn 123 (na-clk). The AI counters are the control: the same
+instrument fires 33 and 12 times for AI factions in the same ten turns.
+
+Same shape and same seam as `na_settle_player_colonies` above, and deliberately NOT a change to
+`mod_bases_reset`'s early return: that return is correct for a human playing normally — nobody
+wants the AI rewriting their build queue — and this is the unattended case, which is exactly what
+`manage_player_bases` opts into. Gated on that flag, so it is a no-op for a real player.
+
+Per-turn, because production choice is a per-turn decision and a base whose queue was fine last
+turn may not be fine now.
+*/
+void na_manage_player_bases() {
+    if (!conf.manage_player_bases) {
+        return;
+    }
+    const int faction_id = *CurrentPlayerFaction;
+    if (faction_id <= 0 || faction_id >= MaxPlayerNum) {
+        return;
+    }
+    for (int i = 0; i < *BaseCount; i++) {
+        if (Bases[i].faction_id != faction_id) {
+            continue;
+        }
+        mod_base_reset(i, 0);
+    }
+}
+
+int na_pod_build_run = 0;
+int na_pod_reset_enter = 0;
+int na_pod_reset_enter_ai = 0;
+int na_pod_build_run_ai = 0;
+int na_pod_reset_managed = 0;
+int na_pod_reached = 0;
+int na_pod_no_expand = 0;
+int na_pod_cap = 0;
+int na_pod_no_gov = 0;
+int na_pod_no_site = 0;
+int na_pod_queued = 0;
+int na_pod_gov_last = -1;
+
+void na_pod_note(int faction_id, int what) {
+    if (faction_id != *CurrentPlayerFaction) {
+        /*
+        THE POSITIVE CONTROL. Every other counter here is scoped to our faction, so a row of
+        zeros has two readings — "this never happens for us" and "this instrument never fires at
+        all" — and only one of them is a finding. Counting the same two entry points for the AI
+        factions tells the two apart on the same line.
+        */
+        if (what == NA_POD_RESET_ENTER) {
+            na_pod_reset_enter_ai++;
+        } else if (what == NA_POD_BUILD_RUN) {
+            na_pod_build_run_ai++;
+        }
+        return;
+    }
+    switch (what) {
+        case NA_POD_BUILD_RUN: na_pod_build_run++; break;
+        case NA_POD_RESET_ENTER: na_pod_reset_enter++; break;
+        case NA_POD_RESET_MANAGED: na_pod_reset_managed++; break;
+        case NA_POD_REACHED: na_pod_reached++; break;
+        case NA_POD_NO_EXPAND: na_pod_no_expand++; break;
+        case NA_POD_CAP: na_pod_cap++; break;
+        case NA_POD_NO_GOV: na_pod_no_gov++; break;
+        case NA_POD_NO_SITE: na_pod_no_site++; break;
+        case NA_POD_QUEUED: na_pod_queued++; break;
+        default: break;
+    }
+}
+
+void na_pod_note_gov(int faction_id, int gov) {
+    if (faction_id == *CurrentPlayerFaction) {
+        na_pod_gov_last = gov;
+    }
+}
+
 void na_move_note(int faction_id, int what) {
     if (faction_id != *CurrentPlayerFaction) {
         return;
@@ -6309,6 +6399,37 @@ void na_command_tick(void* hwnd_raw) {
     STATE_VICTORY_CONQUER says a conquest happened, not by whom, and a faction with bases while
     every rival has none is the answer in a form nothing has to interpret.
     */
+    /*
+    `build-stats` — why is our faction not queueing colony pods? (na-bg4)
+
+    Six numbers, so that "the branch never ran", "it ran and the governor forbade it" and "it ran
+    and there was nowhere to go" are different facts rather than one absent base. `reached` is the
+    control: if it is 0, nothing else on the line means anything, because the ColonyUnit branch
+    was never evaluated for this faction at all.
+
+    `gov` is the base governor bitmask as select_build_inner saw it last. GOV_MAY_PROD_COLONY_POD
+    is what the pod branch tests, and a human base carries whatever flags the player left on it —
+    which on an unattended run is whatever the engine defaulted to, not a choice anyone made.
+
+    Counters are process-lifetime and reset on load, like move-stats. Read them from a run that
+    PLAYED the turns, never from one that resumed into them.
+    */
+    if (strcmp(line, "build-stats") == 0) {
+        char detail[256];
+        snprintf(detail, sizeof(detail),
+                 "player=%d reset_enter=%d reset_managed=%d build_run=%d reached=%d "
+                 "no_expand=%d cap=%d no_gov=%d no_site=%d queued=%d gov=0x%X may_pod=%d "
+                 "ai_reset_enter=%d ai_build_run=%d",
+                 *CurrentPlayerFaction,
+                 na_pod_reset_enter, na_pod_reset_managed, na_pod_build_run, na_pod_reached,
+                 na_pod_no_expand, na_pod_cap, na_pod_no_gov, na_pod_no_site, na_pod_queued,
+                 na_pod_gov_last,
+                 na_pod_gov_last >= 0 && (na_pod_gov_last & GOV_MAY_PROD_COLONY_POD) ? 1 : 0,
+                 na_pod_reset_enter_ai, na_pod_build_run_ai);
+        na_cmd_result("build-stats", detail, true);
+        return;
+    }
+
     if (strcmp(line, "game-state") == 0) {
         char detail[256];
         int n = snprintf(detail, sizeof(detail),
