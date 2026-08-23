@@ -6180,6 +6180,52 @@ void na_command_tick(void* hwnd_raw) {
     Read `raw` FIRST. It is the control: a run where mod_base_hurry was never entered at all
     has measured nothing, and `observed=0 upkeep=0` would otherwise read as "no bypass".
     */
+    /*
+    `game-state` — who won, how, and is it over (na-clk).
+
+    The win ladder's whole instrument. Without it a harness can report that a run STOPPED and
+    nothing about whether the faction we drive won, lost, or simply hit the turn limit — and
+    "the process exited" is the one fact a ladder must not confuse with a result.
+
+    Reports the raw `GameState` bits rather than a verdict. The engine sets exactly one victory
+    flag and the ladder is the thing that should decide what counts, so a boolean minted here
+    would be this file's opinion about a rule that lives in `RULES_VICTORY_*` config.
+
+    Per-faction base counts alongside, because conquest is the victory the flags describe least:
+    STATE_VICTORY_CONQUER says a conquest happened, not by whom, and a faction with bases while
+    every rival has none is the answer in a form nothing has to interpret.
+    */
+    if (strcmp(line, "game-state") == 0) {
+        char detail[256];
+        int n = snprintf(detail, sizeof(detail),
+                         "state=0x%X done=%d halted=%d turn=%d player=%d",
+                         *GameState,
+                         (*GameState & STATE_GAME_DONE) ? 1 : 0,
+                         *GameHalted,
+                         *CurrentTurn,
+                         *CurrentPlayerFaction);
+        const char* kind = "none";
+        if (*GameState & STATE_VICTORY_CONQUER) {
+            kind = "conquest";
+        } else if (*GameState & STATE_VICTORY_DIPLOMATIC) {
+            kind = "diplomatic";
+        } else if (*GameState & STATE_VICTORY_ECONOMIC) {
+            kind = "economic";
+        }
+        n += snprintf(detail + n, sizeof(detail) - n, " victory=%s bases=", kind);
+        for (int f = 1; f < MaxPlayerNum && n < (int)sizeof(detail) - 8; f++) {
+            int owned = 0;
+            for (int i = 0; i < *BaseCount && i < MaxBaseNum; i++) {
+                if (Bases[i].faction_id == f) {
+                    owned++;
+                }
+            }
+            n += snprintf(detail + n, sizeof(detail) - n, "%s%d:%d", f > 1 ? "," : "", f, owned);
+        }
+        na_cmd_result("game-state", detail, true);
+        return;
+    }
+
     if (strcmp(line, "hurry-stats") == 0) {
         char detail[128];
         snprintf(detail, sizeof(detail), "raw=%d observed=%d upkeep=%d double=%d",
