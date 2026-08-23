@@ -6681,7 +6681,13 @@ void na_command_tick(void* hwnd_raw) {
         NaBuf wb;
         NaBuf* w = &wb;
         na_buf_init(w);
-        na_buf_puts(w, "{");
+        // `na_dialog_options` is written to APPEND to an object that already has a field, so it
+        // leads with a comma. A bare "{" in front of it produces `{,"options":...}` — valid-
+        // looking to a human, rejected by any parser. Caught by the runtime check, which is what
+        // it is for; the counts were right the whole time and the record was unreadable.
+        na_buf_puts(w, "{\"label\":\"");
+        na_buf_escaped(w, label);
+        na_buf_puts(w, "\"");
         na_dialog_options(w, ScriptFile, label);
         na_buf_puts(w, "}");
         na_cmd_result("dialog-options", (!w->failed && w->data) ? w->data : "{}", true);
