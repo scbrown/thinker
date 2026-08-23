@@ -1434,6 +1434,14 @@ void __cdecl turn_upkeep() {
     */
     na_manage_player_bases();
     /*
+    Neural Amplifier: keep a withdrawal promise (na-nmg).
+
+    After the settle and production passes so it has the last word on where our units are told to
+    go — a promise about somebody else's borders outranks this turn's expansion plan, and if the
+    order were issued first something else would overwrite it.
+    */
+    na_withdraw_player_units();
+    /*
     Neural Amplifier: forecast the COMING turn to the orchestrator.
 
     Same seam, same reason, opposite direction: the exit check reads the turn that just finished,

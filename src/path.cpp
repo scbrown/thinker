@@ -1,5 +1,6 @@
 
 #include "path.h"
+#include "neural.h"
 
 
 void TileSearch::reset() {
@@ -416,8 +417,21 @@ bool safe_path(TileSearch& ts, int faction_id, bool skip_owner) {
             debug_ver("path_unsafe %d %d %d\n", faction_id, node->x, node->y);
             return false;
         }
-        if (!skip_owner && sq->is_owned()
-        && sq->owner != faction_id && !has_pact(faction_id, sq->owner)) {
+        /*
+        na-nmg: a withdrawal promise OVERRIDES both `skip_owner` and the pact exemption.
+
+        The foreign-territory refusal below is the avoidance half of promise-keeping and it was
+        already written — but two of safe_path's three call sites pass skip_owner=true, so it is
+        switched off exactly where routing happens. `na_withdraw_binds` re-arms it, for our
+        faction and for the promised land only; with no promise in force this reduces to the
+        original condition character for character.
+
+        The pact exemption is bypassed when bound on purpose: we promised to leave her land, and
+        a pact is not permission to stay after saying we would go.
+        */
+        const bool bound = na_withdraw_binds(faction_id, sq->owner);
+        if (sq->is_owned() && sq->owner != faction_id
+        && (bound || (!skip_owner && !has_pact(faction_id, sq->owner)))) {
             debug_ver("path_foreign %d %d %d\n", faction_id, node->x, node->y);
             return false;
         }

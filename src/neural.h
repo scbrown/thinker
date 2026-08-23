@@ -594,6 +594,34 @@ manage_player_bases is set. See the definition: mod_bases_reset returns early fo
 faction, so mod_base_reset is never called for our bases and no colony pod is ever queued.
 */
 void na_manage_player_bases();
+
+/*
+Native-tier enforcement of a withdrawal promise (na-nmg, sattler's ruling of 2026-08-23).
+
+A diplomacy answer is a PROMISE about later turns. The ruling is that KEEPING one is mechanical
+rather than deliberative — the judgment was spent deciding whether to promise — so the receiver
+is the native tier and not a new per-unit LLM surface, which would multiply an already
+244-decisions-per-turn round by the number of units.
+
+Two halves, and shipping only the first would be dishonest: `units_in_foreign_territory` counts
+POSITION, so avoidance ("stop entering") leaves the number exactly where it was while every
+surface reports a directive in force. Eviction is what moves the metric.
+
+    na_withdraw_binds()          the avoidance half — consulted by safe_path
+    na_withdraw_player_units()   the eviction half — routes occupying units home
+
+Delivered by command rather than by a call out to the orchestrator: the mover runs on the game
+thread and a per-unit round trip is exactly what the ruling rejects. The statics are plain ints
+written once by the command thread and read by the mover; nothing here is a structure that could
+be read half-updated.
+*/
+bool na_withdraw_binds(int faction_id, int owner);
+void na_withdraw_player_units();
+extern volatile int na_withdraw_target;   // 0 none, -1 all foreign territory, >0 one faction
+extern volatile int na_withdraw_until;    // absolute turn the promise expires, 0 = no expiry
+extern int na_withdraw_seen;
+extern int na_withdraw_moved;
+extern int na_withdraw_no_base;
 extern int na_move_enemy;
 extern int na_move_upkeep_ok;
 extern int na_move_colony;

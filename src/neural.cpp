@@ -5483,6 +5483,84 @@ void na_manage_player_bases() {
     }
 }
 
+volatile int na_withdraw_target = 0;
+volatile int na_withdraw_until = 0;
+int na_withdraw_seen = 0;
+int na_withdraw_moved = 0;
+int na_withdraw_no_base = 0;
+
+//: Is this faction's promise in force, and does it cover `owner`'s land? (na-nmg)
+bool na_withdraw_binds(int faction_id, int owner) {
+    const int target = na_withdraw_target;
+    if (target == 0 || faction_id != *CurrentPlayerFaction) {
+        return false;
+    }
+    if (na_withdraw_until > 0 && *CurrentTurn > na_withdraw_until) {
+        return false;
+    }
+    if (owner < 0 || owner == faction_id) {
+        return false;
+    }
+    return target < 0 || target == owner;
+}
+
+/*
+The eviction half: route our units off promised land, toward the nearest base of ours.
+
+Uses `whose_territory(faction_id, x, y, 0, 0)` — the SAME call `na_write_metrics` uses for
+`units_in_foreign_territory`, not an equivalent-looking one. If enforcement and the metric
+disagreed about which tiles count, the promise could be kept perfectly and read as broken, or
+the reverse, and nothing would say which. One predicate, one meaning.
+
+That also inherits the metric's fog rule for free: `whose_territory` returns -1 for an owner we
+have no commlink with, so we never march units home from the land of a faction we have not met.
+
+On the NA seam and not in `mod_enemy_move`, which is where my own feasibility note put it and
+was wrong: na-ywn measured `enemy_move=0` for the player faction — the engine never calls
+`mod_enemy_move` for a player unit at all — and the faction this enforces for IS the player slot.
+The chokepoint that exists for AI factions does not exist for us.
+
+`set_move_to` each turn rather than once: a unit's orders can be cleared by the engine, and a
+promise that stopped being enforced the turn after it was made is the failure this bead is about.
+*/
+void na_withdraw_player_units() {
+    if (na_withdraw_target == 0) {
+        return;
+    }
+    const int faction_id = *CurrentPlayerFaction;
+    if (faction_id <= 0 || faction_id >= MaxPlayerNum) {
+        return;
+    }
+    if (na_withdraw_until > 0 && *CurrentTurn > na_withdraw_until) {
+        na_withdraw_target = 0;   // expired: stop enforcing rather than enforce forever
+        return;
+    }
+    for (int i = 0; i < *VehCount; i++) {
+        VEH* veh = &Vehs[i];
+        if (veh->faction_id != faction_id) {
+            continue;
+        }
+        const int owner = whose_territory(faction_id, veh->x, veh->y, 0, 0);
+        if (!na_withdraw_binds(faction_id, owner)) {
+            continue;
+        }
+        na_withdraw_seen++;
+        const int base_id = base_find_3(veh->x, veh->y, faction_id, -1, -1, -1);
+        if (base_id < 0) {
+            /*
+            Counted, never silent. "No unit was on foreign land" and "a unit was and had nowhere
+            to go" are different facts, and only the first means the promise is being kept. A
+            withdrawal that cannot find a base is a promise we are failing to keep for a reason
+            the brain should eventually be told.
+            */
+            na_withdraw_no_base++;
+            continue;
+        }
+        set_move_to(i, Bases[base_id].x, Bases[base_id].y);
+        na_withdraw_moved++;
+    }
+}
+
 int na_pod_build_run = 0;
 int na_pod_reset_enter = 0;
 int na_pod_reset_enter_ai = 0;
@@ -6557,6 +6635,61 @@ void na_command_tick(void* hwnd_raw) {
         na_buf_puts(w, "}");
         na_cmd_result("dialog-options", (!w->failed && w->data) ? w->data : "{}", true);
         na_buf_free(w);
+        return;
+    }
+
+    /*
+    `withdraw <target> <until_turn>` / `withdraw off` — deliver a withdrawal promise (na-nmg).
+
+    The delivery channel the ruling asks for: the mover runs on the game thread, so the promise
+    has to be PUSHED in rather than pulled per unit, and a per-unit round trip is the cost the
+    ruling exists to avoid. This is one command and two ints.
+
+        withdraw -1 0     get off ALL foreign territory, no expiry
+        withdraw 6 45     get off faction 6's land, expiring after turn 45
+        withdraw off      stop enforcing
+
+    `-1` is "all foreign", not "no faction": a directive of `units_in_foreign_territory at_most 0`
+    is about everybody's land, and enforcing it against one faction would leave the metric above
+    zero while the promise read as kept.
+
+    `withdraw-stats` reports what enforcement actually did. `moved` and `no_base` are separate
+    because "nobody was trespassing" and "somebody was and had nowhere to go" both leave the
+    metric unchanged and only one of them is the promise being kept.
+    */
+    if (strncmp(line, "withdraw-stats", 14) == 0) {
+        char detail[192];
+        snprintf(detail, sizeof(detail),
+                 "target=%d until=%d turn=%d seen=%d moved=%d no_base=%d",
+                 na_withdraw_target, na_withdraw_until, *CurrentTurn,
+                 na_withdraw_seen, na_withdraw_moved, na_withdraw_no_base);
+        na_cmd_result("withdraw-stats", detail, true);
+        return;
+    }
+    if (strncmp(line, "withdraw", 8) == 0) {
+        const char* arg = line + 8;
+        while (*arg == ' ') {
+            arg++;
+        }
+        int target = 0;
+        int until = 0;
+        if (strncmp(arg, "off", 3) == 0) {
+            target = 0;
+            until = 0;
+        } else if (sscanf(arg, "%d %d", &target, &until) < 1) {
+            na_cmd_result("withdraw", "usage: withdraw <-1|faction_id> [until_turn] | withdraw off",
+                          false);
+            return;
+        }
+        if (target >= MaxPlayerNum || target < -1) {
+            na_cmd_result("withdraw", "target out of range", false);
+            return;
+        }
+        na_withdraw_until = until;
+        na_withdraw_target = target;   // set LAST: the mover must never see a target with a stale expiry
+        char detail[128];
+        snprintf(detail, sizeof(detail), "target=%d until=%d turn=%d", target, until, *CurrentTurn);
+        na_cmd_result("withdraw", detail, true);
         return;
     }
 
