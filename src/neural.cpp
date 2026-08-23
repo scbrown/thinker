@@ -6836,12 +6836,47 @@ void na_command_tick(void* hwnd_raw) {
         int pod_y = -1;
         int pod_wx = -1;
         int pod_wy = -1;
+        int pod_order = -1;
+        int pod_reg = -1;
+        int pod_wpreg = -1;
+        int pod_triad = -1;
+        int pod_spent = -1;
+        int pod_speed = -1;
         for (int i = 0; i < *VehCount; i++) {
             if (Vehs[i].faction_id == *CurrentPlayerFaction && Vehs[i].is_colony()) {
                 pod_x = Vehs[i].x;
                 pod_y = Vehs[i].y;
                 pod_wx = Vehs[i].waypoint_x[0];
                 pod_wy = Vehs[i].waypoint_y[0];
+                /*
+                The NULL HYPOTHESIS, and it has to be ruled out before anything cleverer is worth
+                chasing (na-1lj): a pod on rough terrain with one move point genuinely IS this
+                slow, and one tile in eleven turns would be the game working correctly.
+
+                `spent` against `speed` answers it directly. speed>0 with spent==0 turn after turn
+                is a unit that HAS moves and is not using them — the engine is not executing the
+                order. spent==speed is a unit spending everything it has, and then the problem is
+                terrain or the target, not execution.
+                */
+                pod_order = Vehs[i].order;
+                pod_spent = Vehs[i].moves_spent;
+                pod_speed = veh_speed(i, 0);
+                /*
+                The REGION of the pod's tile and of its destination (na-1lj).
+
+                A land unit cannot walk between two land regions separated by ocean, however
+                good the destination looks to a tile-scoring search. If these two numbers differ
+                for a TRIAD_LAND pod, the journey is impossible and no amount of movement budget
+                will finish it — which is exactly the signature measured: the full allowance
+                spent, three times a turn, with zero displacement.
+
+                Cheap to ask and it either closes the question or eliminates the likeliest cause.
+                */
+                MAP* here = mapsq(Vehs[i].x, Vehs[i].y);
+                MAP* there = mapsq(Vehs[i].waypoint_x[0], Vehs[i].waypoint_y[0]);
+                pod_reg = here ? here->region : -1;
+                pod_wpreg = there ? there->region : -1;
+                pod_triad = Vehs[i].triad();
                 break;
             }
         }
@@ -6849,11 +6884,12 @@ void na_command_tick(void* hwnd_raw) {
         snprintf(detail, sizeof(detail),
                  "player=%d enemy_move=%d upkeep_ok=%d colony_move=%d colony_gaveup=%d "
                  "colony_built=%d colony_pass=%d enroute=%d retarget=%d tobase=%d "
-                 "pod=%d,%d wp=%d,%d",
+                 "pod=%d,%d wp=%d,%d order=%d spent=%d speed=%d reg=%d wpreg=%d triad=%d",
                  *CurrentPlayerFaction, na_move_enemy, na_move_upkeep_ok,
                  na_move_colony, na_move_colony_gaveup, na_move_colony_built,
                  na_move_colony_pass, na_move_colony_enroute, na_move_colony_retarget,
-                 na_move_colony_tobase, pod_x, pod_y, pod_wx, pod_wy);
+                 na_move_colony_tobase, pod_x, pod_y, pod_wx, pod_wy,
+                 pod_order, pod_spent, pod_speed, pod_reg, pod_wpreg, pod_triad);
         na_cmd_result("move-stats", detail, true);
         return;
     }
