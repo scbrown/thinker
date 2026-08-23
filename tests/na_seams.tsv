@@ -3,6 +3,8 @@ base.cpp	mod_base_build	na_decide_base_production	call	1	-
 base.cpp	mod_base_production	na_observe_base_abandon	call	1	-
 base.cpp	mod_base_production	na_should_abandon_base	call	1	-
 base.cpp	mod_base_reset	na_verify_base_production	call	1	-
+base.cpp	mod_base_upkeep	na_base_hurry_observed	call	1	-
+base.cpp	mod_base_upkeep	na_hurry_note_upkeep	call	1	-
 base.cpp	mod_base_yield	na_observe_base_yield	call	1	-
 base.cpp	mod_capture_base	na_hq_escape_dest	call	1	-
 base.cpp	mod_capture_base	na_observe_base_hq_escape	call	1	-
@@ -22,8 +24,10 @@ basewin.cpp	na_probe_unit_odp_attack	na_observe_unit_odp_attack	call	1	-
 basewin.cpp	na_probe_unit_odp_attack	na_odp_attack_choice	call	1	-
 basewin.cpp	na_probe_unit_odp_attack	na_probe_unit_odp_attack	def	1	-
 build.cpp	consider_staple	na_observe_base_staple	call	1	-
+build.cpp	mod_base_hurry	na_hurry_note_raw	call	1	-
 build.cpp	na_base_hurry_observed	na_base_hurry_observed	def	1	-
 build.cpp	na_base_hurry_observed	na_decide_base_hurry	call	1	-
+build.cpp	na_base_hurry_observed	na_hurry_note_observed	call	1	-
 build.cpp	na_retool_penalty	na_retool_penalty	def	1	-
 build.cpp	select_build	na_observe_base_retool	call	1	-
 build.cpp	select_build	na_retool_penalty	call	1	-

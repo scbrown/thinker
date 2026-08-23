@@ -4260,7 +4260,34 @@ int __cdecl mod_base_upkeep(int base_id) {
         return 1; // Current base was removed
     }
     set_base(base_id); // Fix CurrentBase sometimes being reset in game functions
-    mod_base_hurry();
+    /*
+    na-4zs: this call is how base.hurry actually reaches the game, and it used to bypass the
+    observer entirely.
+
+    The surface was intercepted by re-pointing ONE call site — patch.cpp's
+    write_call(0x4F7A38, na_base_hurry_observed), inside the ENGINE's base_upkeep. But Thinker
+    replaces base_upkeep wholesale on the production path (write_call(0x527039, mod_base_upkeep)),
+    and this function is that replacement. It called the raw mod_base_hurry, so every hurry
+    decided during production_phase was made by the deterministic tier, offered to nobody, and
+    recorded nowhere.
+
+    MEASURED before the change, on a real save, one full six-faction round: raw=136,
+    upkeep=136, observed=0 — every hurry came through here and NONE through the patched site.
+    Corroborated independently by the 2026-08-21 session's decision log: 324 base.production,
+    13 faction.se, 2 faction.tech, and ZERO base.hurry.
+
+    Note the asymmetry that caused it. base.production is intercepted INSIDE the function it
+    hooks (mod_base_build calls na_decide_base_production directly), so it is reached from
+    every caller. base.hurry is wrapped instead — correctly, because mod_base_hurry has five
+    return points and spends through hurry_item on its way out (see build.cpp) — but a wrapper
+    only covers the call sites that are pointed at it, and this one was not.
+
+    The census counters stay. They are what turns "the surface is quiet" into "the surface is
+    unreachable", and `double` is what would catch the same base being decided twice in a turn
+    if the engine's own base_upkeep ever does fire here as well.
+    */
+    na_hurry_note_upkeep(base_id);
+    na_base_hurry_observed();
     base->minerals_accumulated_2 = base->minerals_accumulated;
     base->production_id_last = base->queue_items[0];
 

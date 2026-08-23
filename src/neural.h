@@ -438,6 +438,29 @@ the caller before anything is spent.
 */
 int na_decide_base_hurry(int base_id, int item, int minerals_before, int credits_before);
 
+/*
+base.hurry routing census (na-4zs). Which door a hurry decision came through.
+
+The surface is intercepted by re-pointing ONE call site — patch.cpp's
+write_call(0x4F7A38, na_base_hurry_observed), inside the ENGINE's base_upkeep. But Thinker also
+replaces base_upkeep wholesale on the production path (write_call(0x527039, mod_base_upkeep)),
+and mod_base_upkeep calls mod_base_hurry DIRECTLY. So there are two doors and only one of them
+is watched.
+
+Nothing in a decision log can tell you which is happening, and that is the trap: a surface that
+is never reached and a surface that is reached and answered look identical from a record that
+was never written. The bead's own evidence pointed both ways — upstream would not patch a dead
+call site, yet a real turn-35 observation exists — so it is a counting question, not a reading
+question.
+
+`na_hurry_note_*` are the census points; `hurry-stats` reports them. Deliberately counters
+rather than log records: this fires on every base every turn, and a per-call record would drown
+the log it is meant to be checked against.
+*/
+void na_hurry_note_observed(int base_id);
+void na_hurry_note_raw();
+void na_hurry_note_upkeep(int base_id);
+
 void na_autoload_tick();
 
 /*

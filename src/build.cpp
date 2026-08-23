@@ -65,6 +65,9 @@ the engine's own path.
 */
 int __cdecl na_base_hurry_observed() {
     const int base_id = *CurrentBaseID;
+    // na-4zs census, before any early return: the question is whether this door was ENTERED,
+    // not whether it went on to decide anything.
+    na_hurry_note_observed(base_id);
     if (base_id < 0 || base_id >= *BaseCount) {
         return mod_base_hurry();
     }
@@ -82,6 +85,9 @@ int __cdecl na_base_hurry_observed() {
 
 
 int __cdecl mod_base_hurry() {
+    // The na-4zs denominator, and the control for the other two counters: a run that never
+    // entered here has measured nothing, whatever `observed` and `upkeep` say.
+    na_hurry_note_raw();
     const int base_id = *CurrentBaseID;
     BASE* b = &Bases[base_id];
     Faction* f = &Factions[b->faction_id];

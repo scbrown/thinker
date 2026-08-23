@@ -4843,6 +4843,65 @@ static int na_dialog_route_refused = 0;
 //: ENGINE and not the pointer it just installed itself into — which would recurse forever.
 static Fpopp na_engine_popp = nullptr;
 
+/*
+base.hurry routing census (na-4zs). See the note in neural.h for why this is counted.
+
+Three counters, because three different facts are wanted and no two of them can be derived from
+each other:
+
+  observed  entries to na_base_hurry_observed — the patched call site actually firing
+  upkeep    entries to mod_base_hurry from mod_base_upkeep's direct call, the UNWATCHED door
+  raw       entries to mod_base_hurry from anywhere at all, including the observer's own
+            stand-down paths — the denominator, and the control that says the instrument is
+            wired: a run with raw == 0 has measured nothing, whatever the other two say
+
+`double` is the second question the bead asks: the same base reaching the unwatched door in a
+turn it had ALREADY been observed in. That is the double-count risk, and it is not implied by
+`observed > 0 && upkeep > 0` — those can be different bases, or the same base on different
+turns, neither of which is a double count.
+
+Indexed like na_seq_count and invalidated the same way, on turn change.
+*/
+static int na_hurry_observed = 0;
+static int na_hurry_upkeep = 0;
+static int na_hurry_raw = 0;
+static int na_hurry_double = 0;
+static int na_hurry_seen_turn[MaxBaseNum];
+static bool na_hurry_seen_init = false;
+
+static void na_hurry_seen_ensure() {
+    if (!na_hurry_seen_init) {
+        for (int i = 0; i < MaxBaseNum; i++) {
+            na_hurry_seen_turn[i] = -1;
+        }
+        na_hurry_seen_init = true;
+    }
+}
+
+void na_hurry_note_observed(int base_id) {
+    na_hurry_observed++;
+    if (base_id < 0 || base_id >= MaxBaseNum) {
+        return;
+    }
+    na_hurry_seen_ensure();
+    na_hurry_seen_turn[base_id] = *CurrentTurn;
+}
+
+void na_hurry_note_raw() {
+    na_hurry_raw++;
+}
+
+void na_hurry_note_upkeep(int base_id) {
+    na_hurry_upkeep++;
+    if (base_id < 0 || base_id >= MaxBaseNum) {
+        return;
+    }
+    na_hurry_seen_ensure();
+    if (na_hurry_seen_turn[base_id] == *CurrentTurn) {
+        na_hurry_double++;
+    }
+}
+
 static const NaDialogEntry* na_dialog_lookup(const char* file, const char* label) {
     if (!label) {
         return nullptr;
@@ -5983,6 +6042,24 @@ void na_command_tick(void* hwnd_raw) {
     was raised" look identical in an empty log and only one of them is a bug — and a high
     unmapped count is not a failure either, it is the inventory this hook exists to collect.
     */
+    /*
+    `hurry-stats` — which door base.hurry decisions came through (na-4zs).
+
+    The one measurement that settles the bead, and it cannot be taken from the decision log:
+    a hurry that bypassed the observer writes no record, so "the surface never fired" and
+    "the surface is not routed" are the same empty log.
+
+    Read `raw` FIRST. It is the control: a run where mod_base_hurry was never entered at all
+    has measured nothing, and `observed=0 upkeep=0` would otherwise read as "no bypass".
+    */
+    if (strcmp(line, "hurry-stats") == 0) {
+        char detail[128];
+        snprintf(detail, sizeof(detail), "raw=%d observed=%d upkeep=%d double=%d",
+                 na_hurry_raw, na_hurry_observed, na_hurry_upkeep, na_hurry_double);
+        na_cmd_result("hurry-stats", detail, true);
+        return;
+    }
+
     if (strcmp(line, "dialog-stats") == 0) {
         char detail[128];
         snprintf(detail, sizeof(detail),
