@@ -607,6 +607,14 @@ faction, so mod_base_reset is never called for our bases and no colony pod is ev
 void na_manage_player_bases();
 
 /*
+Run move_upkeep(UM_Player) for the human slot (na-bg4 follow-up). No-op unless
+manage_player_units is set. See the definition: this pass is reachable only from inside
+mod_enemy_move, which the engine never calls for a player unit, so `mapdata` and
+`plans[faction]` have never been computed for the faction we drive — measured as upkeep_ok=0.
+*/
+void na_upkeep_player();
+
+/*
 Native-tier enforcement of a withdrawal promise (na-nmg, sattler's ruling of 2026-08-23).
 
 A diplomacy answer is a PROMISE about later turns. The ruling is that KEEPING one is mechanical

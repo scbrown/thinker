@@ -5469,6 +5469,54 @@ wants the AI rewriting their build queue — and this is the unattended case, wh
 Per-turn, because production choice is a per-turn decision and a base whose queue was fine last
 turn may not be fine now.
 */
+/*
+Run the per-faction map/plan upkeep for the human slot (na-bg4 follow-up).
+
+THE THIRD INSTANCE OF ONE PATTERN, and the largest. Thinker has several per-faction passes that
+the engine only ever invokes for AI factions, and each one is invisible from the outside because
+what it produces is an INPUT to something else rather than an action:
+
+    mod_bases_reset      never called for a human faction -> no production is chosen
+    mod_enemy_move       never called for a player unit   -> nothing moves our units
+    move_upkeep(UM_Player)   reachable ONLY from inside mod_enemy_move's plr_unit branch, so for
+                             the faction we drive it never runs at all
+
+MEASURED: `move-stats` reports `upkeep_ok=0` for our faction across an entire 122-turn game and
+again at turn 83 of ladder row 1. That counter sits at the veh_turn.cpp call site, so zero is
+not "it ran and did nothing" — it never ran.
+
+`move_upkeep` is what fills `mapdata` (tile safety, roads, patrol nodes) and calls
+`plans_upkeep`, which builds `plans[faction_id]` — main region, naval priority, enemy ranges,
+base-site scoring inputs. Everything downstream reads them: `safe_path` tests
+`mapdata[..].safety`, `select_build_inner` opens with `AIPlans* p = &plans[faction_id]`,
+`select_colony` scores sites against `f->base_count` and the region plans, and `colony_move`
+refuses to settle on a tile whose safety it cannot vouch for.
+
+So for our faction all of that has been running on a cleared map and a zeroed plan. That is
+consistent with what ladder row 1 measured: level with the AIs at turn 21 (7:3 against 2-3) and
+on 2 bases at turn 82 against 11-31, with two live colony pods that never settle and never give
+up. Not proof that this is the whole cause — `colony_pass` is the counter that will say — but it
+is the input every one of those decisions was missing.
+
+`UM_Player` is not a mode invented here: `move_upkeep` refuses it for a non-human faction
+(move.cpp:822) and it is the only mode that calls `plans_upkeep`. Thinker built the pass for
+this exact configuration; nothing ever called it.
+
+Gated on `manage_player_units`, which is the same condition `thinker_move_upkeep` applies to a
+human faction, so an unattended run opts in and a real player is untouched.
+*/
+void na_upkeep_player() {
+    if (!conf.manage_player_units) {
+        return;
+    }
+    const int faction_id = *CurrentPlayerFaction;
+    if (faction_id <= 0 || faction_id >= MaxPlayerNum) {
+        return;
+    }
+    move_upkeep(faction_id, UM_Player);
+    na_move_note(faction_id, NA_MOVE_UPKEEP_OK);
+}
+
 void na_manage_player_bases() {
     if (!conf.manage_player_bases) {
         return;

@@ -1422,6 +1422,15 @@ void __cdecl turn_upkeep() {
     na_settle_player_colonies for why anything is needed: the engine never calls mod_enemy_move
     for a player unit, so nothing moves them at all on an unattended run.
     */
+    /*
+    Neural Amplifier: build this faction's map and plan data before anything reads it (na-bg4).
+
+    FIRST on this seam, and the order is the point: the settle pass, the production pass and the
+    withdrawal pass all consume `mapdata` and `plans[faction]`, and for the human slot nothing
+    else in the engine ever fills them. Running them in the other order is what the fork did
+    until now, on a cleared map.
+    */
+    na_upkeep_player();
     na_settle_player_colonies();
     /*
     Neural Amplifier: choose production for the human faction's bases (na-bg4).
