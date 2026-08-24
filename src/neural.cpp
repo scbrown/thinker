@@ -6885,6 +6885,25 @@ void na_command_tick(void* hwnd_raw) {
             }
             if (veh_id >= 0) {
                 const bool ocean = is_ocean(mapsq(Vehs[veh_id].x, Vehs[veh_id].y));
+                // Construct a one-step border beside our own base. Using the first naturally
+                // owned tile can put an early-game unit on another continent, proving only
+                // that an impossible route stays impossible rather than that eviction works.
+                for (int i = 0; i < *BaseCount && tx < 0; i++) {
+                    if (Bases[i].faction_id != faction) {
+                        continue;
+                    }
+                    for (int j = 0; j < 8; j++) {
+                        const int x = wrap(Bases[i].x + NearbyTiles[j][0]);
+                        const int y = Bases[i].y + NearbyTiles[j][1];
+                        MAP* sq = mapsq(x, y);
+                        if (sq && !sq->is_base() && is_ocean(sq) == ocean) {
+                            sq->owner = owner;
+                            tx = x;
+                            ty = y;
+                            break;
+                        }
+                    }
+                }
                 for (int y = 0; y < *MapAreaY && tx < 0; y++) {
                     for (int x = 0; x < *MapAreaX; x++) {
                         MAP* sq = mapsq(x, y);
