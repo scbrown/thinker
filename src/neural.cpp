@@ -6,6 +6,7 @@
 #include "build.h"
 #include "basewin.h"
 #include "gui_dialog.h"
+#include "faction.h"
 #include "lib/ini.h"
 
 /*
@@ -4891,6 +4892,7 @@ static const NaDialogEntry NaDialogTable[] = {
     {nullptr,   "HALTPROJECT",     "base.project",       NA_DIALOG_NOTICE, -1, -1},
     {nullptr,   "SEIZEPROJECT",    "base.project",       NA_DIALOG_NOTICE, -1, -1},
     {nullptr,   "LOSEPROJECT",     "base.project",       NA_DIALOG_NOTICE, -1, -1},
+    {nullptr,   "CALLSCOUNCIL",    "council.call",       NA_DIALOG_NOTICE, -1, -1},
     {"modmenu", "SPYFOUND",        "probe.action",       NA_DIALOG_NOTICE, -1, -1},
     {"modmenu", "SPYLOST",         "probe.action",       NA_DIALOG_NOTICE, -1, -1},
 
@@ -4901,6 +4903,10 @@ static const NaDialogEntry NaDialogTable[] = {
     {nullptr,   "GETOUT3",          "diplo.tribute",      NA_DIALOG_DECISION, 0, 2},
     {nullptr,   "GETOUT4",          "diplo.tribute",      NA_DIALOG_DECISION, 0, 2},
     {nullptr,   "GETOUT5",          "diplo.tribute",      NA_DIALOG_DECISION, 0, 2},
+
+    // The candidate rows are added dynamically after Popup_start returns.  Its decision is
+    // therefore routed at the following BasePop_exec_3 call, not here.
+    {nullptr,   "GOVVOTE",          "council.vote",       NA_DIALOG_DECISION, -1, -1},
 };
 
 static const int NaDialogTableSize = (int)(sizeof(NaDialogTable) / sizeof(NaDialogTable[0]));
@@ -4922,6 +4928,13 @@ static int na_dialog_route_refused = 0;
 //: ENGINE and not the pointer it just installed itself into — which would recurse forever.
 static Fpopp na_engine_popp = nullptr;
 static FPopup_start na_engine_popup_start = nullptr;
+static FBasePop_exec_3 na_engine_dialog_exec = nullptr;
+static Popup* na_pending_dialog = nullptr;
+static const NaDialogEntry* na_pending_dialog_entry = nullptr;
+static char na_pending_dialog_file[80];
+static char na_pending_dialog_label[80];
+static int na_council_open_picker_ticks = 0;
+static int na_council_close_result_ticks = 0;
 
 /*
 base.hurry routing census (na-4zs). See the note in neural.h for why this is counted.
@@ -5335,6 +5348,147 @@ static int na_route_dialog(const NaDialogEntry* entry, int base_id) {
     return button;
 }
 
+/*
+Route #GOVVOTE after the engine has populated its list box.
+
+The executable's candidate-building loop visits faction ids 1..7, calls eligible(), and stores
+that faction id as each row's value.  BasePop_exec_3 consequently returns the faction id, not a
+zero-based row number; the stock caller passes that value straight into the council vote path
+(and translates only zero to -3).  Mirroring the same eligibility predicate gives the brain the
+same candidates while preserving the engine's value contract.
+*/
+static int na_route_council_vote(bool* brain_answered) {
+    if (brain_answered) {
+        *brain_answered = false;
+    }
+    NaBuf w;
+    na_buf_init(&w);
+    const int faction_id = *CurrentPlayerFaction;
+    na_write_head(&w, "council.vote", "turn", faction_id);
+    na_write_metrics(&w, faction_id, -1);
+    na_buf_puts(&w, ",\"action_space\":[");
+    bool first = true;
+    for (int candidate = 1; candidate < MaxPlayerNum; candidate++) {
+        if (!is_alive(candidate) || !eligible(candidate)) {
+            continue;
+        }
+        if (!first) {
+            na_buf_puts(&w, ",");
+        }
+        first = false;
+        na_buf_printf(&w, "{\"id\":\"vote:%d\",\"action\":\"Vote for ", candidate);
+        na_buf_escaped(&w, MFactions[candidate].noun_faction);
+        na_buf_printf(&w, "\",\"candidate_faction_id\":%d,\"votes\":%d}",
+                      candidate, council_votes(candidate));
+    }
+    na_buf_puts(&w, "]");
+    na_write_decision_deadline(&w);
+    na_buf_puts(&w, "}");
+
+    int choice = -1;
+    NaBuf body;
+    if (!w.failed && na_http_post(llm_endpoint.c_str(), "/decide", w.data,
+                                  conf.na.llm_timeout_ms, &body)) {
+        char action_id[64];
+        if (na_json_string(body.data, "action_id", action_id, sizeof(action_id))) {
+            int candidate = -1;
+            char tail = '\0';
+            if (sscanf(action_id, "vote:%d%c", &candidate, &tail) == 1
+                && candidate > 0 && candidate < MaxPlayerNum
+                && is_alive(candidate) && eligible(candidate)) {
+                choice = candidate;
+                if (brain_answered) {
+                    *brain_answered = true;
+                }
+            }
+        }
+        na_buf_free(&body);
+    }
+    na_buf_free(&w);
+    if (choice < 0) {
+        // This picker has no stock unattended answer: falling through blocks the game forever.
+        // Deterministic tier: vote for ourselves when eligible, otherwise for the eligible
+        // candidate with the most votes (stable tie-break: lowest faction id).
+        int best_votes = -1;
+        for (int candidate = 1; candidate < MaxPlayerNum; candidate++) {
+            if (!is_alive(candidate) || !eligible(candidate)) {
+                continue;
+            }
+            const int votes = council_votes(candidate);
+            if (candidate == faction_id) {
+                choice = candidate;
+                break;
+            }
+            if (votes > best_votes) {
+                best_votes = votes;
+                choice = candidate;
+            }
+        }
+    }
+    if (choice >= 0 && brain_answered && *brain_answered) {
+        na_dialog_routed++;
+    } else if (choice < 0) {
+        na_dialog_route_refused++;
+    }
+    return choice;
+}
+
+int __thiscall na_dialog_exec(BasePop* This, int a2, int a3) {
+    const bool matched = na_pending_dialog && (BasePop*)na_pending_dialog == This;
+    const NaDialogEntry* entry = matched ? na_pending_dialog_entry : nullptr;
+    na_pending_dialog = nullptr;
+    na_pending_dialog_entry = nullptr;
+
+    if (matched && entry && conf.na.dialog_route && strcmp(entry->label, "GOVVOTE") == 0) {
+        bool brain_answered = false;
+        const int choice = na_route_council_vote(&brain_answered);
+        if (choice >= 0) {
+            // The same council window redraws the tally with an OK control after the picker
+            // returns.  That acknowledgement is not another decision; close it once drawn.
+            na_council_close_result_ticks = 4;
+            if (conf.na.dialog_observe) {
+                if (brain_answered) {
+                    na_observe_dialog_routed(na_pending_dialog_file,
+                                             na_pending_dialog_label, choice);
+                } else {
+                    na_observe_dialog_auto(na_pending_dialog_file,
+                                           na_pending_dialog_label, choice);
+                }
+            }
+            return choice;
+        }
+    }
+    if (matched && entry && conf.na.dialog_route && entry->kind == NA_DIALOG_DECISION) {
+        const int choice = na_route_dialog(entry, *CurrentBaseID);
+        if (choice >= 0) {
+            if (conf.na.dialog_observe) {
+                na_observe_dialog_routed(na_pending_dialog_file, na_pending_dialog_label, choice);
+            }
+            return choice;
+        }
+    }
+    if (matched && entry && conf.na.dialog_auto && na_headless()
+        && entry->kind == NA_DIALOG_NOTICE) {
+        na_dialog_auto_answered++;
+        if (strcmp(entry->label, "CALLSCOUNCIL") == 0) {
+            // The following council screen's VOTE button only opens the real decision picker;
+            // it is navigation, not an answer.  Let the caller finish drawing it, then activate
+            // its button from the game thread in na_command_tick.
+            na_council_open_picker_ticks = 4;
+        }
+        if (conf.na.dialog_observe) {
+            na_observe_dialog_auto(na_pending_dialog_file, na_pending_dialog_label, 0);
+        }
+        return 0;
+    }
+
+    const int choice = na_engine_dialog_exec(This, a2, a3);
+    if (matched && conf.na.dialog_observe) {
+        na_observe_dialog(na_pending_dialog_file, na_pending_dialog_label, choice);
+    }
+    return choice;
+}
+
 int __cdecl na_popp(const char* filename, const char* label, int a3, const char* pcx_filename,
                     fp_none fn) {
     /*
@@ -5402,27 +5556,17 @@ door, where direct engine callers and popp callers both arrive.
 int __thiscall na_popup_start(Popup* This, const char* filename, const char* label,
                               int a4, char* a5, int a6, GraphicWin* a7) {
     const NaDialogEntry* entry = na_dialog_lookup(filename, label);
-    if (conf.na.dialog_route) {
-        const int routed = na_route_dialog(entry, *CurrentBaseID);
-        if (routed >= 0) {
-            if (conf.na.dialog_observe) {
-                na_observe_dialog_routed(filename, label, routed);
-            }
-            return routed;
-        }
-    }
-    if (conf.na.dialog_auto && na_headless() && entry && entry->kind == NA_DIALOG_NOTICE) {
-        na_dialog_auto_answered++;
-        if (conf.na.dialog_observe) {
-            na_observe_dialog_auto(filename, label, 0);
-        }
-        return 0;
-    }
-    const int chosen = na_engine_popup_start(This, filename, label, a4, a5, a6, a7);
-    if (conf.na.dialog_observe) {
-        na_observe_dialog(filename, label, chosen);
-    }
-    return chosen;
+    const int started = na_engine_popup_start(This, filename, label, a4, a5, a6, a7);
+    // Popup_start INITIALISES the dialog.  BasePop_exec_3, often called after the caller adds
+    // dynamic rows, is what returns the answer.  Returning a choice here leaves an uninitialised
+    // modal behind and produces the blank-OK window measured by na-d1g.
+    na_pending_dialog = This;
+    na_pending_dialog_entry = entry;
+    snprintf(na_pending_dialog_file, sizeof(na_pending_dialog_file), "%s",
+             filename ? filename : "");
+    snprintf(na_pending_dialog_label, sizeof(na_pending_dialog_label), "%s",
+             label ? label : "");
+    return started;
 }
 
 /*
@@ -5457,6 +5601,8 @@ static const uint8_t NaPopupStartPrologue[] = {
     0x55, 0x8B, 0xEC, 0x51, 0xA1, 0x0C, 0x1B, 0x69, 0x00
 };
 static const int32_t NaPopupStartEntryAddr = 0x406380;
+static const uint8_t NaDialogExecPrologue[] = {0x64, 0xA1, 0x00, 0x00, 0x00, 0x00, 0x6A, 0xFF};
+static const int32_t NaDialogExecEntryAddr = 0x602600;
 
 //: Which door the dialog hook actually sits behind. Reported by `dialog-stats`, because
 //: "installed" was ambiguous exactly where it mattered: the pointer swap reaches only the
@@ -5852,11 +5998,42 @@ static bool na_install_popup_start_trampoline() {
     return true;
 }
 
+static bool na_install_dialog_exec_trampoline() {
+    uint8_t* entry = (uint8_t*)NaDialogExecEntryAddr;
+    DWORD oldattr = 0, tmp = 0;
+    if (!VirtualProtect(entry, sizeof(NaDialogExecPrologue), PAGE_EXECUTE_READWRITE, &oldattr)) {
+        return false;
+    }
+    if (memcmp(entry, NaDialogExecPrologue, sizeof(NaDialogExecPrologue)) != 0) {
+        VirtualProtect(entry, sizeof(NaDialogExecPrologue), oldattr, &tmp);
+        return false;
+    }
+    uint8_t* tramp = (uint8_t*)VirtualAlloc(
+        nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!tramp) {
+        VirtualProtect(entry, sizeof(NaDialogExecPrologue), oldattr, &tmp);
+        return false;
+    }
+    memcpy(tramp, NaDialogExecPrologue, sizeof(NaDialogExecPrologue));
+    tramp[sizeof(NaDialogExecPrologue)] = 0xE9;
+    *(int32_t*)(tramp + sizeof(NaDialogExecPrologue) + 1) =
+        (NaDialogExecEntryAddr + (int32_t)sizeof(NaDialogExecPrologue))
+        - (int32_t)(tramp + sizeof(NaDialogExecPrologue)) - 5;
+    entry[0] = 0xE9;
+    *(int32_t*)(entry + 1) = (int32_t)na_dialog_exec - NaDialogExecEntryAddr - 5;
+    memset(entry + 5, 0x90, sizeof(NaDialogExecPrologue) - 5);
+    VirtualProtect(entry, sizeof(NaDialogExecPrologue), oldattr, &tmp);
+    FlushInstructionCache(GetCurrentProcess(), entry, sizeof(NaDialogExecPrologue));
+    na_engine_dialog_exec = (FBasePop_exec_3)tramp;
+    return true;
+}
+
 void na_install_dialog_hook() {
     if (na_engine_popp) {
         return;
     }
-    if (conf.na.dialog_entry_hook && na_install_popup_start_trampoline()) {
+    if (conf.na.dialog_entry_hook && na_install_popup_start_trampoline()
+        && na_install_dialog_exec_trampoline()) {
         /*
         The `popp` POINTER IS DELIBERATELY LEFT ALONE. Every caller now arrives through the
         entry point, so swapping the pointer as well would send the fork's own calls through
@@ -5886,6 +6063,19 @@ static bool na_is_order_line(const char* line) {
 void na_command_tick(void* hwnd_raw) {
     HWND hwnd = (HWND)hwnd_raw;
     static DWORD last_poll = 0;
+
+    if (na_council_open_picker_ticks > 0 && --na_council_open_picker_ticks == 0) {
+        // CouncilWindow::button_action(4) is the VOTE control measured at 0x424870's switch:
+        // argument 4 enters the GOVVOTE branch at 0x424951.  It runs here because command_tick
+        // is on the game thread; calling a window method from the harness thread would race UI
+        // state and recreate the very modal hang this removes.
+        typedef void (__thiscall *FCouncilVoteButton)(CouncilWindow*, int);
+        ((FCouncilVoteButton)0x424870)(CouncilWin, 4);
+    }
+    if (na_council_close_result_ticks > 0 && --na_council_close_result_ticks == 0) {
+        typedef void (__thiscall *FCouncilResultButton)(CouncilWindow*, int);
+        ((FCouncilResultButton)0x424870)(CouncilWin, 5);
+    }
 
     /*
     The window procedure runs on every message — thousands per second while the game
