@@ -6885,13 +6885,6 @@ void na_command_tick(void* hwnd_raw) {
             }
             if (veh_id >= 0) {
                 const bool ocean = is_ocean(mapsq(Vehs[veh_id].x, Vehs[veh_id].y));
-                for (int i = 0; i < *BaseCount && tx < 0; i++) {
-                    if (Bases[i].faction_id == owner
-                        && is_ocean(mapsq(Bases[i].x, Bases[i].y)) == ocean) {
-                        tx = Bases[i].x;
-                        ty = Bases[i].y;
-                    }
-                }
                 for (int y = 0; y < *MapAreaY && tx < 0; y++) {
                     for (int x = 0; x < *MapAreaX; x++) {
                         MAP* sq = mapsq(x, y);
