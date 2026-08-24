@@ -5290,7 +5290,7 @@ static int na_route_dialog(const NaDialogEntry* entry, int base_id) {
         na_buf_escaped(&w, MFactions[target_id].noun_faction);
         na_buf_puts(&w, "\"],\"action_space\":["
                        "{\"id\":\"withdraw:comply\",\"action\":\"withdraw troops to nearest base\","
-                       "\"effects\":{\"units_in_foreign_territory\":\"decrease\"}},"
+                       "\"effects\":{\"units_in_foreign_territory\":-1}},"
                        "{\"id\":\"withdraw:reciprocal\",\"action\":\"withdraw only if they reciprocate\"},"
                        "{\"id\":\"withdraw:refuse\",\"action\":\"refuse the demand\"}]");
     } else {
