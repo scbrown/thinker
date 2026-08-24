@@ -6870,6 +6870,44 @@ void na_command_tick(void* hwnd_raw) {
         na_cmd_result("probe-withdrawal-demand", detail, true);
         return;
     }
+    if (strncmp(line, "probe-foreign-unit", 18) == 0) {
+        int owner = 0;
+        const int faction = *CurrentPlayerFaction;
+        int veh_id = -1;
+        int tx = -1;
+        int ty = -1;
+        if (sscanf(line + 18, "%d", &owner) == 1 && owner > 0 && owner < MaxPlayerNum) {
+            for (int i = 0; i < *VehCount && veh_id < 0; i++) {
+                if (Vehs[i].faction_id == faction) {
+                    veh_id = i;
+                }
+            }
+            if (veh_id >= 0) {
+                const bool ocean = is_ocean(mapsq(Vehs[veh_id].x, Vehs[veh_id].y));
+                for (int y = 0; y < *MapAreaY && tx < 0; y++) {
+                    for (int x = 0; x < *MapAreaX; x++) {
+                        MAP* sq = mapsq(x, y);
+                        if (sq && is_ocean(sq) == ocean
+                            && whose_territory(faction, x, y, 0, 0) == owner) {
+                            tx = x;
+                            ty = y;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if (veh_id < 0 || tx < 0) {
+            na_cmd_result("probe-foreign-unit", "no matching unit or foreign tile", false);
+            return;
+        }
+        Vehs[veh_id].x = tx;
+        Vehs[veh_id].y = ty;
+        char detail[128];
+        snprintf(detail, sizeof(detail), "veh=%d owner=%d x=%d y=%d", veh_id, owner, tx, ty);
+        na_cmd_result("probe-foreign-unit", detail, true);
+        return;
+    }
     if (strncmp(line, "withdraw", 8) == 0) {
         const char* arg = line + 8;
         while (*arg == ' ') {
