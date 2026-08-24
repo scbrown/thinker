@@ -6856,7 +6856,15 @@ void na_command_tick(void* hwnd_raw) {
                           "usage: probe-withdrawal-demand <faction> <target>", false);
             return;
         }
-        const int answer = demand_withdrawal(faction, target);
+        // demand_withdrawal performs several pieces of diplomacy before it reaches GETOUT and
+        // can legitimately stop at an earlier communications dialog. The fixture wants the
+        // exact decision seam, not those prerequisites: establish the same globals the engine
+        // establishes, then raise the representative Miriam text directly.
+        *CurrentPlayerFaction = faction;
+        *diplo_second_faction = target;
+        Popup cur_popup = {};
+        const int answer = Popup_start(&cur_popup, ScriptFile, "GETOUT3", -1, nullptr,
+                                       0x100000, nullptr);
         char detail[128];
         snprintf(detail, sizeof(detail), "faction=%d target=%d answer=%d", faction, target, answer);
         na_cmd_result("probe-withdrawal-demand", detail, true);
