@@ -4893,6 +4893,14 @@ static const NaDialogEntry NaDialogTable[] = {
     {nullptr,   "LOSEPROJECT",     "base.project",       NA_DIALOG_NOTICE, -1, -1},
     {"modmenu", "SPYFOUND",        "probe.action",       NA_DIALOG_NOTICE, -1, -1},
     {"modmenu", "SPYLOST",         "probe.action",       NA_DIALOG_NOTICE, -1, -1},
+
+    // demand_withdrawal constructs GETOUT1..5 at run time. Script.txt defines the same
+    // three zero-based buttons for every variant: comply, demand reciprocity, refuse.
+    {nullptr,   "GETOUT1",          "diplo.tribute",      NA_DIALOG_DECISION, 0, 2},
+    {nullptr,   "GETOUT2",          "diplo.tribute",      NA_DIALOG_DECISION, 0, 2},
+    {nullptr,   "GETOUT3",          "diplo.tribute",      NA_DIALOG_DECISION, 0, 2},
+    {nullptr,   "GETOUT4",          "diplo.tribute",      NA_DIALOG_DECISION, 0, 2},
+    {nullptr,   "GETOUT5",          "diplo.tribute",      NA_DIALOG_DECISION, 0, 2},
 };
 
 static const int NaDialogTableSize = (int)(sizeof(NaDialogTable) / sizeof(NaDialogTable[0]));
@@ -4913,6 +4921,7 @@ static int na_dialog_route_refused = 0;
 //: The engine's own popp, captured at install time. Held separately so the wrapper calls the
 //: ENGINE and not the pointer it just installed itself into — which would recurse forever.
 static Fpopp na_engine_popp = nullptr;
+static FPopup_start na_engine_popup_start = nullptr;
 
 /*
 base.hurry routing census (na-4zs). See the note in neural.h for why this is counted.
@@ -5240,6 +5249,9 @@ and its emitter already exists. That is deliberate: a per-dialog action space is
 work, and inventing one for a dialog nobody has looked at would be the same mistake as guessing
 its buttons.
 */
+extern volatile int na_withdraw_target;
+extern volatile int na_withdraw_until;
+
 static int na_route_dialog(const NaDialogEntry* entry, int base_id) {
     if (!entry || entry->kind != NA_DIALOG_DECISION || !entry->surface_id) {
         return -1;
@@ -5250,20 +5262,41 @@ static int na_route_dialog(const NaDialogEntry* entry, int base_id) {
         na_dialog_route_refused++;
         return -1;
     }
-    if (strcmp(entry->surface_id, "base.staple") != 0) {
-        na_dialog_route_refused++;
-        return -1;
-    }
-    if (base_id < 0 || base_id >= *BaseCount) {
-        na_dialog_route_refused++;
-        return -1;
-    }
-
     NaBuf w;
     na_buf_init(&w);
-    // The SAME world view base.staple already emits — not a second description of one
-    // decision. `stapled` is false because nothing has been chosen yet; this is the ask.
-    na_build_base_staple(&w, base_id, false);
+    const bool staple = strcmp(entry->surface_id, "base.staple") == 0;
+    const bool withdrawal = strcmp(entry->surface_id, "diplo.tribute") == 0;
+    if (staple) {
+        if (base_id < 0 || base_id >= *BaseCount) {
+            na_dialog_route_refused++;
+            return -1;
+        }
+        // The SAME world view base.staple already emits — not a second description of one
+        // decision. `stapled` is false because nothing has been chosen yet; this is the ask.
+        na_build_base_staple(&w, base_id, false);
+    } else if (withdrawal) {
+        const int faction_id = *CurrentPlayerFaction;
+        const int target_id = *diplo_second_faction;
+        if (faction_id <= 0 || faction_id >= MaxPlayerNum
+            || target_id <= 0 || target_id >= MaxPlayerNum || target_id == faction_id) {
+            na_dialog_route_refused++;
+            return -1;
+        }
+        na_write_head(&w, "diplo.tribute", "turn", faction_id);
+        na_write_metrics(&w, faction_id, -1);
+        na_buf_printf(&w, ",\"target_faction_id\":%d,\"target_faction\":\"", target_id);
+        na_buf_escaped(&w, MFactions[target_id].noun_faction);
+        na_buf_puts(&w, "\",\"subjects\":[\"");
+        na_buf_escaped(&w, MFactions[target_id].noun_faction);
+        na_buf_puts(&w, "\"],\"action_space\":["
+                       "{\"id\":\"withdraw:comply\",\"action\":\"withdraw troops to nearest base\","
+                       "\"effects\":{\"units_in_foreign_territory\":-1}},"
+                       "{\"id\":\"withdraw:reciprocal\",\"action\":\"withdraw only if they reciprocate\"},"
+                       "{\"id\":\"withdraw:refuse\",\"action\":\"refuse the demand\"}]");
+    } else {
+        na_dialog_route_refused++;
+        return -1;
+    }
     na_write_decision_deadline(&w);
     na_buf_puts(&w, "}");
 
@@ -5277,6 +5310,17 @@ static int na_route_dialog(const NaDialogEntry* entry, int base_id) {
                 button = entry->button_affirm;
             } else if (strcmp(action_id, "staple:none") == 0) {
                 button = entry->button_decline;
+            } else if (withdrawal && strcmp(action_id, "withdraw:comply") == 0) {
+                button = 0;
+                // The dialog answer and native promise become visible atomically on the game
+                // thread. -1 matches the directive's faction-wide metric: leave ALL foreign
+                // territory, not merely the faction whose demand happened to expose it.
+                na_withdraw_until = 0;
+                na_withdraw_target = -1;
+            } else if (withdrawal && strcmp(action_id, "withdraw:reciprocal") == 0) {
+                button = 1;
+            } else if (withdrawal && strcmp(action_id, "withdraw:refuse") == 0) {
+                button = 2;
             }
             // Anything else is an id the action space never offered, and it stays -1.
         }
@@ -5350,6 +5394,38 @@ int __cdecl na_popp(const char* filename, const char* label, int a3, const char*
 }
 
 /*
+The engine's real dialog choke point. Popup_start is __thiscall, so `This` arrives in ECX;
+declaring the wrapper with the same ABI lets GCC preserve that contract while the trampoline
+continues to the original function. This repeats na_popp's three dispositions at the lower
+door, where direct engine callers and popp callers both arrive.
+*/
+int __thiscall na_popup_start(Popup* This, const char* filename, const char* label,
+                              int a4, char* a5, int a6, GraphicWin* a7) {
+    const NaDialogEntry* entry = na_dialog_lookup(filename, label);
+    if (conf.na.dialog_route) {
+        const int routed = na_route_dialog(entry, *CurrentBaseID);
+        if (routed >= 0) {
+            if (conf.na.dialog_observe) {
+                na_observe_dialog_routed(filename, label, routed);
+            }
+            return routed;
+        }
+    }
+    if (conf.na.dialog_auto && na_headless() && entry && entry->kind == NA_DIALOG_NOTICE) {
+        na_dialog_auto_answered++;
+        if (conf.na.dialog_observe) {
+            na_observe_dialog_auto(filename, label, 0);
+        }
+        return 0;
+    }
+    const int chosen = na_engine_popup_start(This, filename, label, a4, a5, a6, a7);
+    if (conf.na.dialog_observe) {
+        na_observe_dialog(filename, label, chosen);
+    }
+    return chosen;
+}
+
+/*
 Install the wrapper into the `popp` pointer. Idempotent: a second call is a no-op rather than
 chaining the wrapper onto itself, which would double every record and, worse, recurse.
 
@@ -5377,6 +5453,10 @@ that otherwise runs.
 */
 static const uint8_t NaPoppPrologue[] = {0x55, 0x8B, 0xEC, 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00};
 static const int32_t NaPoppEntryAddr = 0x48C0A0;
+static const uint8_t NaPopupStartPrologue[] = {
+    0x55, 0x8B, 0xEC, 0x51, 0xA1, 0x0C, 0x1B, 0x69, 0x00
+};
+static const int32_t NaPopupStartEntryAddr = 0x406380;
 
 //: Which door the dialog hook actually sits behind. Reported by `dialog-stats`, because
 //: "installed" was ambiguous exactly where it mattered: the pointer swap reaches only the
@@ -5894,18 +5974,55 @@ static bool na_install_popp_trampoline() {
     return true;
 }
 
+static bool na_install_popup_start_trampoline() {
+    uint8_t* entry = (uint8_t*)NaPopupStartEntryAddr;
+    DWORD oldattr = 0, tmp = 0;
+    if (!VirtualProtect(entry, sizeof(NaPopupStartPrologue), PAGE_EXECUTE_READWRITE, &oldattr)) {
+        return false;
+    }
+    if (memcmp(entry, NaPopupStartPrologue, sizeof(NaPopupStartPrologue)) != 0) {
+        VirtualProtect(entry, sizeof(NaPopupStartPrologue), oldattr, &tmp);
+        return false;
+    }
+    uint8_t* tramp = (uint8_t*)VirtualAlloc(
+        nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!tramp) {
+        VirtualProtect(entry, sizeof(NaPopupStartPrologue), oldattr, &tmp);
+        return false;
+    }
+    memcpy(tramp, NaPopupStartPrologue, sizeof(NaPopupStartPrologue));
+    tramp[sizeof(NaPopupStartPrologue)] = 0xE9;
+    *(int32_t*)(tramp + sizeof(NaPopupStartPrologue) + 1) =
+        (NaPopupStartEntryAddr + (int32_t)sizeof(NaPopupStartPrologue))
+        - (int32_t)(tramp + sizeof(NaPopupStartPrologue)) - 5;
+    entry[0] = 0xE9;
+    *(int32_t*)(entry + 1) = (int32_t)na_popup_start - NaPopupStartEntryAddr - 5;
+    memset(entry + 5, 0x90, sizeof(NaPopupStartPrologue) - 5);
+    VirtualProtect(entry, sizeof(NaPopupStartPrologue), oldattr, &tmp);
+    FlushInstructionCache(GetCurrentProcess(), entry, sizeof(NaPopupStartPrologue));
+    na_engine_popup_start = (FPopup_start)tramp;
+    return true;
+}
+
 void na_install_dialog_hook() {
     if (na_engine_popp) {
         return;
     }
-    if (conf.na.dialog_entry_hook && na_install_popp_trampoline()) {
+    if (conf.na.dialog_entry_hook && na_install_popup_start_trampoline()) {
         /*
         The `popp` POINTER IS DELIBERATELY LEFT ALONE. Every caller now arrives through the
         entry point, so swapping the pointer as well would send the fork's own calls through
         na_popp twice — once via the pointer and once via the entry — double-counting every
         dialog it raises and running auto-answer and routing on it twice.
         */
-        na_popp_reach = "entry";
+        na_engine_popp = popp; // installed sentinel; leave the pointer untouched to avoid doubles.
+        na_popp_reach = "popup_start";
+        return;
+    }
+    // A changed Popup_start prologue must not make observation disappear. The older popp entry
+    // hook still reaches every popp caller and is a stronger fallback than the pointer alone.
+    if (conf.na.dialog_entry_hook && na_install_popp_trampoline()) {
+        na_popp_reach = "popp_entry_fallback";
         return;
     }
     na_engine_popp = popp;
@@ -7000,6 +7117,76 @@ void na_command_tick(void* hwnd_raw) {
                  na_withdraw_target, na_withdraw_until, *CurrentTurn,
                  na_withdraw_seen, na_withdraw_moved, na_withdraw_no_base);
         na_cmd_result("withdraw-stats", detail, true);
+        return;
+    }
+    if (strncmp(line, "probe-withdrawal-demand", 23) == 0) {
+        int faction = 0;
+        int target = 0;
+        if (sscanf(line + 23, "%d %d", &faction, &target) != 2
+            || faction <= 0 || faction >= MaxPlayerNum
+            || target <= 0 || target >= MaxPlayerNum || faction == target) {
+            na_cmd_result("probe-withdrawal-demand",
+                          "usage: probe-withdrawal-demand <faction> <target>", false);
+            return;
+        }
+        // demand_withdrawal performs several pieces of diplomacy before it reaches GETOUT and
+        // can legitimately stop at an earlier communications dialog. The fixture wants the
+        // exact decision seam, not those prerequisites: establish the same globals the engine
+        // establishes, then raise the representative Miriam text directly.
+        *CurrentPlayerFaction = faction;
+        *diplo_second_faction = target;
+        Popup cur_popup = {};
+        const int answer = Popup_start(&cur_popup, ScriptFile, "GETOUT3", -1, nullptr,
+                                       0x100000, nullptr);
+        char detail[128];
+        snprintf(detail, sizeof(detail), "faction=%d target=%d answer=%d", faction, target, answer);
+        na_cmd_result("probe-withdrawal-demand", detail, true);
+        return;
+    }
+    if (strncmp(line, "probe-foreign-unit", 18) == 0) {
+        int owner = 0;
+        const int faction = *CurrentPlayerFaction;
+        int veh_id = -1;
+        int tx = -1;
+        int ty = -1;
+        if (sscanf(line + 18, "%d", &owner) == 1 && owner > 0 && owner < MaxPlayerNum) {
+            set_treaty(faction, owner, DIPLO_COMMLINK, 1);
+            for (int i = 0; i < *VehCount && veh_id < 0; i++) {
+                if (Vehs[i].faction_id == faction) {
+                    veh_id = i;
+                }
+            }
+            if (veh_id >= 0) {
+                const bool ocean = is_ocean(mapsq(Vehs[veh_id].x, Vehs[veh_id].y));
+                for (int i = 0; i < *BaseCount && tx < 0; i++) {
+                    if (Bases[i].faction_id == owner
+                        && is_ocean(mapsq(Bases[i].x, Bases[i].y)) == ocean) {
+                        tx = Bases[i].x;
+                        ty = Bases[i].y;
+                    }
+                }
+                for (int y = 0; y < *MapAreaY && tx < 0; y++) {
+                    for (int x = 0; x < *MapAreaX; x++) {
+                        MAP* sq = mapsq(x, y);
+                        if (sq && is_ocean(sq) == ocean
+                            && whose_territory(faction, x, y, 0, 0) == owner) {
+                            tx = x;
+                            ty = y;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if (veh_id < 0 || tx < 0) {
+            na_cmd_result("probe-foreign-unit", "no matching unit or foreign tile", false);
+            return;
+        }
+        Vehs[veh_id].x = tx;
+        Vehs[veh_id].y = ty;
+        char detail[128];
+        snprintf(detail, sizeof(detail), "veh=%d owner=%d x=%d y=%d", veh_id, owner, tx, ty);
+        na_cmd_result("probe-foreign-unit", detail, true);
         return;
     }
     if (strncmp(line, "withdraw", 8) == 0) {

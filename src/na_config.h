@@ -158,7 +158,8 @@ struct NaConfig {
     Shipping an unexercised patch of a hot engine entry point, into a game a person plays, is
     not a trade worth making for a benefit nobody has observed. So the mechanism is here,
     reviewable and one ini key away, and the default does not change anyone's game. `dialog-stats`
-    reports `reach=entry` or `reach=pointer`, so which one is live is never a guess.
+    reports `reach=popup_start`, `popp_entry_fallback`, or `pointer`, so which door is live
+    is never a guess.
     */
     int dialog_entry_hook = 0;
     /*
