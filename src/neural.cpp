@@ -4928,6 +4928,13 @@ static int na_dialog_route_refused = 0;
 //: ENGINE and not the pointer it just installed itself into — which would recurse forever.
 static Fpopp na_engine_popp = nullptr;
 static FPopup_start na_engine_popup_start = nullptr;
+static FNetMsg_pop na_engine_netmsg_pop = nullptr;
+//: Dialogs that arrived through NetMsg_pop rather than the popp subsystem. Reported separately
+//: by `dialog-stats` because merging it into `seen` would hide WHICH door a dialog used, and
+//: which door it used is the whole finding of aegis-us0fb.
+static int na_dialog_netmsg = 0;
+static int na_dialog_netmsg2 = 0;
+static FNetMsg_pop_2 na_engine_netmsg_pop_2 = nullptr;
 static FBasePop_exec_3 na_engine_dialog_exec = nullptr;
 static Popup* na_pending_dialog = nullptr;
 static const NaDialogEntry* na_pending_dialog_entry = nullptr;
@@ -5570,6 +5577,117 @@ int __thiscall na_popup_start(Popup* This, const char* filename, const char* lab
 }
 
 /*
+THE THIRD DOOR (aegis-us0fb). `Script.txt/#COMM` — the communications-officer modal — wedged a
+run at turn 166 while `dialog-stats` read `seen=0`: a live modal on screen and every counter at
+zero. It is not raised through `popp`/Popup_start at all, so no choice among the existing doors
+could ever have seen it, and `seen=0` was a FALSE NEGATIVE rather than an absence.
+
+`NetMsg_pop` takes a LABEL exactly as Popup_start does and has 183 call sites in this fork,
+none of which raise COMM — the engine raises it internally, so only an ENTRY hook reaches it.
+
+Prologue read out of terranx.exe and VERIFIED the same way the two above were: the extractor
+was controlled by re-reading Popup_start's and popp's declared bytes from the same binary and
+requiring an exact match before this one was trusted. 9 bytes, whole instructions,
+`push ebp; mov ebp,esp; mov eax,fs:[0]` — byte-identical in shape to popp's.
+*/
+static const uint8_t NaNetMsgPopPrologue[] = {0x55, 0x8B, 0xEC, 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00};
+static const int32_t NaNetMsgPopEntryAddr = 0x47A890;
+/*
+The SIBLING. engine.h declares TWO: the __thiscall NetMsg_pop above and this __cdecl
+NetMsg_pop_2(label, filename). Hooking only the first was not enough — MEASURED: the comm modal
+sat on screen with `netmsg=0` while that hook was installed and counting, which REFUTED it as
+the door rather than leaving the question open. Two variants exist, so both get watched.
+Prologue read with the same control-verified extractor: push ebp; mov ebp,esp;
+mov eax,[ebp+0Ch]; mov ecx,[ebp+8] — 9 bytes, whole instructions.
+*/
+static const uint8_t NaNetMsgPop2Prologue[] = {0x55, 0x8B, 0xEC, 0x8B, 0x45, 0x0C, 0x8B, 0x4D, 0x08};
+static const int32_t NaNetMsgPop2EntryAddr = 0x50B9E0;
+
+/*
+OBSERVE ONLY, deliberately. This records that a dialog came through NetMsg_pop and does not
+auto-answer or route it. The open question is whether this door carries the wedge classes; a
+hook that also started answering would change behaviour and the run's outcome at the same time,
+and then neither result would mean anything. Routing follows once the door is confirmed.
+
+Calls through FIRST, like na_popup_start, because the engine's return is the truth about what
+was raised.
+*/
+int __thiscall na_netmsg_pop(NetMessage* This, const char* label, int delay, int a4,
+                             const char* filename) {
+    const int r = na_engine_netmsg_pop(This, label, delay, a4, filename);
+    na_dialog_netmsg++;
+    na_observe_dialog(filename, label, -1);
+    return r;
+}
+
+int __cdecl na_netmsg_pop_2(const char* label, const char* filename) {
+    const int r = na_engine_netmsg_pop_2(label, filename);
+    na_dialog_netmsg2++;
+    na_observe_dialog(filename, label, -1);
+    return r;
+}
+
+static bool na_install_netmsg_pop_2_trampoline() {
+    uint8_t* entry = (uint8_t*)NaNetMsgPop2EntryAddr;
+    DWORD oldattr = 0, tmp = 0;
+    if (!VirtualProtect(entry, sizeof(NaNetMsgPop2Prologue), PAGE_EXECUTE_READWRITE, &oldattr)) {
+        return false;
+    }
+    if (memcmp(entry, NaNetMsgPop2Prologue, sizeof(NaNetMsgPop2Prologue)) != 0) {
+        VirtualProtect(entry, sizeof(NaNetMsgPop2Prologue), oldattr, &tmp);
+        return false;
+    }
+    uint8_t* tramp = (uint8_t*)VirtualAlloc(
+        nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!tramp) {
+        VirtualProtect(entry, sizeof(NaNetMsgPop2Prologue), oldattr, &tmp);
+        return false;
+    }
+    memcpy(tramp, NaNetMsgPop2Prologue, sizeof(NaNetMsgPop2Prologue));
+    tramp[sizeof(NaNetMsgPop2Prologue)] = 0xE9;
+    *(int32_t*)(tramp + sizeof(NaNetMsgPop2Prologue) + 1) =
+        (NaNetMsgPop2EntryAddr + (int32_t)sizeof(NaNetMsgPop2Prologue))
+        - (int32_t)(tramp + sizeof(NaNetMsgPop2Prologue)) - 5;
+    entry[0] = 0xE9;
+    *(int32_t*)(entry + 1) = (int32_t)na_netmsg_pop_2 - NaNetMsgPop2EntryAddr - 5;
+    memset(entry + 5, 0x90, sizeof(NaNetMsgPop2Prologue) - 5);
+    VirtualProtect(entry, sizeof(NaNetMsgPop2Prologue), oldattr, &tmp);
+    FlushInstructionCache(GetCurrentProcess(), entry, sizeof(NaNetMsgPop2Prologue));
+    na_engine_netmsg_pop_2 = (FNetMsg_pop_2)tramp;
+    return true;
+}
+
+static bool na_install_netmsg_pop_trampoline() {
+    uint8_t* entry = (uint8_t*)NaNetMsgPopEntryAddr;
+    DWORD oldattr = 0, tmp = 0;
+    if (!VirtualProtect(entry, sizeof(NaNetMsgPopPrologue), PAGE_EXECUTE_READWRITE, &oldattr)) {
+        return false;
+    }
+    if (memcmp(entry, NaNetMsgPopPrologue, sizeof(NaNetMsgPopPrologue)) != 0) {
+        VirtualProtect(entry, sizeof(NaNetMsgPopPrologue), oldattr, &tmp);
+        return false;
+    }
+    uint8_t* tramp = (uint8_t*)VirtualAlloc(
+        nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!tramp) {
+        VirtualProtect(entry, sizeof(NaNetMsgPopPrologue), oldattr, &tmp);
+        return false;
+    }
+    memcpy(tramp, NaNetMsgPopPrologue, sizeof(NaNetMsgPopPrologue));
+    tramp[sizeof(NaNetMsgPopPrologue)] = 0xE9;
+    *(int32_t*)(tramp + sizeof(NaNetMsgPopPrologue) + 1) =
+        (NaNetMsgPopEntryAddr + (int32_t)sizeof(NaNetMsgPopPrologue))
+        - (int32_t)(tramp + sizeof(NaNetMsgPopPrologue)) - 5;
+    entry[0] = 0xE9;
+    *(int32_t*)(entry + 1) = (int32_t)na_netmsg_pop - NaNetMsgPopEntryAddr - 5;
+    memset(entry + 5, 0x90, sizeof(NaNetMsgPopPrologue) - 5);
+    VirtualProtect(entry, sizeof(NaNetMsgPopPrologue), oldattr, &tmp);
+    FlushInstructionCache(GetCurrentProcess(), entry, sizeof(NaNetMsgPopPrologue));
+    na_engine_netmsg_pop = (FNetMsg_pop)tramp;
+    return true;
+}
+
+/*
 Install the wrapper into the `popp` pointer. Idempotent: a second call is a no-op rather than
 chaining the wrapper onto itself, which would double every record and, worse, recurse.
 
@@ -6031,6 +6149,12 @@ static bool na_install_dialog_exec_trampoline() {
 void na_install_dialog_hook() {
     if (na_engine_popp) {
         return;
+    }
+    // Independent of which popp door wins below: NetMsg_pop is a DIFFERENT subsystem, so it is
+    // not a fallback for the others and the others are not a fallback for it.
+    if (conf.na.dialog_netmsg_hook && !na_engine_netmsg_pop) {
+        na_install_netmsg_pop_trampoline();
+        na_install_netmsg_pop_2_trampoline();
     }
     if (conf.na.dialog_entry_hook && na_install_popup_start_trampoline()
         && na_install_dialog_exec_trampoline()) {
@@ -7258,10 +7382,12 @@ void na_command_tick(void* hwnd_raw) {
     if (strcmp(line, "dialog-stats") == 0) {
         char detail[128];
         snprintf(detail, sizeof(detail),
-                 "seen=%d unmapped=%d auto=%d routed=%d route_refused=%d table=%d installed=%d "
+                 "seen=%d unmapped=%d auto=%d routed=%d route_refused=%d netmsg=%d/%d netmsg_hooked=%d/%d table=%d installed=%d "
                  "reach=%s",
                  na_dialog_seen, na_dialog_unmapped, na_dialog_auto_answered,
                  na_dialog_routed, na_dialog_route_refused,
+                 na_dialog_netmsg, na_dialog_netmsg2,
+                 na_engine_netmsg_pop ? 1 : 0, na_engine_netmsg_pop_2 ? 1 : 0,
                  NaDialogTableSize, na_engine_popp ? 1 : 0, na_popp_reach);
         na_cmd_result("dialog-stats", detail, true);
         return;
@@ -7685,6 +7811,7 @@ static const NaOption NaOptions[] = {
     {"na_dialog_auto", &NaConfig::dialog_auto},
     {"na_dialog_route", &NaConfig::dialog_route},
     {"na_dialog_entry_hook", &NaConfig::dialog_entry_hook},
+    {"na_dialog_netmsg_hook", &NaConfig::dialog_netmsg_hook},
     {"na_staple_observe", &NaConfig::staple_observe},
     {"na_endgame_observe", &NaConfig::endgame_observe},
     {"na_satellite_observe", &NaConfig::satellite_observe},
