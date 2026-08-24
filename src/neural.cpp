@@ -6877,7 +6877,7 @@ void na_command_tick(void* hwnd_raw) {
         int tx = -1;
         int ty = -1;
         if (sscanf(line + 18, "%d", &owner) == 1 && owner > 0 && owner < MaxPlayerNum) {
-            set_treaty(faction, owner, DIPLO_COMMLINK, 1);
+            set_treaty(faction, owner, DIPLO_COMMLINK | DIPLO_UNK_8000000, 1);
             for (int i = 0; i < *VehCount && veh_id < 0; i++) {
                 if (Vehs[i].faction_id == faction) {
                     veh_id = i;
