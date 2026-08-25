@@ -2,6 +2,7 @@ file	host	symbol	kind	count	invariant
 base.cpp	mod_base_build	na_decide_base_production	call	1	-
 base.cpp	mod_base_production	na_observe_base_abandon	call	1	-
 base.cpp	mod_base_production	na_should_abandon_base	call	1	-
+base.cpp	mod_base_reset	na_pod_note	call	2	-
 base.cpp	mod_base_reset	na_verify_base_production	call	1	-
 base.cpp	mod_base_upkeep	na_base_hurry_observed	call	1	-
 base.cpp	mod_base_upkeep	na_hurry_note_upkeep	call	1	-
@@ -33,6 +34,8 @@ build.cpp	select_build	na_observe_base_retool	call	1	-
 build.cpp	select_build	na_retool_penalty	call	1	-
 build.cpp	select_build_inner	na_observe_base_project	call	1	-
 build.cpp	select_build_inner	na_observe_base_satellite	call	1	-
+build.cpp	select_build_inner	na_pod_note	call	7	-
+build.cpp	select_build_inner	na_pod_note_gov	call	1	-
 faction.cpp	mod_social_ai	na_decide_faction_se	call	1	-
 faction.cpp	steal_tech	na_observe_faction_tech_steal	call	1	-
 game.cpp	config_game	na_new_game_map_seed	call	1	-
@@ -51,7 +54,10 @@ gameturn.cpp	production_phase	na_accumulate_begin	call	1	before:f->best_mineral_
 gameturn.cpp	production_phase	na_accumulate_end	call	1	last
 gameturn.cpp	turn_upkeep	na_announce_turn	call	1	after:na_exit_turn_check\(\)
 gameturn.cpp	turn_upkeep	na_exit_turn_check	call	1	first
-gameturn.cpp	turn_upkeep	na_settle_player_colonies	call	1	-
+gameturn.cpp	turn_upkeep	na_manage_player_bases	call	1	after:na_settle_player_colonies\(\)
+gameturn.cpp	turn_upkeep	na_settle_player_colonies	call	1	after:na_upkeep_player\(\)
+gameturn.cpp	turn_upkeep	na_upkeep_player	call	1	before:na_settle_player_colonies\(\)
+gameturn.cpp	turn_upkeep	na_withdraw_player_units	call	1	after:na_manage_player_bases\(\)
 gui.cpp	ModWinProc	na_auto_turn_tick	call	1	-
 gui.cpp	ModWinProc	na_autoload_tick	call	1	-
 gui.cpp	ModWinProc	na_command_tick	call	1	-
@@ -80,11 +86,12 @@ main.cpp	opt_handle_error	na_message_box	call	1	-
 main.cpp	option_handler	na_option_handler	call	1	-
 mapgen.cpp	mod_world_build	na_new_game_map_seed	call	1	-
 mapgen.cpp	mod_world_build	na_new_game_requested	call	1	-
-move.cpp	colony_move	na_move_note	call	2	-
+move.cpp	colony_move	na_move_note	call	5	-
 move.cpp	move_upkeep	na_observe_base_defend_goal	call	1	-
 patch.cpp	init_video_config	na_message_box	call	2	-
 patch.cpp	patch_setup	na_install_dialog_hook	call	1	before:write_(call|jump)\(
 patch.cpp	patch_setup	na_message_box	call	1	-
+path.cpp	safe_path	na_withdraw_binds	call	1	-
 plan.cpp	governor_priorities	na_gov_priorities_set	call	3	-
 plan.cpp	governor_priorities	na_governor_policy	call	1	-
 plan.cpp	governor_priorities	na_observe_base_governor_config	call	1	-

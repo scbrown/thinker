@@ -60,6 +60,17 @@ INVARIANTS = {
     # A run that is stopping must not first publish a forecast for a turn it
     # will never play, so the announce sits below the exit check.
     ("gameturn.cpp", "turn_upkeep", "na_announce_turn"): r"after:na_exit_turn_check\(\)",
+    # The human-player passes share plan/map state and deliberately form a
+    # pipeline: prepare it, settle, choose production for newly settled bases,
+    # then let withdrawal promises have the final word on unit orders.
+    ("gameturn.cpp", "turn_upkeep", "na_upkeep_player"):
+        r"before:na_settle_player_colonies\(\)",
+    ("gameturn.cpp", "turn_upkeep", "na_settle_player_colonies"):
+        r"after:na_upkeep_player\(\)",
+    ("gameturn.cpp", "turn_upkeep", "na_manage_player_bases"):
+        r"after:na_settle_player_colonies\(\)",
+    ("gameturn.cpp", "turn_upkeep", "na_withdraw_player_units"):
+        r"after:na_manage_player_bases\(\)",
     # The faction's economy totals are zeroed and re-accumulated one base at a
     # time; mod_base_build fires inside that window. The mark has to open
     # before the zeroing or the window it describes is wrong.
