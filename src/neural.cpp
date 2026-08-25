@@ -4,6 +4,7 @@
 #include "veh.h"
 #include "tech.h"
 #include "build.h"
+#include "base.h"
 #include "basewin.h"
 #include "gui_dialog.h"
 #include "faction.h"
@@ -787,12 +788,30 @@ number that is quietly wrong is worse than two numbers the brain can divide.
 */
 static void na_write_base_state(NaBuf* w, int base_id) {
     BASE& b = Bases[base_id];
+    Faction& f = Factions[b.faction_id];
+    const int support_free = unit_support_free(f.SE_support, b.pop_size);
+    const int support_unit_cost = unit_support_cost(f.SE_support);
+    int support_cost = 0;
+    for (int i = 0; i < *VehCount; i++) {
+        const VEH& veh = Vehs[i];
+        if (veh.faction_id == b.faction_id && veh.home_base_id == base_id
+        && (veh.state & VSTATE_REQUIRES_SUPPORT)) {
+            support_cost += support_unit_cost;
+        }
+    }
     na_buf_puts(w, ",\"base_state\":{");
     na_buf_printf(w, "\"pop_size\":%d", (int)b.pop_size);
     na_buf_printf(w, ",\"minerals_accumulated\":%d", b.minerals_accumulated);
     na_buf_printf(w, ",\"mineral_surplus\":%d", b.mineral_surplus);
     na_buf_printf(w, ",\"nutrient_intake\":%d", b.nutrient_intake);
     na_buf_printf(w, ",\"mineral_intake\":%d", b.mineral_intake);
+    // mineral_consumption also includes minerals convoyed to another base, so it
+    // cannot stand in for support. The engine marks each charged unit during
+    // mod_base_support; summing those marks reports the same mechanism without
+    // mutating base state or guessing from intake minus surplus.
+    na_buf_printf(w, ",\"support_cost\":%d", support_cost);
+    na_buf_printf(w, ",\"support_free\":%d", support_free);
+    na_buf_printf(w, ",\"se_support\":%d", f.SE_support);
     na_buf_printf(w, ",\"energy_intake\":%d", b.energy_intake);
     na_buf_printf(w, ",\"eco_damage\":%d", b.eco_damage);
     na_buf_printf(w, ",\"worked_tiles\":%d", b.worked_tiles);

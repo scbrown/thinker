@@ -34,6 +34,7 @@ python3 "$here/check_seams.py"
 python3 "$here/test_check_seams.py" >/dev/null && echo "ok    the seam guard can still fail (11 mutations refused)"
 python3 "$here/check_na_options.py"
 python3 "$here/check_dialog_headless_escape.py"
+python3 "$here/check_base_support_state.py"
 python3 "$here/check_native_choice_withheld.py" >/dev/null \
     && echo "ok    every decide surface withholds the native answer"
 python3 "$here/check_defer_recognised.py" >/dev/null \
