@@ -4904,6 +4904,11 @@ static const NaDialogEntry NaDialogTable[] = {
     {nullptr,   "GETOUT4",          "diplo.tribute",      NA_DIALOG_DECISION, 0, 2},
     {nullptr,   "GETOUT5",          "diplo.tribute",      NA_DIALOG_DECISION, 0, 2},
 
+    // Script.txt/#COMM: yes (0), no/close channel (1), profile (2).  It has no brain
+    // surface yet; unattended play takes the explicit decline rather than entering the
+    // faction-conversation UI, whose separate prompts would only move the wedge downstream.
+    {nullptr,   "COMM",              nullptr,               NA_DIALOG_DECISION, 0, 1},
+
     // The candidate rows are added dynamically after Popup_start returns.  Its decision is
     // therefore routed at the following BasePop_exec_3 call, not here.
     {nullptr,   "GOVVOTE",          "council.vote",       NA_DIALOG_DECISION, -1, -1},
@@ -5200,6 +5205,9 @@ void na_observe_dialog_routed(const char* file, const char* label, int chosen) {
 void na_observe_dialog_auto(const char* file, const char* label, int chosen) {
     const NaDialogEntry* entry = na_dialog_lookup(file, label);
     na_dialog_seen++;
+    if (!entry) {
+        na_dialog_unmapped++;
+    }
     NaBuf wb;
     NaBuf* w = &wb;
     na_buf_init(w);
@@ -5236,8 +5244,10 @@ void na_observe_dialog(const char* file, const char* label, int chosen) {
 }
 
 /*
-The hook itself. Calls through FIRST and records the result, because the engine's return is the
-answer and an observation written before the answer exists would have nothing to say.
+The hook itself records BEFORE it calls through.  BasePop_exec_3 draws the modal and waits for
+an answer; in a headless run that call may never return.  Recording afterwards made the one
+dialog that wedged the run structurally invisible (`seen=0`), while recording only dialogs that
+had already been dismissed.  `native_choice=-1` means the answer does not exist yet.
 
 Reads `conf.na.dialog_observe` per call rather than deciding at install time, so the flag can
 be toggled without a restart and so an unconfigured build does exactly what it did before.
@@ -5489,10 +5499,27 @@ int __thiscall na_dialog_exec(BasePop* This, int a2, int a3) {
         return 0;
     }
 
-    const int choice = na_engine_dialog_exec(This, a2, a3);
-    if (matched && conf.na.dialog_observe) {
-        na_observe_dialog(na_pending_dialog_file, na_pending_dialog_label, choice);
+    /*
+    #COMM is a real three-way decision, not a notice.  In unattended play, accepting it opens
+    the faction-conversation UI and merely moves the wedge to that UI's next prompt.  The table
+    records Script.txt's explicit decline index, so take that bounded answer only for COMM and
+    only behind the same headless + dialog_auto gates as notice dismissal.  Unknown dialogs stay
+    fail-closed; interactive play and default-disabled builds still reach the engine unchanged.
+    */
+    if (matched && entry && conf.na.dialog_auto && na_headless()
+        && strcmp(entry->label, "COMM") == 0) {
+        na_dialog_auto_answered++;
+        if (conf.na.dialog_observe) {
+            na_observe_dialog_auto(na_pending_dialog_file, na_pending_dialog_label,
+                                   entry->button_decline);
+        }
+        return entry->button_decline;
     }
+
+    if (matched && conf.na.dialog_observe) {
+        na_observe_dialog(na_pending_dialog_file, na_pending_dialog_label, -1);
+    }
+    const int choice = na_engine_dialog_exec(This, a2, a3);
     return choice;
 }
 
@@ -5577,13 +5604,11 @@ int __thiscall na_popup_start(Popup* This, const char* filename, const char* lab
 }
 
 /*
-THE THIRD DOOR (aegis-us0fb). `Script.txt/#COMM` — the communications-officer modal — wedged a
-run at turn 166 while `dialog-stats` read `seen=0`: a live modal on screen and every counter at
-zero. It is not raised through `popp`/Popup_start at all, so no choice among the existing doors
-could ever have seen it, and `seen=0` was a FALSE NEGATIVE rather than an absence.
-
-`NetMsg_pop` takes a LABEL exactly as Popup_start does and has 183 call sites in this fork,
-none of which raise COMM — the engine raises it internally, so only an ENTRY hook reaches it.
+THE ELIMINATED DOORS (aegis-us0fb). NetMsg_pop takes a label and has 183 call sites in this
+fork, so both variants were instrumented while investigating Script.txt/#COMM.  A controlled
+runtime probe then installed both hooks and counted zero across the whole reproducer while
+Popup_start/BasePop_exec_3 carried COMM.  These hooks stay as observation-only coverage and as
+durable proof not to repeat that search; they are not part of the COMM fix.
 
 Prologue read out of terranx.exe and VERIFIED the same way the two above were: the extractor
 was controlled by re-reading Popup_start's and popp's declared bytes from the same binary and
@@ -5605,9 +5630,7 @@ static const int32_t NaNetMsgPop2EntryAddr = 0x50B9E0;
 
 /*
 OBSERVE ONLY, deliberately. This records that a dialog came through NetMsg_pop and does not
-auto-answer or route it. The open question is whether this door carries the wedge classes; a
-hook that also started answering would change behaviour and the run's outcome at the same time,
-and then neither result would mean anything. Routing follows once the door is confirmed.
+auto-answer or route it. The hooks make these doors measurable without changing their behavior.
 
 Calls through FIRST, like na_popup_start, because the engine's return is the truth about what
 was raised.
