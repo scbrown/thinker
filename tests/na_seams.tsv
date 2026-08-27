@@ -55,6 +55,7 @@ gameturn.cpp	production_phase	na_accumulate_end	call	1	last
 gameturn.cpp	turn_upkeep	na_announce_turn	call	1	after:na_exit_turn_check\(\)
 gameturn.cpp	turn_upkeep	na_exit_turn_check	call	1	first
 gameturn.cpp	turn_upkeep	na_manage_player_bases	call	1	after:na_settle_player_colonies\(\)
+gameturn.cpp	turn_upkeep	na_run_player_unit_turn	call	1	-
 gameturn.cpp	turn_upkeep	na_settle_player_colonies	call	1	after:na_upkeep_player\(\)
 gameturn.cpp	turn_upkeep	na_upkeep_player	call	1	before:na_settle_player_colonies\(\)
 gameturn.cpp	turn_upkeep	na_withdraw_player_units	call	1	after:na_manage_player_bases\(\)
