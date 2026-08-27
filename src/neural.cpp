@@ -4,8 +4,10 @@
 #include "veh.h"
 #include "tech.h"
 #include "build.h"
+#include "base.h"
 #include "basewin.h"
 #include "gui_dialog.h"
+#include "faction.h"
 #include "lib/ini.h"
 
 /*
@@ -786,12 +788,30 @@ number that is quietly wrong is worse than two numbers the brain can divide.
 */
 static void na_write_base_state(NaBuf* w, int base_id) {
     BASE& b = Bases[base_id];
+    Faction& f = Factions[b.faction_id];
+    const int support_free = unit_support_free(f.SE_support, b.pop_size);
+    const int support_unit_cost = unit_support_cost(f.SE_support);
+    int support_cost = 0;
+    for (int i = 0; i < *VehCount; i++) {
+        const VEH& veh = Vehs[i];
+        if (veh.faction_id == b.faction_id && veh.home_base_id == base_id
+        && (veh.state & VSTATE_REQUIRES_SUPPORT)) {
+            support_cost += support_unit_cost;
+        }
+    }
     na_buf_puts(w, ",\"base_state\":{");
     na_buf_printf(w, "\"pop_size\":%d", (int)b.pop_size);
     na_buf_printf(w, ",\"minerals_accumulated\":%d", b.minerals_accumulated);
     na_buf_printf(w, ",\"mineral_surplus\":%d", b.mineral_surplus);
     na_buf_printf(w, ",\"nutrient_intake\":%d", b.nutrient_intake);
     na_buf_printf(w, ",\"mineral_intake\":%d", b.mineral_intake);
+    // mineral_consumption also includes minerals convoyed to another base, so it
+    // cannot stand in for support. The engine marks each charged unit during
+    // mod_base_support; summing those marks reports the same mechanism without
+    // mutating base state or guessing from intake minus surplus.
+    na_buf_printf(w, ",\"support_cost\":%d", support_cost);
+    na_buf_printf(w, ",\"support_free\":%d", support_free);
+    na_buf_printf(w, ",\"se_support\":%d", f.SE_support);
     na_buf_printf(w, ",\"energy_intake\":%d", b.energy_intake);
     na_buf_printf(w, ",\"eco_damage\":%d", b.eco_damage);
     na_buf_printf(w, ",\"worked_tiles\":%d", b.worked_tiles);
@@ -4891,6 +4911,7 @@ static const NaDialogEntry NaDialogTable[] = {
     {nullptr,   "HALTPROJECT",     "base.project",       NA_DIALOG_NOTICE, -1, -1},
     {nullptr,   "SEIZEPROJECT",    "base.project",       NA_DIALOG_NOTICE, -1, -1},
     {nullptr,   "LOSEPROJECT",     "base.project",       NA_DIALOG_NOTICE, -1, -1},
+    {nullptr,   "CALLSCOUNCIL",    "council.call",       NA_DIALOG_NOTICE, -1, -1},
     {"modmenu", "SPYFOUND",        "probe.action",       NA_DIALOG_NOTICE, -1, -1},
     {"modmenu", "SPYLOST",         "probe.action",       NA_DIALOG_NOTICE, -1, -1},
 
@@ -4901,6 +4922,15 @@ static const NaDialogEntry NaDialogTable[] = {
     {nullptr,   "GETOUT3",          "diplo.tribute",      NA_DIALOG_DECISION, 0, 2},
     {nullptr,   "GETOUT4",          "diplo.tribute",      NA_DIALOG_DECISION, 0, 2},
     {nullptr,   "GETOUT5",          "diplo.tribute",      NA_DIALOG_DECISION, 0, 2},
+
+    // Script.txt/#COMM: yes (0), no/close channel (1), profile (2).  It has no brain
+    // surface yet; unattended play takes the explicit decline rather than entering the
+    // faction-conversation UI, whose separate prompts would only move the wedge downstream.
+    {nullptr,   "COMM",              nullptr,               NA_DIALOG_DECISION, 0, 1},
+
+    // The candidate rows are added dynamically after Popup_start returns.  Its decision is
+    // therefore routed at the following BasePop_exec_3 call, not here.
+    {nullptr,   "GOVVOTE",          "council.vote",       NA_DIALOG_DECISION, -1, -1},
 };
 
 static const int NaDialogTableSize = (int)(sizeof(NaDialogTable) / sizeof(NaDialogTable[0]));
@@ -4922,6 +4952,20 @@ static int na_dialog_route_refused = 0;
 //: ENGINE and not the pointer it just installed itself into — which would recurse forever.
 static Fpopp na_engine_popp = nullptr;
 static FPopup_start na_engine_popup_start = nullptr;
+static FNetMsg_pop na_engine_netmsg_pop = nullptr;
+//: Dialogs that arrived through NetMsg_pop rather than the popp subsystem. Reported separately
+//: by `dialog-stats` because merging it into `seen` would hide WHICH door a dialog used, and
+//: which door it used is the whole finding of aegis-us0fb.
+static int na_dialog_netmsg = 0;
+static int na_dialog_netmsg2 = 0;
+static FNetMsg_pop_2 na_engine_netmsg_pop_2 = nullptr;
+static FBasePop_exec_3 na_engine_dialog_exec = nullptr;
+static Popup* na_pending_dialog = nullptr;
+static const NaDialogEntry* na_pending_dialog_entry = nullptr;
+static char na_pending_dialog_file[80];
+static char na_pending_dialog_label[80];
+static int na_council_open_picker_ticks = 0;
+static int na_council_close_result_ticks = 0;
 
 /*
 base.hurry routing census (na-4zs). See the note in neural.h for why this is counted.
@@ -5180,6 +5224,9 @@ void na_observe_dialog_routed(const char* file, const char* label, int chosen) {
 void na_observe_dialog_auto(const char* file, const char* label, int chosen) {
     const NaDialogEntry* entry = na_dialog_lookup(file, label);
     na_dialog_seen++;
+    if (!entry) {
+        na_dialog_unmapped++;
+    }
     NaBuf wb;
     NaBuf* w = &wb;
     na_buf_init(w);
@@ -5216,8 +5263,10 @@ void na_observe_dialog(const char* file, const char* label, int chosen) {
 }
 
 /*
-The hook itself. Calls through FIRST and records the result, because the engine's return is the
-answer and an observation written before the answer exists would have nothing to say.
+The hook itself records BEFORE it calls through.  BasePop_exec_3 draws the modal and waits for
+an answer; in a headless run that call may never return.  Recording afterwards made the one
+dialog that wedged the run structurally invisible (`seen=0`), while recording only dialogs that
+had already been dismissed.  `native_choice=-1` means the answer does not exist yet.
 
 Reads `conf.na.dialog_observe` per call rather than deciding at install time, so the flag can
 be toggled without a restart and so an unconfigured build does exactly what it did before.
@@ -5335,6 +5384,164 @@ static int na_route_dialog(const NaDialogEntry* entry, int base_id) {
     return button;
 }
 
+/*
+Route #GOVVOTE after the engine has populated its list box.
+
+The executable's candidate-building loop visits faction ids 1..7, calls eligible(), and stores
+that faction id as each row's value.  BasePop_exec_3 consequently returns the faction id, not a
+zero-based row number; the stock caller passes that value straight into the council vote path
+(and translates only zero to -3).  Mirroring the same eligibility predicate gives the brain the
+same candidates while preserving the engine's value contract.
+*/
+static int na_route_council_vote(bool* brain_answered) {
+    if (brain_answered) {
+        *brain_answered = false;
+    }
+    NaBuf w;
+    na_buf_init(&w);
+    const int faction_id = *CurrentPlayerFaction;
+    na_write_head(&w, "council.vote", "turn", faction_id);
+    na_write_metrics(&w, faction_id, -1);
+    na_buf_puts(&w, ",\"action_space\":[");
+    bool first = true;
+    for (int candidate = 1; candidate < MaxPlayerNum; candidate++) {
+        if (!is_alive(candidate) || !eligible(candidate)) {
+            continue;
+        }
+        if (!first) {
+            na_buf_puts(&w, ",");
+        }
+        first = false;
+        na_buf_printf(&w, "{\"id\":\"vote:%d\",\"action\":\"Vote for ", candidate);
+        na_buf_escaped(&w, MFactions[candidate].noun_faction);
+        na_buf_printf(&w, "\",\"candidate_faction_id\":%d,\"votes\":%d}",
+                      candidate, council_votes(candidate));
+    }
+    na_buf_puts(&w, "]");
+    na_write_decision_deadline(&w);
+    na_buf_puts(&w, "}");
+
+    int choice = -1;
+    NaBuf body;
+    if (!w.failed && na_http_post(llm_endpoint.c_str(), "/decide", w.data,
+                                  conf.na.llm_timeout_ms, &body)) {
+        char action_id[64];
+        if (na_json_string(body.data, "action_id", action_id, sizeof(action_id))) {
+            int candidate = -1;
+            char tail = '\0';
+            if (sscanf(action_id, "vote:%d%c", &candidate, &tail) == 1
+                && candidate > 0 && candidate < MaxPlayerNum
+                && is_alive(candidate) && eligible(candidate)) {
+                choice = candidate;
+                if (brain_answered) {
+                    *brain_answered = true;
+                }
+            }
+        }
+        na_buf_free(&body);
+    }
+    na_buf_free(&w);
+    if (choice < 0) {
+        // This picker has no stock unattended answer: falling through blocks the game forever.
+        // Deterministic tier: vote for ourselves when eligible, otherwise for the eligible
+        // candidate with the most votes (stable tie-break: lowest faction id).
+        int best_votes = -1;
+        for (int candidate = 1; candidate < MaxPlayerNum; candidate++) {
+            if (!is_alive(candidate) || !eligible(candidate)) {
+                continue;
+            }
+            const int votes = council_votes(candidate);
+            if (candidate == faction_id) {
+                choice = candidate;
+                break;
+            }
+            if (votes > best_votes) {
+                best_votes = votes;
+                choice = candidate;
+            }
+        }
+    }
+    if (choice >= 0 && brain_answered && *brain_answered) {
+        na_dialog_routed++;
+    } else if (choice < 0) {
+        na_dialog_route_refused++;
+    }
+    return choice;
+}
+
+int __thiscall na_dialog_exec(BasePop* This, int a2, int a3) {
+    const bool matched = na_pending_dialog && (BasePop*)na_pending_dialog == This;
+    const NaDialogEntry* entry = matched ? na_pending_dialog_entry : nullptr;
+    na_pending_dialog = nullptr;
+    na_pending_dialog_entry = nullptr;
+
+    if (matched && entry && conf.na.dialog_route && strcmp(entry->label, "GOVVOTE") == 0) {
+        bool brain_answered = false;
+        const int choice = na_route_council_vote(&brain_answered);
+        if (choice >= 0) {
+            // The same council window redraws the tally with an OK control after the picker
+            // returns.  That acknowledgement is not another decision; close it once drawn.
+            na_council_close_result_ticks = 4;
+            if (conf.na.dialog_observe) {
+                if (brain_answered) {
+                    na_observe_dialog_routed(na_pending_dialog_file,
+                                             na_pending_dialog_label, choice);
+                } else {
+                    na_observe_dialog_auto(na_pending_dialog_file,
+                                           na_pending_dialog_label, choice);
+                }
+            }
+            return choice;
+        }
+    }
+    if (matched && entry && conf.na.dialog_route && entry->kind == NA_DIALOG_DECISION) {
+        const int choice = na_route_dialog(entry, *CurrentBaseID);
+        if (choice >= 0) {
+            if (conf.na.dialog_observe) {
+                na_observe_dialog_routed(na_pending_dialog_file, na_pending_dialog_label, choice);
+            }
+            return choice;
+        }
+    }
+    if (matched && entry && conf.na.dialog_auto && na_headless()
+        && entry->kind == NA_DIALOG_NOTICE) {
+        na_dialog_auto_answered++;
+        if (strcmp(entry->label, "CALLSCOUNCIL") == 0) {
+            // The following council screen's VOTE button only opens the real decision picker;
+            // it is navigation, not an answer.  Let the caller finish drawing it, then activate
+            // its button from the game thread in na_command_tick.
+            na_council_open_picker_ticks = 4;
+        }
+        if (conf.na.dialog_observe) {
+            na_observe_dialog_auto(na_pending_dialog_file, na_pending_dialog_label, 0);
+        }
+        return 0;
+    }
+
+    /*
+    #COMM is a real three-way decision, not a notice.  In unattended play, accepting it opens
+    the faction-conversation UI and merely moves the wedge to that UI's next prompt.  The table
+    records Script.txt's explicit decline index, so take that bounded answer only for COMM and
+    only behind the same headless + dialog_auto gates as notice dismissal.  Unknown dialogs stay
+    fail-closed; interactive play and default-disabled builds still reach the engine unchanged.
+    */
+    if (matched && entry && conf.na.dialog_auto && na_headless()
+        && strcmp(entry->label, "COMM") == 0) {
+        na_dialog_auto_answered++;
+        if (conf.na.dialog_observe) {
+            na_observe_dialog_auto(na_pending_dialog_file, na_pending_dialog_label,
+                                   entry->button_decline);
+        }
+        return entry->button_decline;
+    }
+
+    if (matched && conf.na.dialog_observe) {
+        na_observe_dialog(na_pending_dialog_file, na_pending_dialog_label, -1);
+    }
+    const int choice = na_engine_dialog_exec(This, a2, a3);
+    return choice;
+}
+
 int __cdecl na_popp(const char* filename, const char* label, int a3, const char* pcx_filename,
                     fp_none fn) {
     /*
@@ -5402,27 +5609,124 @@ door, where direct engine callers and popp callers both arrive.
 int __thiscall na_popup_start(Popup* This, const char* filename, const char* label,
                               int a4, char* a5, int a6, GraphicWin* a7) {
     const NaDialogEntry* entry = na_dialog_lookup(filename, label);
-    if (conf.na.dialog_route) {
-        const int routed = na_route_dialog(entry, *CurrentBaseID);
-        if (routed >= 0) {
-            if (conf.na.dialog_observe) {
-                na_observe_dialog_routed(filename, label, routed);
-            }
-            return routed;
-        }
+    const int started = na_engine_popup_start(This, filename, label, a4, a5, a6, a7);
+    // Popup_start INITIALISES the dialog.  BasePop_exec_3, often called after the caller adds
+    // dynamic rows, is what returns the answer.  Returning a choice here leaves an uninitialised
+    // modal behind and produces the blank-OK window measured by na-d1g.
+    na_pending_dialog = This;
+    na_pending_dialog_entry = entry;
+    snprintf(na_pending_dialog_file, sizeof(na_pending_dialog_file), "%s",
+             filename ? filename : "");
+    snprintf(na_pending_dialog_label, sizeof(na_pending_dialog_label), "%s",
+             label ? label : "");
+    return started;
+}
+
+/*
+THE ELIMINATED DOORS (aegis-us0fb). NetMsg_pop takes a label and has 183 call sites in this
+fork, so both variants were instrumented while investigating Script.txt/#COMM.  A controlled
+runtime probe then installed both hooks and counted zero across the whole reproducer while
+Popup_start/BasePop_exec_3 carried COMM.  These hooks stay as observation-only coverage and as
+durable proof not to repeat that search; they are not part of the COMM fix.
+
+Prologue read out of terranx.exe and VERIFIED the same way the two above were: the extractor
+was controlled by re-reading Popup_start's and popp's declared bytes from the same binary and
+requiring an exact match before this one was trusted. 9 bytes, whole instructions,
+`push ebp; mov ebp,esp; mov eax,fs:[0]` — byte-identical in shape to popp's.
+*/
+static const uint8_t NaNetMsgPopPrologue[] = {0x55, 0x8B, 0xEC, 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00};
+static const int32_t NaNetMsgPopEntryAddr = 0x47A890;
+/*
+The SIBLING. engine.h declares TWO: the __thiscall NetMsg_pop above and this __cdecl
+NetMsg_pop_2(label, filename). Hooking only the first was not enough — MEASURED: the comm modal
+sat on screen with `netmsg=0` while that hook was installed and counting, which REFUTED it as
+the door rather than leaving the question open. Two variants exist, so both get watched.
+Prologue read with the same control-verified extractor: push ebp; mov ebp,esp;
+mov eax,[ebp+0Ch]; mov ecx,[ebp+8] — 9 bytes, whole instructions.
+*/
+static const uint8_t NaNetMsgPop2Prologue[] = {0x55, 0x8B, 0xEC, 0x8B, 0x45, 0x0C, 0x8B, 0x4D, 0x08};
+static const int32_t NaNetMsgPop2EntryAddr = 0x50B9E0;
+
+/*
+OBSERVE ONLY, deliberately. This records that a dialog came through NetMsg_pop and does not
+auto-answer or route it. The hooks make these doors measurable without changing their behavior.
+
+Calls through FIRST, like na_popup_start, because the engine's return is the truth about what
+was raised.
+*/
+int __thiscall na_netmsg_pop(NetMessage* This, const char* label, int delay, int a4,
+                             const char* filename) {
+    const int r = na_engine_netmsg_pop(This, label, delay, a4, filename);
+    na_dialog_netmsg++;
+    na_observe_dialog(filename, label, -1);
+    return r;
+}
+
+int __cdecl na_netmsg_pop_2(const char* label, const char* filename) {
+    const int r = na_engine_netmsg_pop_2(label, filename);
+    na_dialog_netmsg2++;
+    na_observe_dialog(filename, label, -1);
+    return r;
+}
+
+static bool na_install_netmsg_pop_2_trampoline() {
+    uint8_t* entry = (uint8_t*)NaNetMsgPop2EntryAddr;
+    DWORD oldattr = 0, tmp = 0;
+    if (!VirtualProtect(entry, sizeof(NaNetMsgPop2Prologue), PAGE_EXECUTE_READWRITE, &oldattr)) {
+        return false;
     }
-    if (conf.na.dialog_auto && na_headless() && entry && entry->kind == NA_DIALOG_NOTICE) {
-        na_dialog_auto_answered++;
-        if (conf.na.dialog_observe) {
-            na_observe_dialog_auto(filename, label, 0);
-        }
-        return 0;
+    if (memcmp(entry, NaNetMsgPop2Prologue, sizeof(NaNetMsgPop2Prologue)) != 0) {
+        VirtualProtect(entry, sizeof(NaNetMsgPop2Prologue), oldattr, &tmp);
+        return false;
     }
-    const int chosen = na_engine_popup_start(This, filename, label, a4, a5, a6, a7);
-    if (conf.na.dialog_observe) {
-        na_observe_dialog(filename, label, chosen);
+    uint8_t* tramp = (uint8_t*)VirtualAlloc(
+        nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!tramp) {
+        VirtualProtect(entry, sizeof(NaNetMsgPop2Prologue), oldattr, &tmp);
+        return false;
     }
-    return chosen;
+    memcpy(tramp, NaNetMsgPop2Prologue, sizeof(NaNetMsgPop2Prologue));
+    tramp[sizeof(NaNetMsgPop2Prologue)] = 0xE9;
+    *(int32_t*)(tramp + sizeof(NaNetMsgPop2Prologue) + 1) =
+        (NaNetMsgPop2EntryAddr + (int32_t)sizeof(NaNetMsgPop2Prologue))
+        - (int32_t)(tramp + sizeof(NaNetMsgPop2Prologue)) - 5;
+    entry[0] = 0xE9;
+    *(int32_t*)(entry + 1) = (int32_t)na_netmsg_pop_2 - NaNetMsgPop2EntryAddr - 5;
+    memset(entry + 5, 0x90, sizeof(NaNetMsgPop2Prologue) - 5);
+    VirtualProtect(entry, sizeof(NaNetMsgPop2Prologue), oldattr, &tmp);
+    FlushInstructionCache(GetCurrentProcess(), entry, sizeof(NaNetMsgPop2Prologue));
+    na_engine_netmsg_pop_2 = (FNetMsg_pop_2)tramp;
+    return true;
+}
+
+static bool na_install_netmsg_pop_trampoline() {
+    uint8_t* entry = (uint8_t*)NaNetMsgPopEntryAddr;
+    DWORD oldattr = 0, tmp = 0;
+    if (!VirtualProtect(entry, sizeof(NaNetMsgPopPrologue), PAGE_EXECUTE_READWRITE, &oldattr)) {
+        return false;
+    }
+    if (memcmp(entry, NaNetMsgPopPrologue, sizeof(NaNetMsgPopPrologue)) != 0) {
+        VirtualProtect(entry, sizeof(NaNetMsgPopPrologue), oldattr, &tmp);
+        return false;
+    }
+    uint8_t* tramp = (uint8_t*)VirtualAlloc(
+        nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!tramp) {
+        VirtualProtect(entry, sizeof(NaNetMsgPopPrologue), oldattr, &tmp);
+        return false;
+    }
+    memcpy(tramp, NaNetMsgPopPrologue, sizeof(NaNetMsgPopPrologue));
+    tramp[sizeof(NaNetMsgPopPrologue)] = 0xE9;
+    *(int32_t*)(tramp + sizeof(NaNetMsgPopPrologue) + 1) =
+        (NaNetMsgPopEntryAddr + (int32_t)sizeof(NaNetMsgPopPrologue))
+        - (int32_t)(tramp + sizeof(NaNetMsgPopPrologue)) - 5;
+    entry[0] = 0xE9;
+    *(int32_t*)(entry + 1) = (int32_t)na_netmsg_pop - NaNetMsgPopEntryAddr - 5;
+    memset(entry + 5, 0x90, sizeof(NaNetMsgPopPrologue) - 5);
+    VirtualProtect(entry, sizeof(NaNetMsgPopPrologue), oldattr, &tmp);
+    FlushInstructionCache(GetCurrentProcess(), entry, sizeof(NaNetMsgPopPrologue));
+    na_engine_netmsg_pop = (FNetMsg_pop)tramp;
+    return true;
 }
 
 /*
@@ -5457,6 +5761,8 @@ static const uint8_t NaPopupStartPrologue[] = {
     0x55, 0x8B, 0xEC, 0x51, 0xA1, 0x0C, 0x1B, 0x69, 0x00
 };
 static const int32_t NaPopupStartEntryAddr = 0x406380;
+static const uint8_t NaDialogExecPrologue[] = {0x64, 0xA1, 0x00, 0x00, 0x00, 0x00, 0x6A, 0xFF};
+static const int32_t NaDialogExecEntryAddr = 0x602600;
 
 //: Which door the dialog hook actually sits behind. Reported by `dialog-stats`, because
 //: "installed" was ambiguous exactly where it mattered: the pointer swap reaches only the
@@ -6004,11 +6310,48 @@ static bool na_install_popup_start_trampoline() {
     return true;
 }
 
+static bool na_install_dialog_exec_trampoline() {
+    uint8_t* entry = (uint8_t*)NaDialogExecEntryAddr;
+    DWORD oldattr = 0, tmp = 0;
+    if (!VirtualProtect(entry, sizeof(NaDialogExecPrologue), PAGE_EXECUTE_READWRITE, &oldattr)) {
+        return false;
+    }
+    if (memcmp(entry, NaDialogExecPrologue, sizeof(NaDialogExecPrologue)) != 0) {
+        VirtualProtect(entry, sizeof(NaDialogExecPrologue), oldattr, &tmp);
+        return false;
+    }
+    uint8_t* tramp = (uint8_t*)VirtualAlloc(
+        nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!tramp) {
+        VirtualProtect(entry, sizeof(NaDialogExecPrologue), oldattr, &tmp);
+        return false;
+    }
+    memcpy(tramp, NaDialogExecPrologue, sizeof(NaDialogExecPrologue));
+    tramp[sizeof(NaDialogExecPrologue)] = 0xE9;
+    *(int32_t*)(tramp + sizeof(NaDialogExecPrologue) + 1) =
+        (NaDialogExecEntryAddr + (int32_t)sizeof(NaDialogExecPrologue))
+        - (int32_t)(tramp + sizeof(NaDialogExecPrologue)) - 5;
+    entry[0] = 0xE9;
+    *(int32_t*)(entry + 1) = (int32_t)na_dialog_exec - NaDialogExecEntryAddr - 5;
+    memset(entry + 5, 0x90, sizeof(NaDialogExecPrologue) - 5);
+    VirtualProtect(entry, sizeof(NaDialogExecPrologue), oldattr, &tmp);
+    FlushInstructionCache(GetCurrentProcess(), entry, sizeof(NaDialogExecPrologue));
+    na_engine_dialog_exec = (FBasePop_exec_3)tramp;
+    return true;
+}
+
 void na_install_dialog_hook() {
     if (na_engine_popp) {
         return;
     }
-    if (conf.na.dialog_entry_hook && na_install_popup_start_trampoline()) {
+    // Independent of which popp door wins below: NetMsg_pop is a DIFFERENT subsystem, so it is
+    // not a fallback for the others and the others are not a fallback for it.
+    if (conf.na.dialog_netmsg_hook && !na_engine_netmsg_pop) {
+        na_install_netmsg_pop_trampoline();
+        na_install_netmsg_pop_2_trampoline();
+    }
+    if (conf.na.dialog_entry_hook && na_install_popup_start_trampoline()
+        && na_install_dialog_exec_trampoline()) {
         /*
         The `popp` POINTER IS DELIBERATELY LEFT ALONE. Every caller now arrives through the
         entry point, so swapping the pointer as well would send the fork's own calls through
@@ -6038,6 +6381,19 @@ static bool na_is_order_line(const char* line) {
 void na_command_tick(void* hwnd_raw) {
     HWND hwnd = (HWND)hwnd_raw;
     static DWORD last_poll = 0;
+
+    if (na_council_open_picker_ticks > 0 && --na_council_open_picker_ticks == 0) {
+        // CouncilWindow::button_action(4) is the VOTE control measured at 0x424870's switch:
+        // argument 4 enters the GOVVOTE branch at 0x424951.  It runs here because command_tick
+        // is on the game thread; calling a window method from the harness thread would race UI
+        // state and recreate the very modal hang this removes.
+        typedef void (__thiscall *FCouncilVoteButton)(CouncilWindow*, int);
+        ((FCouncilVoteButton)0x424870)(CouncilWin, 4);
+    }
+    if (na_council_close_result_ticks > 0 && --na_council_close_result_ticks == 0) {
+        typedef void (__thiscall *FCouncilResultButton)(CouncilWindow*, int);
+        ((FCouncilResultButton)0x424870)(CouncilWin, 5);
+    }
 
     /*
     The window procedure runs on every message — thousands per second while the game
@@ -7158,11 +7514,23 @@ void na_command_tick(void* hwnd_raw) {
             }
             if (veh_id >= 0) {
                 const bool ocean = is_ocean(mapsq(Vehs[veh_id].x, Vehs[veh_id].y));
+                // Construct a one-step border beside our own base. Using the first naturally
+                // owned tile can put an early-game unit on another continent, proving only
+                // that an impossible route stays impossible rather than that eviction works.
                 for (int i = 0; i < *BaseCount && tx < 0; i++) {
-                    if (Bases[i].faction_id == owner
-                        && is_ocean(mapsq(Bases[i].x, Bases[i].y)) == ocean) {
-                        tx = Bases[i].x;
-                        ty = Bases[i].y;
+                    if (Bases[i].faction_id != faction) {
+                        continue;
+                    }
+                    for (int j = 0; j < 8; j++) {
+                        const int x = wrap(Bases[i].x + NearbyTiles[j][0]);
+                        const int y = Bases[i].y + NearbyTiles[j][1];
+                        MAP* sq = mapsq(x, y);
+                        if (sq && !sq->is_base() && is_ocean(sq) == ocean) {
+                            sq->owner = owner;
+                            tx = x;
+                            ty = y;
+                            break;
+                        }
                     }
                 }
                 for (int y = 0; y < *MapAreaY && tx < 0; y++) {
@@ -7521,10 +7889,12 @@ void na_command_tick(void* hwnd_raw) {
     if (strcmp(line, "dialog-stats") == 0) {
         char detail[128];
         snprintf(detail, sizeof(detail),
-                 "seen=%d unmapped=%d auto=%d routed=%d route_refused=%d table=%d installed=%d "
+                 "seen=%d unmapped=%d auto=%d routed=%d route_refused=%d netmsg=%d/%d netmsg_hooked=%d/%d table=%d installed=%d "
                  "reach=%s",
                  na_dialog_seen, na_dialog_unmapped, na_dialog_auto_answered,
                  na_dialog_routed, na_dialog_route_refused,
+                 na_dialog_netmsg, na_dialog_netmsg2,
+                 na_engine_netmsg_pop ? 1 : 0, na_engine_netmsg_pop_2 ? 1 : 0,
                  NaDialogTableSize, na_engine_popp ? 1 : 0, na_popp_reach);
         na_cmd_result("dialog-stats", detail, true);
         return;
@@ -7948,6 +8318,7 @@ static const NaOption NaOptions[] = {
     {"na_dialog_auto", &NaConfig::dialog_auto},
     {"na_dialog_route", &NaConfig::dialog_route},
     {"na_dialog_entry_hook", &NaConfig::dialog_entry_hook},
+    {"na_dialog_netmsg_hook", &NaConfig::dialog_netmsg_hook},
     {"na_staple_observe", &NaConfig::staple_observe},
     {"na_endgame_observe", &NaConfig::endgame_observe},
     {"na_satellite_observe", &NaConfig::satellite_observe},

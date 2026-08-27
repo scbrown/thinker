@@ -137,6 +137,10 @@ struct NaConfig {
     routing did nothing rather than appearing to work.
     */
     int dialog_route = 0;
+    //: Hook NetMsg_pop's entry point — the THIRD dialog door (aegis-us0fb). The popp/Popup_start
+    //: hooks cannot see it: a comm modal wedged a run while every one of their counters read
+    //: zero. Observation only today; it records which door a dialog used and answers nothing.
+    int dialog_netmsg_hook = 0;
     /*
     Neural Amplifier: hook popp's ENTRY POINT instead of the `popp` pointer (invariant 7,
     na-4lr). 0 keeps the pointer swap, which is what every build has shipped.
