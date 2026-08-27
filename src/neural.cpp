@@ -23,12 +23,21 @@ is JSONL and because a partial write costs one line rather than the file.
 static const char* NA_LOG_PATH = "na-observations.jsonl";
 
 static FILE* na_log = NULL;
+static FILE* na_outcome_log = NULL;
+static const char* na_run_id();
 
 static FILE* na_log_open() {
     if (!na_log) {
         na_log = fopen(NA_LOG_PATH, "at");
     }
     return na_log;
+}
+
+static FILE* na_outcome_log_open() {
+    if (!na_outcome_log) {
+        na_outcome_log = fopen("na-outcomes.jsonl", "at");
+    }
+    return na_outcome_log;
 }
 
 /*
@@ -44,6 +53,10 @@ static void na_log_close() {
     if (na_log) {
         fclose(na_log);
         na_log = NULL;
+    }
+    if (na_outcome_log) {
+        fclose(na_outcome_log);
+        na_outcome_log = NULL;
     }
 }
 
@@ -90,6 +103,100 @@ static void na_log_record(NaBuf* w) {
     // Flushed per line: a crash mid-turn is exactly when we most want the log,
     // and terranx.exe crashing is not hypothetical.
     fflush(fp);
+}
+
+static void na_outcome_record(NaBuf* w) {
+    if (w->failed || !w->data) {
+        return;
+    }
+    FILE* fp = na_outcome_log_open();
+    if (!fp) {
+        return;
+    }
+    fputs(w->data, fp);
+    fputc('\n', fp);
+    fflush(fp);
+}
+
+static void na_outcome_head(NaBuf* w, const char* event, int faction_id) {
+    na_buf_printf(w, "{\"schema\":\"na.outcome.v1\",\"event\":\"%s\"", event);
+    na_buf_printf(w, ",\"turn\":%d,\"faction_id\":%d", *CurrentTurn, faction_id);
+    na_buf_printf(w, ",\"run_id\":\"%s\"", na_run_id());
+}
+
+void na_outcome_unit_action(int faction_id, int unit_id, bool naval, bool moved) {
+    NaBuf w;
+    na_buf_init(&w);
+    na_outcome_head(&w, "unit.action", faction_id);
+    na_buf_printf(&w, ",\"unit_class\":%d,\"unit_id\":%d}", unit_id, unit_id);
+    na_outcome_record(&w);
+    na_buf_free(&w);
+    if (naval) {
+        if (moved) {
+            na_buf_init(&w);
+            na_outcome_head(&w, "naval.movement", faction_id);
+            na_buf_printf(&w, ",\"unit_class\":%d,\"unit_id\":%d}", unit_id, unit_id);
+            na_outcome_record(&w);
+            na_buf_free(&w);
+        }
+        na_buf_init(&w);
+        na_outcome_head(&w, "naval.action", faction_id);
+        na_buf_printf(&w, ",\"unit_class\":%d,\"unit_id\":%d}", unit_id, unit_id);
+        na_outcome_record(&w);
+        na_buf_free(&w);
+    }
+}
+
+void na_outcome_unit_produced(int faction_id, int unit_id) {
+    if (unit_id < 0 || unit_id >= MaxProtoNum || Units[unit_id].triad() != TRIAD_SEA) {
+        return;
+    }
+    NaBuf w;
+    na_buf_init(&w);
+    na_outcome_head(&w, "naval.production", faction_id);
+    na_buf_printf(&w, ",\"unit_class\":%d,\"unit_id\":%d}", unit_id, unit_id);
+    na_outcome_record(&w);
+    na_buf_free(&w);
+}
+
+void na_outcome_unit_killed(int victim_faction_id, int victim_unit_id,
+    int attacker_faction_id) {
+    NaBuf w;
+    na_buf_init(&w);
+    na_outcome_head(&w, "unit.lost", victim_faction_id);
+    na_buf_printf(&w, ",\"unit_class\":%d}", victim_unit_id);
+    na_outcome_record(&w);
+    na_buf_free(&w);
+    if (attacker_faction_id >= 0 && attacker_faction_id < MaxPlayerNum
+    && attacker_faction_id != victim_faction_id) {
+        na_buf_init(&w);
+        na_outcome_head(&w, "unit.killed", attacker_faction_id);
+        na_buf_printf(&w, ",\"unit_class\":%d}", victim_unit_id);
+        na_outcome_record(&w);
+        na_buf_free(&w);
+
+        na_buf_init(&w);
+        na_outcome_head(&w, "combat.resolved", attacker_faction_id);
+        na_buf_puts(&w, ",\"posture\":\"attack\",\"outcome\":\"won\"}");
+        na_outcome_record(&w);
+        na_buf_free(&w);
+
+        na_buf_init(&w);
+        na_outcome_head(&w, "combat.resolved", victim_faction_id);
+        na_buf_puts(&w, ",\"posture\":\"defense\",\"outcome\":\"lost\"}");
+        na_outcome_record(&w);
+        na_buf_free(&w);
+    }
+}
+
+void na_outcome_base_lifecycle(int faction_id, int base_id, bool sea, bool founded) {
+    NaBuf w;
+    na_buf_init(&w);
+    na_outcome_head(&w, founded ? "base.founded" : "base.lost", faction_id);
+    na_buf_printf(&w, ",\"base_id\":%d,\"terrain\":\"%s\"}",
+        base_id, sea ? "sea" : "land");
+    na_outcome_record(&w);
+    na_buf_free(&w);
 }
 
 /*

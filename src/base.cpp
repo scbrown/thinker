@@ -115,6 +115,7 @@ int __cdecl mod_base_init(int faction_id, int x, int y) {
     base->visibility = (1 << faction_id) | sq->visibility;
     base->name[0] = '\0';
     mod_name_base(faction_id, &base->name[0], 1, is_ocean(sq));
+    na_outcome_base_lifecycle(faction_id, base_id, is_ocean(sq), true);
     base->state_flags = 0;
     base->event_flags = 0;
     base->governor_flags = plr->base_governor_adv;
@@ -231,6 +232,8 @@ void __cdecl mod_base_kill(int base_id) {
     int base_x = base->x;
     int base_y = base->y;
     int faction_id = base->faction_id;
+    const bool sea = is_ocean(mapsq(base_x, base_y));
+    na_outcome_base_lifecycle(faction_id, base_id, sea, false);
     Faction* plr = &Factions[faction_id];
     debug("base_kill %2d %2d %d %d\n", base->x, base->y, base_id, faction_id);
 
@@ -3595,6 +3598,7 @@ int __cdecl mod_base_production() {
             if (veh_id < 0) {
                 return 0;
             }
+            na_outcome_unit_produced(faction_id, item_id);
             VEH* veh = &Vehs[veh_id];
             if (Units[item_id].plan == PLAN_COLONY) {
                 if ((base->state_flags & BSTATE_UNK_2000000)
@@ -5227,6 +5231,5 @@ int __cdecl fac_maint(int facility_id, int faction_id) {
     }
     return facility.maint;
 }
-
 
 

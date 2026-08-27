@@ -1,5 +1,6 @@
 
 #include "veh.h"
+#include "neural.h"
 
 
 int __cdecl can_arty(int unit_id, bool allow_sea_arty) {
@@ -456,7 +457,14 @@ int __cdecl veh_drop(int veh_id, int x, int y) {
 Relocate an existing unit to the specified tile.
 */
 void __cdecl veh_put(int veh_id, int x, int y) {
+    const int old_x = Vehs[veh_id].x;
+    const int old_y = Vehs[veh_id].y;
+    const bool moved = old_x != x || old_y != y;
     veh_drop(veh_lift(veh_id), x, y);
+    if (moved) {
+        na_outcome_unit_action(Vehs[veh_id].faction_id, Vehs[veh_id].unit_id,
+            Vehs[veh_id].triad() == TRIAD_SEA, true);
+    }
 }
 
 /*
@@ -773,6 +781,7 @@ int battle_kill(int veh_id, int* num_killed, int* num_relics, int* num_credits, 
     VEH* veh = &Vehs[veh_id];
     const int faction_id = veh->faction_id;
     const int unit_id = veh->unit_id;
+    na_outcome_unit_killed(faction_id, unit_id, faction_id_atk);
     ++Factions[faction_id].units_lost[unit_id];
 
     if (veh_id_atk >= 0
@@ -3194,6 +3203,8 @@ int set_move_to(int veh_id, int x, int y) {
     veh->waypoint_y[0] = y;
     veh->order = ORDER_MOVE_TO;
     veh->status_icon = 'G';
+    na_outcome_unit_action(veh->faction_id, veh->unit_id,
+        veh->triad() == TRIAD_SEA, true);
     if (veh->is_former()) {
         veh->movement_turns = 0;
     }
@@ -3224,6 +3235,8 @@ int set_road_to(int veh_id, int x, int y) {
 
 int set_action(int veh_id, int act, char icon) {
     VEH* veh = &Vehs[veh_id];
+    na_outcome_unit_action(veh->faction_id, veh->unit_id,
+        veh->triad() == TRIAD_SEA, false);
     if (act == ORDER_THERMAL_BOREHOLE) {
         mapnodes.insert({veh->x, veh->y, NODE_BOREHOLE});
     } else if (act == ORDER_TERRAFORM_UP) {
@@ -3268,6 +3281,4 @@ int set_board_to(int veh_id, int trans_veh_id) {
     debug("set_board_to %2d %2d %s -> %s\n", veh->x, veh->y, veh->name(), v2->name());
     return VEH_SYNC;
 }
-
-
 

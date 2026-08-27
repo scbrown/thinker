@@ -746,3 +746,16 @@ PostMessage is thread-safe and just queues, so this never touches engine state. 
 that does must stay on na_command_tick's path.
 */
 void na_input_start(void* hwnd);
+
+/*
+Engine-authoritative strategic outcome stream (aegis-rybaj / na-jk8).
+
+These are notifications, never decisions: callers report facts only after the engine has acted.
+They write na-outcomes.jsonl using the stable na.outcome.v1 contract consumed by
+NeuralAmplifier's zero-token domain evaluator.
+*/
+void na_outcome_unit_action(int faction_id, int unit_id, bool naval, bool moved);
+void na_outcome_unit_produced(int faction_id, int unit_id);
+void na_outcome_unit_killed(int victim_faction_id, int victim_unit_id,
+    int attacker_faction_id);
+void na_outcome_base_lifecycle(int faction_id, int base_id, bool sea, bool founded);
