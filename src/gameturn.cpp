@@ -4,16 +4,14 @@
 
 fp_1int sub_51E530 = (fp_1int)0x51E530;
 
-int* const dword_7AE778 = (int*)0x7AE778;
-int* const dword_7D392C = (int*)0x7D392C;
 int* const dword_78D7F8 = (int*)0x78D7F8;
 int* const dword_78D870 = (int*)0x78D870;
-int* const dword_7AD34C = (int*)0x7AD34C;
-int* const dword_93A940 = (int*)0x93A940;
-int* const dword_93A9B8 = (int*)0x93A9B8;
-int* const dword_93A9D8 = (int*)0x93A9D8;
 char* const unk_93AA04 = (char*)0x93AA04;
 char* const unk_93AA08 = (char*)0x93AA08;
+// multiplayer related
+int* const dword_93F670 = (int*)0x93F670;
+int* const dword_93F674 = (int*)0x93F674;
+
 
 static bool territory_avail(int faction_id, int x, int y) {
     int owner = whose_territory(faction_id, x, y, 0, 0);
@@ -66,7 +64,7 @@ void __cdecl control_turn() {
                 parse_says(3, get_noun(current_id), -1, -1);
                 parse_num(0, *CurrentMissionYear);
                 MapWin->cOwner = current_id;
-                if (dword_7AE778[*dword_7D392C] == 10) {
+                if (InfcList[*InfcUsed] == 10) {
                     BattleWin_stop_timer(BattleWin);
                     SubInterface_release_iface_mode(BattleWin);
                 }
@@ -74,57 +72,57 @@ void __cdecl control_turn() {
                 BaseWin_exit(BaseWin);
                 AlphaMenu_hide(&MapWin->oMainMenu);
                 MultiWin_hide(MultiWin);
-                Win_hide((GraphicWin*)((char*)&MessageWin->listBox + *(int32_t*)(MessageWin->listBox.field_0 + 4)));
+                Win_hide((GraphicWin*)((char*)&MessageWin->listBox + *((DWORD*)MessageWin->listBox.vtable + 1)));
                 Win_hide(&MainInfc->stringBox);
                 WorldWin_hide_all(WorldWin);
-                memcpy(&rc, &MainInfc->field_CDC, sizeof(RECT));
+                memcpy(&rc, &MainInfc->rcLeftPanel, sizeof(RECT));
                 Buffer_box_sprite(&MainInfc->oCanvas, &rc, dword_78D870);
                 rc.left += 3;
                 rc.bottom -= 3;
                 rc.top += 3;
                 rc.right -= 3;
                 Buffer_box_sprite(&MainInfc->oCanvas, &rc, dword_78D7F8);
-                memcpy(&rc, &MainInfc->field_CCC, sizeof(RECT));
+                memcpy(&rc, &MainInfc->rcLeftPanelTop, sizeof(RECT));
                 Buffer_box_sprite(&MainInfc->oCanvas, &rc, dword_78D870);
                 rc.left += 3;
                 rc.bottom -= 3;
                 rc.top += 3;
                 rc.right -= 3;
                 Buffer_box_sprite(&MainInfc->oCanvas, &rc, dword_78D7F8);
-                memcpy(&rc, &MainInfc->field_CEC, sizeof(RECT));
+                memcpy(&rc, &MainInfc->rcBaseArea, sizeof(RECT));
                 Buffer_box_sprite(&MainInfc->oCanvas, &rc, dword_78D870);
                 rc.left += 3;
                 rc.bottom -= 3;
                 rc.top += 3;
                 rc.right -= 3;
                 Buffer_box_sprite(&MainInfc->oCanvas, &rc, dword_78D7F8);
-                memcpy(&rc, &MainInfc->field_CFC, sizeof(RECT));
+                memcpy(&rc, &MainInfc->rcTurnIcon, sizeof(RECT));
                 Buffer_box_sprite(&MainInfc->oCanvas, &rc, dword_78D870);
                 rc.left += 3;
                 rc.bottom -= 3;
                 rc.top += 3;
                 rc.right -= 3;
                 Buffer_box_sprite(&MainInfc->oCanvas, &rc, dword_78D7F8);
-                memcpy(&rc, &MainInfc->field_D1C, sizeof(RECT));
+                memcpy(&rc, &MainInfc->rcCenterInner, sizeof(RECT));
                 Buffer_box_sprite(&MainInfc->oCanvas, &rc, dword_78D870);
                 rc.left += 3;
                 rc.right -= 3;
                 rc.top += 3;
                 rc.bottom -= 3;
                 Buffer_box_sprite(&MainInfc->oCanvas, &rc, dword_78D7F8);
-                memcpy(&rc, &MainInfc->field_D0C, sizeof(RECT));
+                memcpy(&rc, &MainInfc->rcSensor, sizeof(RECT));
                 Buffer_box_sprite(&MainInfc->oCanvas, &rc, dword_78D7F8);
                 GraphicWin_update_3(MainInfc, 0);
-                *dword_7AD34C = 1;
-                GraphicWin_fill(&MapWin->oWinBuffed, 0);
-                Win_show(&MapWin->oWinBuffed, 0);
+                InfoWin->skip_timer_proc = 1;
+                GraphicWin_fill(&MapWin->oWinBuf, 0);
+                Win_show(&MapWin->oWinBuf, 0);
                 do_all_draws();
                 StringBox_clear(&MainInfc->stringBox);
                 while (1) {
                     bool popup_skip = false;
                     while (1) {
                         const char* label = Factions[current_id].unk_102 ? "SWITCHING2" : "SWITCHING";
-                        Popup_start(&cur_popup, PopupScriptFile, label, -1, 0, 0x800004, 0);
+                        Popup_start(&cur_popup, PopupScriptFile, label, -1, 0, POPUP_UNK_800000|POPUP_TEXTBOX, 0);
                         if (BasePop_exec_3(&cur_popup, 0, 0) < 0) {
                             popup_skip = true;
                             break;
@@ -188,8 +186,8 @@ void __cdecl control_turn() {
                         }
                     }
                 }
-                *dword_7AD34C = 0;
-                Win_hide(&MapWin->oWinBuffed);
+                InfoWin->skip_timer_proc = 0;
+                Win_hide(&MapWin->oWinBuf);
                 StatusWin_on_redraw(StatusWin);
                 GameDrawState[0] |= 4u;
                 WorldWin_show_all(WorldWin);
@@ -204,8 +202,8 @@ void __cdecl control_turn() {
                 if (sub_51E530(MapWin->cOwner)) {
                     ButtonGroup_set(&MainInfc->buttonGroup[0], 1000, 1);
                 }
-                if (MainInfc->buttonGroup[0].field_84 == 1000) {
-                    Win_show((GraphicWin*)((char*)&MessageWin->listBox + *(int32_t*)(MessageWin->listBox.field_0 + 4)), 0);
+                if (MainInfc->buttonGroup[0].select_button_id == 1000) {
+                    Win_show((GraphicWin*)((char*)&MessageWin->listBox + *((DWORD*)MessageWin->listBox.vtable + 1)), 0);
                 }
                 Console_update_data(MapWin, 0);
                 start_timers();
@@ -323,14 +321,624 @@ void __cdecl control_turn() {
     }
 }
 
-void __cdecl clear_council_notify(int faction_id) {
-    CouncilProposal[faction_id] = 0;
-    CouncilVoteState[faction_id] = 0;
+int __cdecl net_upkeep_phase(int value) {
+    NetState->dword_93E8FC |= (1 << MapWin->cOwner);
+    MultiWin_draw(MultiWin, 0);
+    log_say_2("Upkeep Phase", value, *CurrentTurn, NetState->dword_93E8F0);
+    message_data(0x2303, 0, value, *CurrentTurn, 0, 0);
+    DWORD prev = GetTickCount(); // replace timeGetTime
+    bool skip = value >= 4;
+    while ((NetState->dword_93E8F0 & FactionStatus[0]) != FactionStatus[0]) {
+        if (*ControlTurnA) {
+            return 1;
+        }
+        if (GetTickCount() - prev > 1000) {
+            if (!skip) {
+                parse_num(0, NetState->dword_93E8F0);
+                parse_num(1, FactionStatus[0]);
+                snprintf(StrBuffer, StrBufLen, "UPKEEP%d", value);
+                NetMsg_pop(NetMsg, StrBuffer, 0, 1, 0);
+                skip = 1;
+            }
+            prev = GetTickCount();
+        }
+        NetDaemon_net_tasks(NetState);
+    }
+    if (*ControlTurnA) {
+        return 1;
+    }
+    if (NetState->dword_93E8C0) {
+        log_say_2("Server sending upkeep message", value, 0, 0);
+        message_data(0x4303, 0, value, *CurrentTurn, 0, 0);
+        NetState->dword_93E8F0 = 0;
+        if (FactionStatus[0]) {
+            do {
+                NetDaemon_receive(NetState);
+            } while ((NetState->dword_93E8F0 & FactionStatus[0]) != FactionStatus[0]);
+        }
+    } else {
+        log_say_2("Client falling out of upkeep loop", value, 0, 0);
+    }
+    NetMsg_close(NetMsg);
+    NetState->dword_93E8FC = 0;
+    NetState->dword_93E8F0 = 0;
+    return *ControlTurnA;
 }
 
-void __cdecl clear_council_notify_2() {
-    memset(CouncilProposal, 0, 0x20u);
-    memset(CouncilVoteState, 0, 0x20u);
+void __cdecl net_upkeep() {
+    *DiploWinCommlink = 0;
+    GraphicWin_close(DiploWin);
+    *dword_93A968 = 0;
+    *NetUpkeepCount = 0;
+    *NetUpkeepState = 1;
+    NetState->dword_93E8F4 = 0;
+    *dword_93F674 = 0;
+    *dword_93F670 = 0;
+    for (int i = 0; i < *BaseCount; i++) {
+        Bases[i].state_flags &= ~(BSTATE_NET_LOCKED|BSTATE_UNK_10);
+        if (Bases[i].faction_id == MapWin->cOwner) {
+            synch_radius(i);
+        }
+    }
+    for (int i = 0; i < *VehCount; i++) {
+        veh_promote(i);
+    }
+    if (net_upkeep_phase(*NetUpkeepCount)) {
+        return;
+    }
+    ++(*NetUpkeepCount);
+    for (int i = 0; i < MaxPlayerNum; i++) {
+        int fc_id = (*CurrentTurn + i) % 8;
+        if (is_alive(fc_id)) {
+            faction_upkeep(fc_id);
+        }
+    }
+    if (net_upkeep_phase(*NetUpkeepCount)) {
+        return;
+    }
+    ++(*NetUpkeepCount);
+    message_data(0x2305, 0, NetState->dword_93E964, 0, 0, 0);
+    if (!NetState->dword_93E8F4) {
+        log_say_2("Skipping upkeep synch", *NetUpkeepCount, 0, 0);
+    } else {
+        for (int i = 0; i < *BaseCount; i++) {
+            if (Bases[i].faction_id == MapWin->cOwner && Bases[i].state_flags & (BSTATE_NET_LOCKED|BSTATE_UNK_10)) {
+                synch_base(i);
+                while (NetDaemon_receive(NetState));
+                do_all_tasks();
+            }
+        }
+        for (int i = 0; i < MaxPlayerNum; i++) {
+            if (i == MapWin->cOwner) {
+                synch_leader(i);
+            }
+        }
+        if (!NetState->dword_93E8F4) {
+            log_say_2("Skipping upkeep synch", *NetUpkeepCount, 0, 0);
+        } else {
+            while (NetDaemon_receive(NetState));
+            do_all_tasks();
+            if (net_upkeep_phase(*NetUpkeepCount)) {
+                return;
+            }
+        }
+    }
+    int synch_flag = 0;
+    *NetUpkeepState = 2;
+    ++(*NetUpkeepCount);
+    for (int fc_id = 1; fc_id < MaxPlayerNum; fc_id++) {
+        Faction* plr = &Factions[fc_id];
+        if (is_alive(fc_id)) {
+            while (plr->earned_techs_saved) {
+                log_say("Upkeep Advance", MFactions[fc_id].name_leader, fc_id, plr->earned_techs_saved, 0);
+                --plr->earned_techs_saved;
+                tech_advance(fc_id);
+                if (is_human(fc_id)) {
+                    synch_flag |= (fc_id == MapWin->cOwner) + 1;
+                }
+            }
+            if (plr->tech_accumulated) {
+                if (plr->tech_research_id < 0) {
+                    log_say_2("Set Research", fc_id, 0, 0);
+                    plr->tech_research_id = tech_selection(fc_id);
+                    if (is_human(fc_id)) {
+                        synch_flag |= (fc_id == MapWin->cOwner) + 1;
+                    }
+                }
+            }
+            if (plr->player_flags & PFLAG_MULTI_TECH_ACHIEVED) {
+                consider_designs(fc_id);
+            }
+            plr->player_flags &= ~PFLAG_MULTI_TECH_ACHIEVED;
+        }
+    }
+    if (synch_flag) {
+        if (net_upkeep_phase(*NetUpkeepCount)) {
+            return;
+        }
+    } else {
+        log_say_2("Skipping upkeep synch", *NetUpkeepCount, 0, 0);
+    }
+    *NetUpkeepState = 0;
+    ++(*NetUpkeepCount);
+    if (synch_flag & 2 && *GameRules & RULES_BLIND_RESEARCH) {
+        Console_set_ai(MapWin, MapWin->cOwner);
+    }
+    NetMsg_pop(NetMsg, "UPKEEP4", 0, 1, 0);
+    synch_flag = 0;
+    *dword_90EA3C = 0;
+    for (int uid = MaxProtoFactionNum; uid < MaxProtoNum; uid++) {
+        int fc_id = uid / MaxProtoFactionNum;
+        UNIT* unit = &Units[uid];
+        if (unit->unit_flags & UNIT_ACTIVE && unit->unit_flags & UNIT_UNK_100) {
+            if (!(unit->obsolete_factions & (1 << fc_id))) {
+                synch_flag = 1;
+                unit->unit_flags &= ~UNIT_UNK_100;
+                if (fc_id == MapWin->cOwner) {
+                    if (*GameMorePreferences & MPREF_BSC_AUTO_PRUNE_OBS_VEH) {
+                        upgrade_prototypes(MapWin->cOwner, uid);
+                    }
+                }
+            }
+        }
+    }
+    if (*CouncilNetA <= 0 && !synch_flag) {
+        log_say_2("Skipping upkeep synch", *NetUpkeepCount, 0, 0);
+    } else {
+        if (*CouncilNetA > 0) {
+            if (NetState->dword_93E8C0) {
+                message_data(0x2600, 0, *CouncilNetA, *CouncilNetB, *CouncilNetC, 0);
+                *ControlWaitLoop = 1;
+                do {
+                    if (*ControlTurnA) {
+                        break;
+                    }
+                    wait_loop();
+                } while (*ControlWaitLoop);
+            }
+            *CouncilNetA = -1;
+            *CouncilNetB = -1;
+            *CouncilNetC = -1;
+        }
+        if (net_upkeep_phase(*NetUpkeepCount)) {
+            return;
+        }
+    }
+    ++(*NetUpkeepCount);
+    NetMsg_pop(NetMsg, "UPKEEP5", 0, 1, 0);
+    for (int fc_id = 0; fc_id < MaxPlayerNum; fc_id++) {
+        if (is_alive(fc_id) && !is_human(fc_id)) {
+            log_say_2("Enemy turn ", fc_id, 0, 0);
+            mod_enemy_turn(fc_id);
+        }
+    }
+    if (net_upkeep_phase(*NetUpkeepCount)) {
+        return;
+    }
+    ++(*NetUpkeepCount);
+    NetMsg_pop(NetMsg, "UPKEEP6", 0, 1, 0);
+    DeleteList->cur_type_id = 0;
+    for (int i = 0; i < 24; i++) {
+        DeletionList_clear(DeleteList, i);
+    }
+    do_checksums(4);
+    if (*GamePreferences & PREF_BSC_AUTOSAVE_EACH_TURN) {
+        if (*MultiDebugActive) {
+            // replace debug savegame location
+            snprintf(StrBuffer, StrBufLen, "saves\\multi\\AC_%d_%d",
+                game_year(*CurrentTurn), MapWin->cOwner);
+            log_say("Writing save file", StrBuffer, 0, 0, 0);
+            mod_save_daemon(StrBuffer);
+        } else {
+            auto_save();
+        }
+    }
+    message_big_data(0x2307, 0, MasterChecksum, 21);
+    if (net_upkeep_phase(*NetUpkeepCount)) {
+        return;
+    }
+    NetState->dword_93E8D8 = -1;
+    ++(*NetUpkeepCount);
+    synch_flag = 0;
+    int msg_type[21] = {};
+    for (int fc_id = 1; fc_id < MaxPlayerNum; fc_id++) {
+        if (!is_alive(fc_id) || !is_human(fc_id) || fc_id == MapWin->cOwner) {
+            continue;
+        }
+        GameChecksum* mst = MasterChecksum;
+        GameChecksum* chk = &RemoteChecksum[fc_id];
+        for (int n = 0; n < 21; n++) {
+            if (mst->values[n] != chk->values[n]) {
+                if (!synch_flag) {
+                    NetMsg_pop(NetMsg, "UPKEEP7", 0, 1, 0);
+                }
+                synch_flag = 1;
+                if (!msg_type[n]) {
+                    msg_type[n] = 1;
+                    if (NetState->dword_93E8C0) {
+                        switch (n) {
+                        case 0:
+                            log_say_2("Failed GAME checksum - resynch", fc_id, mst->game, chk->game);
+                            NetDaemon_synch(NetState, 0, 0, 0, 0, 0, 1u, 0x2101);
+                            while (NetDaemon_receive(NetState));
+                            NetDaemon_synch(NetState, 36, 0, 0, 0, 0, 1u, 0x2101);
+                            while (NetDaemon_receive(NetState));
+                            break;
+                        case 1:
+                            log_say_2("Failed LEADERS checksum - resynch", fc_id, mst->leaders, chk->leaders);
+                            for (int i = 0; i < 8; i++) {
+                                NetDaemon_synch(NetState, 6, i, 0, 0, 0, 1u, 0x2101);
+                                while (NetDaemon_receive(NetState));
+                                NetDaemon_synch(NetState, 7, i, 0, 0, 0, 1u, 0x2101);
+                                while (NetDaemon_receive(NetState));
+                                NetDaemon_synch(NetState, 15, i * MaxProtoFactionNum, 64, 0, 0, 1u, 0x2101);
+                                while (NetDaemon_receive(NetState));
+                            }
+                            break;
+                        case 2:
+                            log_say_2("Failed MAP checksum - resynch", fc_id, mst->map_all, chk->map_all);
+                            NetDaemon_synch(NetState, 4098, 0, 0, 0, 0, 1u, 0x2101);
+                            while (NetDaemon_receive(NetState));
+                            NetDaemon_synch(NetState, 5, 0, 0, 0, 0, 1u, 0x2101);
+                            while (NetDaemon_receive(NetState));
+                            break;
+                        case 3:
+                            log_say_2("Failed VEHICLES checksum - resynch", fc_id, mst->vehs, chk->vehs);
+                            NetDaemon_synch(NetState, 37, 0, 0, 0, 0, 1u, 0x2101);
+                            while (NetDaemon_receive(NetState));
+                            NetDaemon_synch(NetState, 18, 0, 0, 0, 0, 1u, 0x2101);
+                            while (NetDaemon_receive(NetState));
+                            break;
+                        case 4:
+                            log_say_2("Failed BASES checksum - resynch", fc_id, mst->bases, chk->bases);
+                            NetDaemon_synch(NetState, 38, 0, 0, 0, 0, 1u, 0x2101);
+                            while (NetDaemon_receive(NetState));
+                            NetDaemon_synch(NetState, 20, 0, 0, 0, 0, 1u, 0x2101);
+                            while (NetDaemon_receive(NetState));
+                            break;
+                        default:
+                            log_say_2("Failed MAP section chcksum - resynch", fc_id, mst->values[n], chk->values[n]);
+                            NetDaemon_synch(NetState, 48, n - 5, 0, 0, 0, 1u, 0x2101);
+                            while (NetDaemon_receive(NetState));
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    NetMsg_close(NetMsg);
+    *dword_93F674 = 0;
+    *dword_93F670 = 0;
+    if (synch_flag) {
+        net_upkeep_phase(*NetUpkeepCount);
+    } else {
+        log_say_2("Skipping upkeep phase", *NetUpkeepCount, 0, 0);
+    }
+}
+
+void __cdecl mash_planes() {
+    for (int veh_id = *VehCount - 1; veh_id >= 0; --veh_id) {
+        VEH* veh = &Vehs[veh_id];
+        UNIT* unit = &Units[veh->unit_id];
+        if (unit->triad() != TRIAD_AIR || unit->range() == 0
+        || veh_speed(veh_id, 0) - veh->moves_spent <= 0) {
+            continue;
+        }
+        MAP* sq = mapsq(veh->x, veh->y);
+        if (!sq || sq->base_who() >= 0) {
+            continue;
+        }
+        if ((sq->items & BIT_AIRBASE) || stack_check(veh_id, 6, ABL_CARRIER, -1, -1)) {
+            continue;
+        }
+        bool visible = false;
+        if (veh->faction_id == MapWin->cOwner || veh->is_visible(MapWin->cOwner)) {
+            Console_focus(MapWin, veh->x, veh->y, veh->faction_id);
+            visible = true;
+        }
+        veh->state |= VSTATE_HAS_MOVED;
+        if (visible) {
+            boom_veh(veh->x, veh->y, 0x80, veh_id);
+        }
+        // Fix: adjust incorrect upper bounds checking
+        if (unit->range() != 1 || unit->chassis_id != CHS_COPTER) {
+            veh->damage_taken = veh->max_hitpoints();
+        } else {
+            veh->damage_taken += 3 * veh->reactor_type();
+        }
+        if (veh->cur_hitpoints() > 0) {
+            veh->movement_turns = 0;
+            draw_tile(veh->x, veh->y, 2);
+        } else {
+            kill(veh_id);
+        }
+    }
+}
+
+void __cdecl net_not_my_turn() {
+    MapWin->field_23BE4 = 0;
+    MapWin->field_23BE8 = 1;
+    Console_set_view(MapWin, 0);
+    MultiWin_draw(MultiWin, 0);
+    NetState->dword_93E8EC |= 1 << (MapWin->cOwner);
+    while (!*ControlTurnA) {
+        if (*dword_93A950 || *CurrentFaction == MapWin->cOwner) {
+            break;
+        }
+        MapWin->field_23BE4 = 1;
+        NetDaemon_net_tasks(NetState);
+        if (NetState->dword_93E8C0 && (*CurrentFaction <= 0
+        || !is_human(*CurrentFaction) || !is_alive(*CurrentFaction))) {
+            next_player_turn();
+        }
+    }
+    MapWin->field_23BE4 = 0;
+    MapWin->field_23BE8 = 0;
+}
+
+void __cdecl net_end_of_turn() {
+    int show_msg = 0;
+    if (*GameMoreRules & MRULES_UNK_10) {
+        if (NetState->dword_93E8C0) {
+            message_data(0x4301, 0, 0, 0, 0, 0);
+        } else {
+            while (!*ControlTurnA) {
+                if (*dword_93A950) {
+                    break;
+                }
+                NetDaemon_net_tasks(NetState);
+            }
+        }
+    }
+    log_say_2("Entering 'end of turn' loop", NetState->dword_93E8EC, NetState->dword_93E8F8, *GameState & STATE_UNK_2);
+    FX_play(Sounds, 34);
+    *GameState |= STATE_UNK_2;
+    MapWin->field_23BE4 = 0;
+    Console_set_view(MapWin, 0);
+    if (!NetState->dword_93E8C0) {
+        NetState->dword_93E8EC |= 1 << (MapWin->cOwner);
+    }
+    NetState->dword_93E8F8 |= 1 << (MapWin->cOwner);
+    MultiWin_draw(MultiWin, 0);
+    if (!(*GameMoreRules & MRULES_UNK_10)) {
+        message_data(0x8301, 0, 0, 0, 0, 0);
+        DWORD start = GetTickCount(); // replace timeGetTime
+        while (((NetState->dword_93E8EC & FactionStatus[0]) != FactionStatus[0]
+        || FactionStatus[0] & NetState->dword_93E8E0
+        || (NetState->dword_93E8C0 && (Lock_any_locks(LockState) || NetState->dword_93E90C)))
+        && !*ControlTurnA && *GameState & STATE_UNK_2) {
+            if (!show_msg && GetTickCount() - start > 1000) {
+                NetMsg_pop(NetMsg, "FINISHINGTURN", 0, 0, 0);
+                show_msg = 1;
+            }
+            NetDaemon_net_tasks(NetState);
+        }
+        if (show_msg) {
+            NetMsg_close(NetMsg);
+        }
+        if ((*GameState & STATE_UNK_2) && !NetState->dword_93E8C0) {
+            log_say_2("Ready to proceed", NetState->dword_93E8EC, FactionStatus[0], 0);
+        }
+        if (NetState->dword_93E8C0) {
+            if (!(*GameState & STATE_UNK_2)) {
+                return;
+            }
+            if (!*ControlTurnA) {
+                while (NetState->field_768 > 1) {
+                    int num = 0;
+                    for (int i = 1; i < NetState->field_768; i++) {
+                        if (PlayerLock_active(&LockState->plr_lock[i])
+                        && !(LockState->plr_lock[i].flags[0] & 1)) {
+                            ++num;
+                        }
+                    }
+                    if (!num) {
+                        break;
+                    }
+                    wait_task();
+                    NetDaemon_receive(NetState);
+                }
+                message_data(0x4301, 0, 0, 0, 0, 0);
+                NetDaemon_receive(NetState);
+            }
+        }
+        if (!(*GameState & STATE_UNK_2)) {
+            return;
+        }
+    }
+    log_say_2("--- Proceeding to next turn ---", 0, 0, 0);
+    NetState->dword_93E8F0 = 0;
+    NetState->dword_93E8FC = 0;
+    *NetUpkeepCount = 0;
+    *ControlTurnC = 1;
+    if (Win_is_visible(BaseWin)) {
+        BaseWin_exit(BaseWin);
+    }
+    go_reset();
+    while (NetDaemon_receive(NetState));
+    mash_planes();
+    do_checksums(0);
+    if ((*GamePreferences & PREF_BSC_AUTOSAVE_EACH_TURN)
+    && *MultiDebugActive && FolderExists("saves\\multi")) {
+        // replace debug savegame location
+        char buf[StrBufLen];
+        snprintf(buf, StrBufLen, "saves\\multi\\MP_%d_%d",
+            game_year(*CurrentTurn), MapWin->cOwner);
+        mod_save_daemon(buf);
+    }
+    ++NetState->deletelist.cur_type_id;
+}
+
+void __cdecl net_control_turn() {
+    draw_map(1);
+    game_srand(*MapRandomSeed);
+    *ControlTurnC = 1;
+    *dword_93A940 = 1;
+    if (prefs_get_2("Multi Debug", 0, 0) && X_pop("MULTIDEBUG", 0)) {
+        // Remove separate debug logging code when all output is redirected to debug.txt
+        *MultiDebugActive = 1;
+        log_set_state(1);
+    } else {
+        *MultiDebugActive = 0;
+        log_set_state(0);
+    }
+    do_checksums(1);
+    if (*GameMoreRules & MRULES_UNK_10) {
+        *dword_93A954 = 1;
+    }
+    while (1) {
+        log_say_2("(Clearing turn semaphore)", NetState->dword_93E8EC, NetState->dword_93E8F8, 0);
+        debug("net_control_turn %d %d\n", *CurrentTurn, MapWin->cOwner);
+        NetState->dword_93E8EC = 0;
+        NetState->dword_93E8F8 = 0;
+        NetState->dword_93E8D4 = 1;
+        NetState->dword_93E968 = 0;
+        NetState->dword_93E964 = 0;
+        *dword_93A950 = 0;
+        MessageWin_clear(MessageWin);
+        if (!*ControlTurnMove) {
+            int faction_id = 1;
+            while (!(is_alive(faction_id) && is_human(faction_id))) {
+                ++faction_id;
+            }
+            *CurrentFaction = faction_id;
+            turn_upkeep();
+            net_upkeep();
+            *CurrentFaction = 0;
+            if (end_of_game(1)) {
+                NetDaemon_hang_up(NetState);
+                NetDaemon_cleanup(NetState);
+                *MultiplayerActive = 0;
+                return;
+            }
+        }
+        set_time_controls();
+        *dword_93A960 = GameTimeControl[1];
+        *GameState &= ~STATE_UNK_800;
+        *ControlTurnC = 0;
+        NetState->dword_93E8E4 = 0;
+        if (*GameMoreRules & MRULES_UNK_10) {
+            if (*CurrentTurn == 1 || *ControlTurnMove) {
+                int px = -1;
+                int py = -1;
+                for (int base_id = 0; base_id < *BaseCount; base_id++) {
+                    if (Bases[base_id].faction_id == MapWin->cOwner) {
+                        px = Bases[base_id].x;
+                        py = Bases[base_id].y;
+                        break;
+                    }
+                }
+                for (int veh_id = 0; px < 0 && veh_id < *VehCount; veh_id++) {
+                    if (Vehs[veh_id].faction_id == MapWin->cOwner) {
+                        px = Vehs[veh_id].x;
+                        py = Vehs[veh_id].y;
+                        break;
+                    }
+                }
+                if (on_map(px, py)) {
+                    Console_set_view(MapWin, 0);
+                    MapWin_set_center(MapWin, px, py, 1);
+                    Console_set_cursor(MapWin, px, py);
+                }
+            }
+            if (NetState->dword_93E8C0) {
+                if (*ControlTurnMove) {
+                    message_data(0x4309, 0, *CurrentFaction, 0, 0, 0);
+                } else {
+                    next_player_turn();
+                }
+            }
+        }
+        *ControlTurnMove = 0;
+        bool cont_loop = true;
+        while (cont_loop) {
+            if (*ControlTurnA) {
+                *GameState |= STATE_UNK_2;
+            } else if (*GameMoreRules & MRULES_UNK_10 && *CurrentFaction != MapWin->cOwner) {
+                Console_set_view(MapWin, 0);
+                net_not_my_turn();
+            } else if (*GameMoreRules & MRULES_UNK_10 || !(*GameState & STATE_UNK_800)) {
+                if (*GameMoreRules & MRULES_UNK_10) {
+                    *dword_93A960 = GameTimeControl[1];
+                    *GameState &= ~STATE_UNK_800;
+                    *dword_93A954 = 0;
+                    NetState->dword_93E8EC &= ~(1 << (MapWin->cOwner));
+                }
+                Console_human_turn(MapWin);
+                if (*GameMoreRules & MRULES_UNK_10) {
+                    *dword_93A954 = 1;
+                    while (!*ControlTurnA) {
+                        if (!Lock_any_locks(LockState)) {
+                            break;
+                        }
+                        NetDaemon_net_tasks(NetState);
+                    }
+                    message_data(0x8301, 0, 0, 0, 0, 0);
+                    while (!*ControlTurnA) {
+                        if (*CurrentFaction != MapWin->cOwner) {
+                            break;
+                        }
+                        if (*dword_93A950) {
+                            break;
+                        }
+                        NetDaemon_net_tasks(NetState);
+                    }
+                    if (!*dword_93A950) {
+                        *GameState &= ~STATE_UNK_800;
+                    }
+                }
+            } else {
+                *GameState |= STATE_UNK_2;
+            }
+            if (*ControlTurnA) {
+                break;
+            }
+            if (*GameMoreRules & MRULES_UNK_10) {
+                cont_loop = (*dword_93A950 == 0);
+            } else {
+                net_end_of_turn();
+                if (*ControlTurnA) {
+                    break;
+                }
+                if (*GameMoreRules & MRULES_UNK_10) {
+                    cont_loop = (*dword_93A950 == 0);
+                } else {
+                    cont_loop = !(*GameState & STATE_UNK_2);
+                }
+            }
+        }
+        if (*GameMoreRules & MRULES_UNK_10) {
+            net_end_of_turn();
+        }
+        if (*ControlTurnA) {
+            break;
+        }
+    }
+}
+
+int __cdecl next_player_turn() {
+    if (!(*GameMoreRules & MRULES_UNK_10) || !NetState->dword_93E8C0) {
+        return 0;
+    }
+    for (int fc_id = *CurrentFaction + 1; fc_id < MaxPlayerNum; ++fc_id) {
+        if (is_alive(fc_id) && is_human(fc_id)) {
+            message_data(0x4309, 0, fc_id, 0, 0, 0);
+            return 0;
+        }
+    }
+    *dword_93A950 = 1;
+    return 1;
+}
+
+int __cdecl not_my_turn() {
+    if (!*MultiplayerActive) {
+        return 0;
+    }
+    if (*GameMoreRules & MRULES_UNK_10) {
+        return *CurrentFaction != MapWin->cOwner;
+    }
+    return 0;
 }
 
 void __cdecl random_events(int flag) {
@@ -372,6 +980,9 @@ void __cdecl random_events(int flag) {
                 }
             }
         }
+        // Fix 40. [BUG] Changing start date for Perihelion event to be 2160 from 2190. This is to
+        // be consistent with info about Planet and cycle from readme regarding 80 year cycles
+        // (20 years near, 60 years far).
         if (*GameState & STATE_PERIHELION_ACTIVE && !((game_year(*CurrentTurn) - 2180) % 80)) {
             *GameState &= ~STATE_PERIHELION_ACTIVE;
             POP2("PERIHELIONENDS", "stars_sm.pcx", -1);
@@ -608,6 +1219,8 @@ void __cdecl random_events(int flag) {
                             if (!shift_key_down() && !*MultiplayerActive) {
                                 clock_wait(100);
                             }
+                            // Fix 31. [BUG/MOD] Fixed NEWRESOURCE and PETERSOUT events to display
+                            // the correct corresponding image to match resource type.
                             POP2("PETERSOUT", resource_icon(value, ocean, 0), -1);
                         }
                     }
@@ -635,6 +1248,8 @@ void __cdecl random_events(int flag) {
                             }
                         }
                         parse_says(1, ResName[value - 1].name_plural, -1, -1);
+                        // Fix 31. [BUG/MOD] Fixed NEWRESOURCE and PETERSOUT events to display
+                        // the correct corresponding image to match resource type.
                         POP2("NEWRESOURCE", resource_icon(value, ocean, 1), -1);
                     }
                 }
@@ -1144,7 +1759,7 @@ void __cdecl alien_fauna() {
                             || (*BaseFindDist > 3 && whose_territory(player_id, tx, ty, 0, 0) != player_id)) {
                                 draw_tiles(tx, ty, 2);
                             } else {
-                                if (!MapWin_focus(MapWinPtr[0], tx, ty)) {
+                                if (!mod_MapWin_focus(MapWinPtr[0], tx, ty)) {
                                     draw_tiles(tx, ty, 2);
                                 }
                                 parse_says(0, Bases[base_id].name, -1, -1);
@@ -1268,7 +1883,7 @@ void __cdecl alien_fauna() {
                 if (psq && !is_ocean(psq)
                 && !psq->is_known(veh_owner_id)
                 && psq->anything_at() < 0
-                && !mod_zoc_any(px, py, 0)) {
+                && !zoc_any(px, py, 0)) {
                     int veh_id;
                     if (game_rand() % 5 || !*ExpansionEnabled || !conf.spawn_spore_launchers) {
                         veh_id = veh_init(BSC_MIND_WORMS, 0, px, py);
@@ -1357,7 +1972,7 @@ void __cdecl alien_fauna() {
             }
         }
         if (show_popup) {
-            if (!MapWin_focus(MapWinPtr[0], base->x, base->y)) {
+            if (!mod_MapWin_focus(MapWinPtr[0], base->x, base->y)) {
                 draw_tiles(base->x, base->y, 2);
             }
             parse_says(0, base->name, -1, -1);
@@ -1485,11 +2100,12 @@ void __cdecl turn_upkeep() {
         if (veh->triad() == TRIAD_AIR && veh->range() && veh_speed(veh_id, 0) - veh->moves_spent > 0) {
             MAP* sq = mapsq(veh->x, veh->y);
             if (sq && sq->base_who() < 0 && !(sq->items & BIT_AIRBASE)
-            && !mod_stack_check(veh_id, 6, ABL_CARRIER, -1, -1)) {
+            && !stack_check(veh_id, 6, ABL_CARRIER, -1, -1)) {
                 // Fix bug here that prevented the turn from advancing
                 // while any needlejet in flight has moves left.
                 if (veh->movement_turns < veh->range() - 1) {
                     ++veh->movement_turns;
+                    continue;
                 }
                 veh->state |= VSTATE_HAS_MOVED;
                 int dmg_val;
@@ -1819,6 +2435,9 @@ void __cdecl repair_phase(int faction_id) {
         }
         bool repair_abl = false;
         if (triad == TRIAD_LAND) {
+            // Fix 6. [BUG][SMAX] Transport unit's special ability "Repair Bay" is rendered useless
+            // due to an incorrect check that would only give the healing bonus to ground transports.
+            // Now, it will give bonus to all ground units except ground transports.
             if ((!veh_cargo(veh_id) && veh->order == ORDER_SENTRY_BOARD) || is_ocean(sq)) {
                 int iter_id = veh_top(veh_id);
                 while (iter_id >= 0) {

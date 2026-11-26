@@ -28,10 +28,8 @@ void __cdecl action_staple(int base_id) {
             popp(ScriptFile, "NERVESTAPLEDONE", 0, image, 0);
         } else {
             parse_says(0, base->name, -1, -1);
-            *PluralDefault = 0;
-            *GenderDefault = MFactions[base->faction_id].is_leader_female;
-            parse_says(1, MFactions[base->faction_id].title_leader, -1, -1);
-            parse_says(2, MFactions[base->faction_id].name_leader, -1, -1);
+            parse_says(1, get_title(base->faction_id), -1, -1);
+            parse_says(2, get_name(base->faction_id), -1, -1);
             NetMsg_pop(NetMsg, "NERVESTAPLETHEM", 5000, 0, 0);
         }
     }
@@ -42,28 +40,18 @@ void __cdecl action_staple(int base_id) {
 }
 
 void __cdecl action_sat_attack(int faction_id, int faction_id_tgt, int target_id, int base_id) {
-    int* const dword_7AE778 = (int*)0x7AE778;
-    int* const dword_7D392C = (int*)0x7D392C;
     const int player_id = *CurrentPlayerFaction;
     assert(target_id >= 0 && target_id <= 4);
     if (!(Factions[faction_id].diplo_status[faction_id_tgt] & DIPLO_PACT)) {
         double_cross(faction_id, faction_id_tgt, -1);
     }
     if (faction_id == player_id || faction_id_tgt == player_id) {
-        *PluralDefault = 0;
-        *GenderDefault = MFactions[faction_id].is_leader_female;
-        parse_says(0, MFactions[faction_id].title_leader, -1, -1);
-        parse_says(1, MFactions[faction_id].name_leader, -1, -1);
-        *PluralDefault = MFactions[faction_id].is_noun_plural;
-        *GenderDefault = MFactions[faction_id].noun_gender;
-        parse_says(2, MFactions[faction_id].noun_faction, -1, -1);
-        *PluralDefault = 0;
-        *GenderDefault = MFactions[faction_id_tgt].is_leader_female;
-        parse_says(3, MFactions[faction_id_tgt].title_leader, -1, -1);
-        parse_says(4, MFactions[faction_id_tgt].name_leader, -1, -1);
-        *PluralDefault = MFactions[faction_id_tgt].is_noun_plural;
-        *GenderDefault = MFactions[faction_id_tgt].noun_gender;
-        parse_says(5, MFactions[faction_id_tgt].noun_faction, -1, -1);
+        parse_says(0, get_title(faction_id), -1, -1);
+        parse_says(1, get_name(faction_id), -1, -1);
+        parse_says(2, get_noun(faction_id), -1, -1);
+        parse_says(3, get_title(faction_id_tgt), -1, -1);
+        parse_says(4, get_name(faction_id_tgt), -1, -1);
+        parse_says(5, get_noun(faction_id_tgt), -1, -1);
         if (target_id >= 0 && target_id < 4) {
             parse_says(6, Facility[FAC_SKY_HYDRO_LAB + target_id].name, -1, -1);
         } else {
@@ -93,7 +81,7 @@ void __cdecl action_sat_attack(int faction_id, int faction_id_tgt, int target_id
             popp(ScriptFile, "THEYKILLEDIT", 0, "satbat_sm.pcx", 0);
         }
     }
-    if (ReportIf->field_8 == 6 && dword_7AE778[*dword_7D392C] == 5) {
+    if (ReportIf->view_mode == 6 && InfcList[*InfcUsed] == 5) {
         ReportIf_on_redraw(ReportIf);
     }
 }
@@ -231,12 +219,9 @@ void __cdecl sat_attack(int faction_id, int faction_id_tgt, int target_id) {
             if (!gsp_count) {
                 return;
             }
-            int w, h;
-            Popup_start(&cur_popup, PopupScriptFile, "WHICHGSP", -1, 0, 64, 0);
-            if (!Buffer_get_pcx_dimensions("satbat_sm.pcx", &w, &h)
-            && !Sprite_init(&cur_popup.sprite, "satbat_sm.pcx", w, h)) {
-                cur_popup.field_2144 = &cur_popup.sprite;
-            }
+            int w = 0, h = 0;
+            Popup_start(&cur_popup, PopupScriptFile, "WHICHGSP", -1, 0, POPUP_BTN_CANCEL, 0);
+            Popup_init_icon(&cur_popup, "satbat_sm.pcx", &w, &h);
             for (int i = 0; i < *BaseCount; i++) {
                 BASE* base = &Bases[i];
                 if (base->faction_id == faction_id_tgt && has_fac_built(FAC_GEOSYNC_SURVEY_POD, i)) {
@@ -297,7 +282,7 @@ int __cdecl BaseWin_hurry_ask_number(const char* label, int value, fp_none fn) {
 Fix issue where hurry production flag will not be set after
 completely hurrying the current production "Spend $NUM0 energy credits."
 */
-void __thiscall BaseWin_hurry_unlock_base(AlphaNet* This, int base_id) {
+void __thiscall BaseWin_hurry_unlock_base(NetDaemon* This, int base_id) {
     if (base_id >= 0) {
         Bases[base_id].state_flags |= BSTATE_HURRY_PRODUCTION;
     }
@@ -305,23 +290,23 @@ void __thiscall BaseWin_hurry_unlock_base(AlphaNet* This, int base_id) {
 }
 
 void __thiscall BaseWin_draw_support(BaseWindow* This) {
-    RECT& rc = This->oRender.rResWindow;
+    RECT& rc = This->rcResWindow;
     Buffer_set_clip(&This->oCanvas, &rc);
     GraphicWin_fill_2(This, &rc, 0);
 
-    MapWin_init_2((Console*)&This->oRender, 2, 0);
-    This->oRender.iZoomFactor = base_zoom_factor;
-    This->oRender.iWhatToDrawFlags = MAPWIN_SUPPORT_VIEW|MAPWIN_DRAW_BONUS_RES|\
+    MapWin_init_2(&This->oRender, 2, 0);
+    This->oRender.ZoomFactor = base_zoom_factor;
+    This->oRender.DrawFlags = MAPWIN_SUPPORT_VIEW|MAPWIN_DRAW_BONUS_RES|\
         MAPWIN_DRAW_RIVERS|MAPWIN_DRAW_IMPROVEMENTS|MAPWIN_DRAW_TRANSLUCENT;
 
-    This->oRender.iTileX = (*CurrentBase)->x;
-    This->oRender.iTileY = (*CurrentBase)->y;
+    This->oRender.TileX = (*CurrentBase)->x;
+    This->oRender.TileY = (*CurrentBase)->y;
     GraphicWin_redraw(&This->oRender.oBufWin);
 
     Buffer_copy_4(&This->oRender.oBufWin.oCanvas, &This->oCanvas,
         0, 0, rc.left + 11, rc.top + 31, rc.right, rc.bottom);
     GraphicWin_soft_update_3(This, &rc);
-    Buffer_set_clip(&This->oCanvas, &This->oCanvas.stRect[0]);
+    Buffer_set_clip(&This->oCanvas, &This->oCanvas.clipRect);
 }
 
 void __thiscall BaseWin_draw_misc_eco_damage(Buffer* This, char* buf, int x, int y, int len) {
@@ -348,11 +333,11 @@ void __thiscall BaseWin_draw_misc_eco_damage(Buffer* This, char* buf, int x, int
 void __thiscall BaseWin_draw_farm_set_font(Buffer* This, Font* a2, Font* a3, Font* a4, Font* a5) {
     char buf[StrBufLen] = {};
     // Base resource window coordinates including button row
-    RECT* rc = &BaseWin->oRender.rResWindow;
-    int x1 = rc->left;
-    int y1 = rc->top;
-    int x2 = rc->right;
-    int y2 = rc->bottom;
+    RECT& rc = BaseWin->rcResWindow;
+    int x1 = rc.left;
+    int y1 = rc.top;
+    int x2 = rc.right;
+    int y2 = rc.bottom;
     int N = 0;
     int M = 0;
     int E = 0;
@@ -421,26 +406,28 @@ void __thiscall BaseWin_draw_energy_set_text_color(Buffer* This, int a2, int a3,
 }
 
 void __cdecl BaseWin_draw_psych_strcat(char* buffer, char* source) {
-    BASE* base = &Bases[*CurrentBaseID];
+    size_t prev = strnlen(buffer, StrBufLen);
+    size_t len = StrBufLen - prev;
     if (conf.render_base_info && *CurrentBaseID >= 0) {
+        BASE* base = &Bases[*CurrentBaseID];
         if (base->nerve_staple_turns_left > 0
         || has_fac_built(FAC_PUNISHMENT_SPHERE, *CurrentBaseID)) {
-            if (!strcmp(source, label_get(971))) { // Stapled Base
-                strncat(buffer, label_get(322), StrBufLen); // Unmodified
+            if (!strcmp(source, label_get(TL_StapledBase))) {
+                snprintf(buffer + prev, len, "%s", label_get(TL_Unmodified));
                 return;
             }
-            if (!strcmp(source, label_get(327))) { // Secret Projects
-                strncat(buffer, label_get(971), StrBufLen); // Stapled Base
+            if (!strcmp(source, label_get(TL_SecretProjects))) {
+                snprintf(buffer + prev, len, "%s", label_get(TL_StapledBase));
                 return;
             }
         }
         int turns = base->assimilation_turns_left;
-        if (turns > 0 && !strcmp(source, label_get(970))) { // Captured Base
-            snprintf(buffer, StrBufLen, label_captured_base, turns);
+        if (turns > 0 && !strcmp(source, label_get(TL_CapturedBase))) {
+            snprintf(buffer + prev, len, label_captured_base, turns);
             return;
         }
     }
-    strncat(buffer, source, StrBufLen);
+    snprintf(buffer + prev, len, "%s", source);
 }
 
 void __cdecl mod_base_draw(Buffer* buffer, int base_id, int x, int y, int zoom, int opts) {
@@ -469,7 +456,7 @@ void __cdecl mod_base_draw(Buffer* buffer, int base_id, int x, int y, int zoom, 
         }
         // Game engine uses this way to determine the population label width
         int w = Font_width(*MapLabelFont, (base->pop_size >= 10 ? "88" : "8")) + 5;
-        int h = (*MapLabelFont)->iHeight + 4;
+        int h = (*MapLabelFont)->height + 4;
 
         for (int i = 1; i <= width; i++) {
             RECT rr = {x-i, y-i, x+w+i, y+h+i};
@@ -510,7 +497,7 @@ void __cdecl popb_action_staple(int base_id) {
 }
 
 int __thiscall BaseWin_click_staple(BaseWindow* This) {
-    int base_id = This->oRender.base_id;
+    int base_id = This->cur_base_id;
     if (can_staple(base_id)) {
         return BaseWin_nerve_staple(This);
     }
@@ -519,7 +506,7 @@ int __thiscall BaseWin_click_staple(BaseWindow* This) {
 
 int __thiscall BaseWin_gov_options(BaseWindow* This, int flag) {
     int base_id = *CurrentBaseID;
-    if (base_id < 0 || base_id != This->oRender.base_id) {
+    if (base_id < 0 || base_id != This->cur_base_id) {
         assert(0);
         return 1;
     }
@@ -574,7 +561,7 @@ int __thiscall BaseWin_gov_options(BaseWindow* This, int flag) {
         }
         NetDaemon_unlock_base(NetState, base_id);
         GraphicWin_redraw(BaseWin);
-        GraphicWin_redraw(MainWin);
+        GraphicWin_redraw(MainInfc);
         return 0;
     } else {
         NetDaemon_unlock_base(NetState, base_id);

@@ -16,6 +16,7 @@ bool has_project(FacilityId item_id, int faction_id);
 int project_base(FacilityId item_id);
 int facility_count(FacilityId item_id, int faction_id);
 int prod_count(int item_id, int faction_id, int base_skip_id);
+int diplo_relation(int faction_id, int faction_id_2);
 
 bool is_human(int faction_id);
 bool is_alien(int faction_id);
@@ -64,6 +65,10 @@ int __cdecl get_mood(int friction);
 int __cdecl reputation(int faction_id, int faction_id_with);
 int __cdecl get_patience(int faction_id_with, int faction_id);
 int __cdecl energy_value(int loan_principal);
+void __cdecl say_special(char* dest, const char* text, int faction_id);
+void __cdecl say_fac_special(char* dest, const char* text, int faction_id);
+char* __cdecl get_phrase(int faction_id, int index);
+char* __cdecl get_noun_phrase(int faction_id, int index);
 char* __cdecl get_adjective(int faction_id);
 char* __cdecl get_noun(int faction_id);
 char* __cdecl get_name(int faction_id);
@@ -80,6 +85,7 @@ char* __cdecl get_pact_hood(int faction_id, int faction_id_2);
 char* __cdecl get_his_her(int faction_id, int tgl);
 char* __cdecl get_him_her(int faction_id, int tgl);
 char* __cdecl get_he_she(int faction_id, int tgl);
+void __cdecl compute_faction_modifiers(int faction_id);
 void __cdecl social_calc(CSocialCategory* category, CSocialEffect* effect,
 int faction_id, int UNUSED(toggle), int is_quick_calc);
 void __cdecl social_upkeep(int faction_id);

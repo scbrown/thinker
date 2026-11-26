@@ -8,6 +8,7 @@ const int RegionBounds = 63;
 
 const int MaxDiffNum = 6;
 const int MaxPlayerNum = 8;
+const int MaxFacRank = 7;
 const int MaxGoalsNum = 75;
 const int MaxSitesNum = 25;
 const int MaxBaseNum = 512;
@@ -71,6 +72,7 @@ const int UniversalTranslatorTechs = 2;
 const int StrBufLen = 256;
 const int LineBufLen = 128;
 const int MaxEnemyRange = 50;
+const int TextLabelNum = 1131;
 
 const int SP_Unbuilt = -1;
 const int SP_Destroyed = -2;
@@ -81,6 +83,9 @@ const int Fac_ID_Last = 64; // facilities that can be built on the base
 const int Fac_All_ID_Last = 69; // includes satellites and stockpile energy
 const int Tech_ID_First = 0;
 const int Tech_ID_Last = 88;
+const int Tech_ID_Commlink = 89;
+const int Tech_ID_Units = 97;
+const int Tech_ID_WorldMap = 9999;
 
 enum FacilityId {
     FAC_HEADQUARTERS = 1,
@@ -331,7 +336,7 @@ enum TechCategory {
     TCAT_POWER = 3,
 };
 
-enum GameState {
+enum GameStateFlag {
     STATE_GAME_DONE = 0x1,
     STATE_UNK_2 = 0x2,
     STATE_UNK_4 = 0x4,
@@ -366,7 +371,7 @@ enum GameState {
     STATE_SCN_VICT_CREDITS_COUNT_OBJ = 0x80000000,
 };
 
-enum GameRules {
+enum GameRulesFlag {
     RULES_DO_OR_DIE = 0x1,
     RULES_VICTORY_CONQUEST = 0x2,
     RULES_VICTORY_ECONOMIC = 0x4,
@@ -401,7 +406,7 @@ enum GameRules {
     RULES_SCN_NO_BUILDING_SP = 0x80000000,
 };
 
-enum GameMoreRules {
+enum GameMoreRulesFlag {
     MRULES_SCN_UNITY_PODS_NO_VEHICLES = 0x1,
     MRULES_SCN_UNITY_PODS_NO_TECH = 0x2,
     MRULES_NO_PLANETARY_COUNCIL = 0x4,
@@ -412,7 +417,7 @@ enum GameMoreRules {
     MRULES_UNK_80 = 0x80,
 };
 
-enum GameWarnings {
+enum GameWarningsFlag {
     WARN_STOP_NEW_FAC_BUILT = 0x1,
     WARN_STOP_NON_COMBAT_VEH_BUILT = 0x2,
     WARN_STOP_PROTOTYPE_COMPLETE = 0x4,
@@ -433,7 +438,7 @@ enum GameWarnings {
     WARN_STOP_RANDOM_EVENT = 0x20000,
 };
 
-enum GamePreferences {
+enum GamePreferencesFlag {
     PREF_BSC_PAUSE_END_TURN = 0x1,
     PREF_BSC_AUTOSAVE_EACH_TURN = 0x2,
     PREF_BSC_DONT_QUICK_MOVE_ENEMY_VEH = 0x4, // flag set when unchecked
@@ -470,7 +475,7 @@ enum GamePreferences {
     PREF_AUTO_WAKE_VEH_TRANS_REACH_LAND = 0x80000000,
 };
 
-enum GameMorePreferences {
+enum GameMorePreferencesFlag {
     MPREF_MAP_SHOW_FOG_WAR = 0x1,
     //
     MPREF_ADV_ZOOM_BASE_NO_RECENTER_MAP = 0x4,
@@ -662,6 +667,16 @@ enum DiploAgenda {
     AGENDA_UNK_8000 = 0x8000,
 };
 
+enum DiploStateFlag {
+    DST_UNK_1 = 0x1,
+    DST_UNK_2 = 0x2,
+    DST_UNK_4 = 0x4,
+    DST_UNK_8 = 0x8,
+    DST_UNK_10 = 0x10,
+    DST_UNK_20 = 0x20,
+    DST_UNK_40 = 0x40,
+};
+
 enum PlayerFlags {
     PFLAG_MULTI_TECH_ACHIEVED = 0x2, // tech_achieved during network multiplayer
     PFLAG_UNK_4 = 0x4, // study_artifact
@@ -671,6 +686,7 @@ enum PlayerFlags {
     PFLAG_UNK_100 = 0x100, // setup_player
     PFLAG_MAP_REVEALED = 0x200,
     PFLAG_GENETIC_PLAGUE_INTRO = 0x400, // +1 to defense against after 1st time faction experiences
+    PFLAG_UNK_800 = 0x800, // enemy_strategy
     PFLAG_UNK_1000 = 0x1000, // setup_player
     PFLAG_UNK_2000 = 0x2000, // turn_upkeep
     PFLAG_UNK_4000 = 0x4000,
@@ -788,6 +804,7 @@ enum MapLandmark {
     LM_NEXUS = 0x2000,
     LM_UNITY = 0x4000,
     LM_FOSSIL = 0x8000,
+    LM_UNK_200000 = 0x200000,
     LM_UNK_400000 = 0x400000, // set_dirty()
     LM_UNK_800000 = 0x800000,
     LM_DISABLE = 0x80000000, // most landmark effects skipped
@@ -831,6 +848,14 @@ enum ResType { // bonus_at
     RES_ENERGY = 3,
 };
 
+const int ManifoldHarmonicsBonus[][3] = {
+    {0,0,0}, // Planet < 0
+    {0,0,1}, // Planet = 0
+    {1,0,1}, // Planet = 1
+    {1,1,1}, // Planet = 2
+    {1,1,2}, // Planet > 2
+};
+
 enum AIGoal {
     AI_GOAL_UNUSED = -1,
     AI_GOAL_ATTACK = 0, // 'a', red
@@ -856,6 +881,24 @@ enum AIGoal {
     AI_GOAL_NAVAL_SCOUT = 204,
     AI_GOAL_NAVAL_PICK = 205,
     Thinker_Goal_ID_First = AI_GOAL_RAISE_LAND,
+};
+
+enum RegionFlag {
+    REGION_UNK_1 = 0x1,
+    REGION_UNK_2 = 0x2,
+    REGION_UNK_4 = 0x4,
+    REGION_UNK_8 = 0x8,
+    REGION_UNK_10 = 0x10,
+    REGION_UNK_20 = 0x20,
+    REGION_UNK_40 = 0x40,
+    REGION_UNK_80 = 0x80,
+    REGION_UNK_100 = 0x100,
+    REGION_UNK_200 = 0x200,
+    REGION_UNK_400 = 0x400,
+    REGION_UNK_800 = 0x800,
+    REGION_UNK_1000 = 0x1000,
+    REGION_UNK_2000 = 0x2000,
+    REGION_UNK_4000 = 0x4000,
 };
 
 enum SocialEffect {
@@ -914,6 +957,12 @@ enum CouncilProposal {
     PROP_REINSTATE_UN_CHARTER = 9,
 };
 
+enum CouncilVote {
+    COUNC_VOTE_YES = -1,
+    COUNC_VOTE_NO = -2,
+    COUNC_VOTE_ABSTAIN = -3,
+};
+
 enum VictoryType {
     VIC_NONE = 0,
     VIC_TRANSCEND_PLR = 1,
@@ -936,7 +985,7 @@ enum VictoryType {
     VIC_ALIEN_LOSS = 18,
 };
 
-enum MapwinState {
+enum MapWinState {
     MAPWIN_DRAW_TRANSLUCENT = 0x1, // render translucent sprites, farm/forest/kelp excl. fungus
     MAPWIN_UNK_2 = 0x2,
     MAPWIN_DRAW_SITES = 0x4, // debug overlay
@@ -952,6 +1001,7 @@ enum MapwinState {
     MAPWIN_UNK_4000 = 0x4000, // zeros in almost every tile
     MAPWIN_DRAW_BORDERS = 0x10000,
     MAPWIN_DRAW_CURSOR_COMPASS = 0x20000,
+    MAPWIN_UNK_40000 = 0x40000,
     MAPWIN_DRAW_DIPLO_STATE = 0x100000, // show faction treaty status matrix in window corner
     MAPWIN_SUPPORT_VIEW = 0x200000,
     MAPWIN_UNK_400000 = 0x400000, // MapWin_draw_base_dest
@@ -965,30 +1015,230 @@ enum MapwinState {
     MAPWIN_DRAW_SOLID_BORDERS = 0x80000000, // faction borders solid color terrain view
 };
 
+enum WinState {
+    WIN_ST_VISIBLE = 0x1,
+    WIN_ST_HAS_NONCLIENT = 0x2,
+    WIN_ST_INIT_DONE = 0x4,
+    WIN_ST_DISABLE_INPUT = 0x8,
+};
+
+enum WinFlag {
+    WIN_FL_BORDER = 0x1,
+    WIN_FL_UNK_2 = 0x2,
+    WIN_FL_HORZ_SCROLL = 0x4,
+    WIN_FL_VERT_SCROLL = 0x8,
+    WIN_FL_CAPTION = 0x10,
+    WIN_FL_PARENT_RELATIVE = 0x20,
+    WIN_FL_CUSTOM_SCROLL = 0x40,
+    WIN_FL_NO_FRAME = 0x80,
+    WIN_FL_IGNORE_BTN_DOWN = 0x200,
+    WIN_FL_BORDER_MARGIN = 0x400,
+    WIN_FL_CLIENT_RECT = 0x800,
+    WIN_FL_DIALOG_FOCUS = 0x1000,
+    WIN_FL_NO_ZORDER = 0x4000,
+    WIN_FL_PARENT_NONCLIENT = 0x8000,
+    WIN_FL_CAPTION_LEFT = 0x10000,
+    WIN_FL_CAPTION_RIGHT = 0x40000,
+    WIN_FL_TRANSPARENT = 0x80000,
+    WIN_FL_FOCUS_LIST = 0x100000,
+    WIN_FL_IGNORE_INPUT = 0x200000,
+    WIN_FL_NO_AUTO_CAPTION = 0x400000,
+    WIN_FL_KEEP_ASPECT = 0x800000,
+    WIN_FL_COLOR_KEY = 0x1000000,
+    WIN_FL_STAY_BACK = 0x2000000,
+    WIN_FL_NC_HIT_TEST = 0x4000000,
+    WIN_FL_NC_SPRITES = 0x10000000,
+    WIN_FL_NC_OVERLAY = 0x20000000,
+    WIN_FL_OVERLAY_CANVAS = 0x40000000,
+};
+
+enum PopupFlag {
+    POPUP_CHECKBOX = 0x1,
+    POPUP_LISTBOX = 0x2,
+    POPUP_TEXTBOX = 0x4,
+    POPUP_CHILD_WIN = 0x20,
+    POPUP_BTN_CANCEL = 0x40,
+    POPUP_PRE_INIT = 0x80,
+    POPUP_NO_CONTROL = 0x100,
+    POPUP_NO_HIDE = 0x200,
+    POPUP_SMALL_WIN = 0x400,
+    POPUP_SHOW_SELECTION = 0x800,
+    POPUP_CENTERED = 0x1000,
+    POPUP_MODELESS = 0x4000,
+    POPUP_UNK_8000 = 0x8000,
+    POPUP_NO_OK_BTN = 0x10000,
+    POPUP_TRANSPARENT = 0x20000,
+    POPUP_NO_HEAP = 0x40000,
+    POPUP_UNK_80000 = 0x80000,
+    POPUP_EXTERNAL = 0x100000,
+    POPUP_UNK_200000 = 0x200000,
+    POPUP_NO_SOUND = 0x400000,
+    POPUP_UNK_800000 = 0x800000,
+};
+
+enum DialogType {
+    DIALOG_TYPE_CHECKBOX = 1,
+    DIALOG_TYPE_LISTBOX = 2,
+    DIALOG_TYPE_EDITGROUP = 4,
+    DIALOG_TYPE_SPRITEBOX = 8,
+    DIALOG_TYPE_RADIOBUTTON = 16,
+};
+
+enum ReportViewMode {
+    REPORT_INTEL = 0,
+    REPORT_NONE = 1,
+    REPORT_LABS = 2,
+    REPORT_ENERGY = 3,
+    REPORT_OPS = 4,
+    REPORT_PROJECTS = 5,
+    REPORT_SAT = 6,
+    REPORT_SECURITY = 7,
+    REPORT_SCORE = 8,
+};
+
+enum DiploProposal {
+    DiploProposalMakeGift = 1,
+    DiploProposalMakePact = 2,
+    DiploProposalMakeTreaty = 3,
+    DiploProposalTechTrade = 4,
+    DiploProposalBuyTech = 5,
+    DiploProposalNeedEnergy = 6,
+    DiploProposalTradeMaps = 7,
+    DiploProposalJointAttack = 8,
+    DiploProposalBaseSwap = 9,
+    DiploProposalCloseDialog = 10,
+    DiploProposalRepayLoan = 11,
+    DiploProposalCouncilVote = 12,
+    DiploProposalTradeCommlink = 13,
+};
+
+enum DiploCounter {
+    DiploCounterFriendship = 1, // goodwill and friendship
+    DiploCounterNameAPrice = 2, // need but name your price
+    DiploCounterThreaten = 3, // threaten with attack or cancel pact
+    DiploCounterResearchData = 4, // valuable research data
+    DiploCounterEnergyPayment = 5, // modest sum of energy credits
+    DiploCounterLoanPayment = 6, // schedule of loan payments
+    DiploCounterMakeGift = 7, // grant all research data
+    DiploCounterGiveBase = 8, // turn over one of my bases
+};
+
 enum TextLabel {
     TL_MissionYear = 0,
+    TL_At = 8,
+    TL_NONE = 25,
+    TL_Near = 62,
+    TL_Nutrient = 92,
+    TL_Minerals = 93,
+    TL_Energy = 94,
+    TL_Bonus = 95,
     TL_OK = 101,
     TL_Cancel = 102,
     TL_Novice = 113,
     TL_Expert = 114,
+    TL_Scout = 146,
     TL_Name = 174,
     TL_Formal = 175,
     TL_Noun = 176,
     TL_Adjective = 177,
+    TL_OfThe = 180,
+    TL_Recon = 182,
+    TL_Prototype = 185,
+    TL_Him = 199,
+    TL_Her = 200,
+    TL_PactBrother = 201,
+    TL_PactSister = 202,
+    TL_PactBrothers = 203,
+    TL_PactSisters = 204,
+    TL_PactOfBrotherhood = 205,
+    TL_PactOfSisterhood = 206,
+    TL_His = 207,
+    TL_Her2 = 208,
+    TL_He = 209,
+    TL_She = 210,
+    TL_DataLinks = 215,
     TL_Alien = 244,
     TL_Aliens = 245,
+    TL_Production = 249,
+    TL_A = 276,
+    TL_An = 277,
+    TL_WorldMap = 306,
+    TL_NotAvailable = 310,
+    TL_Unmodified = 322,
+    TL_SecretProjects = 327,
+    TL_North = 403,
+    TL_East = 404,
+    TL_South = 405,
+    TL_West = 406,
     TL_Governor = 457,
     TL_Title = 483,
     TL_Description = 484,
     TL_Gender = 485,
+    TL_CommFrequency = 487,
+    TL_Submissive = 488,
     TL_Explore = 521,
     TL_Discover = 522,
     TL_Build = 523,
     TL_Conquer = 524,
+    TL_Artillery = 543,
+    TL_Battery = 544,
+    TL_Template = 609,
+    TL_Marines = 614,
+    TL_Invaders = 615,
+    TL_TechTypeLetter = 629,
+    TL_Untitled = 676,
     TL_Male = 738,
     TL_Female = 739,
+    TL_CapturedBase = 970,
+    TL_StapledBase = 971,
+    TL_PlanetBusterSilos = 1028,
     TL_CustomSize = 1089,
     TL_Horizontal = 1090,
     TL_Vertical = 1091,
+    // battle_compute related fields
+    TL_Rocky = 91,
+    TL_Forest = 291,
+    TL_Combat = 312,
+    TL_Trance = 329,
+    TL_Downhill = 330,
+    TL_Terrain = 331,
+    TL_Base = 332,
+    TL_InPort = 335,
+    TL_Jammer = 336,
+    TL_Tracking = 337,
+    TL_Fungus = 338,
+    TL_Hasty = 339,
+    TL_NerveGas = 341,
+    TL_GaianPsi = 342,
+    TL_DreamTwist = 343,
+    TL_NeuralAmp = 344,
+    TL_Perimeter = 354,
+    TL_Tachyon = 357,
+    TL_Bunker = 358,
+    TL_BaseVsBlink = 428,
+    TL_LandBasedGuns = 435,
+    TL_AirDrop = 437,
+    TL_OrbitalInsertion = 438,
+    TL_NonCombat = 439,
+    TL_Uphill = 441,
+    TL_GroundStrike = 448,
+    TL_AirToAir = 449,
+    TL_OpenGround = 525,
+    TL_Belief = 528,
+    TL_InfantryVsBase = 547,
+    TL_RoughVsMobile = 548,
+    TL_Altitude = 576,
+    TL_RoadAttack = 606,
+    TL_MobileInOpen = 611,
+    TL_MobileVsBase = 612,
+    TL_Sensor = 613,
+    TL_Planet = 625,
+    TL_AlienOffense = 1108,
+    TL_AlienDefense = 1109,
+    TL_ResonanceAttack = 1110,
+    TL_ResonanceDef = 1111,
+    TL_PulseDefense = 1112,
+    TL_Flechette = 1113,
+    TL_GSP = 1123,
 };
 

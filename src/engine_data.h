@@ -11,8 +11,7 @@ struct GamePrefs {
     int32_t GameInterludeState[2];
     int32_t dword_9A64AC;
     int32_t dword_9A64B0;
-    int32_t TutWinMapState;
-    int32_t dword_9A64B8;
+    int32_t TutWinMapState[2];
     int32_t dword_9A64BC;
     int32_t GameState;
     int32_t DiffLevel;
@@ -38,8 +37,8 @@ struct GamePrefs {
     int32_t ClimateValueB;
     int32_t ClimateValueC;
     int32_t ClimateFutureChange;
-    int32_t dword_9A67DC;
-    int32_t dword_9A67E0[8];
+    int32_t ScoreBonusPts;
+    int32_t ScorePopTotal[8];
     int32_t SunspotDuration;
     int32_t MountPlanetX;
     int32_t MountPlanetY;
@@ -65,8 +64,8 @@ struct LegacyGamePrefs {
     int32_t ClimateValueB;
     int32_t ClimateValueC;
     int32_t ClimateFutureChange;
-    int32_t dword_9A67DC;
-    uint8_t dword_9A67E0[32];
+    int32_t ScoreBonusPts;
+    int32_t ScorePopTotal[8];
     int32_t SunspotDuration;
     int32_t MountPlanetX;
     int32_t MountPlanetY;
@@ -102,8 +101,8 @@ struct LegacyFactionV10 {
     int32_t diplo_gifts[8];
     int32_t diplo_wrongs[8];
     int32_t diplo_betrayed[8];
-    int32_t diplo_unk_3[8];
-    int32_t diplo_unk_4[8];
+    int32_t diplo_combat_total[8];
+    int32_t diplo_combat_count[8];
     int32_t traded_maps;
     int32_t base_governor_adv;
     int32_t atrocities;

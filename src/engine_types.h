@@ -136,7 +136,7 @@ struct MAP {
     }
 };
 
-struct FileFindPath {
+struct Filefind {
     char cd_path[256];
     char alt_path[256];
     char last_path[256];
@@ -161,11 +161,6 @@ struct DefaultPref {
     int32_t pad; // unused
     int32_t map_type;
     int32_t top_menu;
-};
-
-struct Label {
-    char** labels;
-    uint32_t label_count;
 };
 
 struct Landmark {
@@ -203,19 +198,6 @@ struct Goal {
     int32_t x;
     int32_t y;
     int32_t base_id;
-};
-
-struct Monument {
-    int32_t data1[205];
-    int32_t data2[8][14];
-};
-
-struct ReplayEvent {
-    int8_t event;
-    int8_t faction_id;
-    int16_t turn;
-    int16_t x;
-    int16_t y;
 };
 
 struct MFaction {
@@ -291,14 +273,14 @@ struct MFaction {
 };
 
 struct Faction {
-    int32_t player_flags;
+    uint32_t player_flags;
     int32_t ranking; // 0 (lowest) to 7 (highest)
     int32_t diff_level; // 3 for AIs, equal to diff_level setting for humans
     int32_t base_name_offset; // Keep track which base names have been used
     int32_t base_sea_name_offset; // Keep track which sea base names have been used
     int32_t last_base_turn; // Turn for last built, captured or acquired (drone riot) base
-    int32_t diplo_status[8]; // Contains all formal treaties
-    int32_t diplo_agenda[8];
+    uint32_t diplo_status[8];
+    uint32_t diplo_agenda[8];
     int32_t diplo_friction[8];
     int32_t diplo_spoke[8]; // Turn for the last player-to-AI communication; -1 for never
     int32_t diplo_merc[8]; // Possibly higher values indicate willingness for deal-making
@@ -312,14 +294,14 @@ struct Faction {
     int32_t diplo_gifts[8]; // Gifts and bribes we have given to this faction
     int32_t diplo_wrongs[8]; // Number of times we double crossed this faction
     int32_t diplo_betrayed[8]; // Number of times double crossed by this faction
-    int32_t diplo_unk_3[8]; // ? combat related
-    int32_t diplo_unk_4[8]; // ? combat related
+    int32_t diplo_combat_total[8]; // score for all battles/base captures ever against this faction
+    int32_t diplo_combat_count[8]; // score in the current conflict, reset each time vendetta is declared
     int32_t traded_maps; // bitfield of other factions that have traded maps with faction
     int32_t base_governor_adv; // default advanced Governor settings
     int32_t atrocities; // count committed by faction
     int32_t major_atrocities; // count committed by faction
-    int32_t mind_control_total; // ? probe: mind control base (+4) / subvert unit (+1) total
-    int32_t diplo_mind_control[8]; // ? probe: mind control base (+4) / subvert unit (+1) per faction
+    int32_t mind_control_total; // probe: mind control base (+4) / subvert unit (+1) total
+    int32_t diplo_mind_control[8]; // probe: mind control base (+4) / subvert unit (+1) per faction
     int32_t diplo_stolen_techs[8]; // probe: successfully procured research data (tech/map) per faction
     int32_t energy_credits;
     int32_t hurry_cost_total; // Net MP: Total paid energy to hurry production (current turn)
@@ -491,7 +473,7 @@ struct Faction {
     int32_t unk_101;
     int32_t unk_102;
     int32_t unk_103;
-    int32_t player_flags_ext;
+    uint32_t player_flags_ext;
     int32_t unk_105;
     int32_t unk_106;
     int32_t unk_107;
@@ -916,6 +898,137 @@ struct CWorldbuilder {
     int32_t islands;
 };
 
+enum MonumentEventId {
+    MON_COLONY_FOUNDED = 0,
+    MON_TECH_DISCOVERED = 1,
+    MON_SECRETS_OF_TECH = 2,
+    MON_PROTOTYPE_BUILT = 3,
+    MON_FACILITY_BUILT = 4,
+    MON_SECRET_PROJECT = 5,
+    MON_ENEMY_DESTROYED = 6,
+    MON_CONQUER_BASE = 7,
+    MON_NAVAL_UNIT_BUILT = 8,
+    MON_AIR_UNIT_BUILT = 9,
+    MON_NATIVE_LIFE_BRED = 10,
+    MON_FIRST_IN_SPACE = 11,
+    MON_BUILT_PRESERVE = 12,
+    MON_WINNING_UNIFY = 13,
+    MON_WINNING_TRANS = 14,
+    MON_KILLED_FACTION_1 = 15,
+    MON_KILLED_FACTION_2 = 16,
+    MON_KILLED_FACTION_3 = 17,
+    MON_KILLED_FACTION_4 = 18,
+    MON_KILLED_FACTION_5 = 19,
+    MON_KILLED_FACTION_6 = 20,
+};
+
+struct MonumentEvent {
+    int32_t year;
+    int32_t param1;
+    int32_t param2;
+    int32_t faction_id;
+    int32_t achieved;
+    int32_t prev_count;
+    int32_t field_18;
+    int32_t field_1C;
+    int32_t field_20;
+    int32_t field_24;
+    int32_t field_28;
+    int32_t field_2C;
+    int32_t field_30;
+    int32_t field_34;
+};
+
+struct Monument {
+    MonumentEvent events[21];
+    int32_t latest_event_id;
+    int32_t field_49C;
+    int32_t field_4A0;
+    int32_t field_4A4;
+    int32_t field_4A8;
+    char base_name[24];
+    char facility_name[24];
+    char enemy_base_name[24];
+};
+
+enum ReplayEventId {
+    REPLAY_INIT = 0,
+    REPLAY_CAPTURE = 1,
+    REPLAY_KILL = 2,
+};
+
+struct ReplayEvent {
+    int8_t event;
+    int8_t faction_id;
+    int16_t turn;
+    int16_t x;
+    int16_t y;
+};
+
+struct GameChecksum {
+    union {
+        struct {
+            uint32_t game;
+            uint32_t leaders;
+            uint32_t map_all;
+            uint32_t vehs;
+            uint32_t bases;
+            uint32_t map_section[16];
+        };
+        uint32_t values[21];
+    };
+};
+
+struct FullChecksum : GameChecksum {
+    uint32_t rules;
+    uint32_t projects;
+    uint32_t tech;
+    uint32_t faction[7];
+    uint32_t map_climate;
+    uint32_t map_region;
+    uint32_t map_bit;
+    uint32_t map_contour;
+    uint32_t map_owner;
+    uint32_t map_bitwho;
+    uint32_t params;
+    uint32_t faction_vehs[8];
+    uint32_t bases2;
+};
+
+static_assert(sizeof(CAbility) == 0x1C, "");
+static_assert(sizeof(CArmor) == 0x10, "");
+static_assert(sizeof(CBonusName) == 0x18, "");
+static_assert(sizeof(CChassis) == 0x90, "");
+static_assert(sizeof(CCitizen) == 0x1C, "");
+static_assert(sizeof(CCombatMode) == 0x10, "");
+static_assert(sizeof(CEnergy) == 0x8, "");
+static_assert(sizeof(CFacility) == 0x30, "");
+static_assert(sizeof(CMight) == 0x8, "");
+static_assert(sizeof(CMorale) == 0x8, "");
+static_assert(sizeof(CNatural) == 0x8, "");
+static_assert(sizeof(COrder) == 0xC, "");
+static_assert(sizeof(CProposal) == 0xC, "");
+static_assert(sizeof(CReactor) == 0xC, "");
+static_assert(sizeof(CResourceInfo) == 0x90, "");
+static_assert(sizeof(CResourceName) == 0x8, "");
+static_assert(sizeof(CRules) == 0x134, "");
+static_assert(sizeof(CSocialCategory) == 0x10, "");
+static_assert(sizeof(CSocialEffect) == 0x2C, "");
+static_assert(sizeof(CSocialField) == 0xD4, "");
+static_assert(sizeof(CSocialParam) == 0x68, "");
+static_assert(sizeof(CTech) == 0x2C, "");
+static_assert(sizeof(CTerraform) == 0x20, "");
+static_assert(sizeof(CTimeControl) == 0x20, "");
+static_assert(sizeof(CWeapon) == 0x10, "");
+static_assert(sizeof(CWorldbuilder) == 0x7C, "");
+static_assert(sizeof(Path) == 0x2C, "");
+static_assert(sizeof(Goal) == 0x10, "");
+static_assert(sizeof(Landmark) == 0x28, "");
+static_assert(sizeof(Continent) == 0x1C, "");
+static_assert(sizeof(Monument) == 0x4F4, "");
+static_assert(sizeof(ReplayEvent) == 0x8, "");
+static_assert(sizeof(GameChecksum) == 0x54, "");
+static_assert(sizeof(FullChecksum) == 0xBC, "");
 
 #pragma GCC diagnostic pop
 #pragma pack(pop)

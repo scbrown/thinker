@@ -98,6 +98,10 @@ int option_handler(void* user, const char* section, const char* name, const char
         cf->expansion_autoscale = atoi(value);
     } else if (MATCH("limit_project_start")) {
         cf->limit_project_start = atoi(value);
+    } else if (MATCH("rival_friction_bias")) {
+        cf->rival_friction_bias = clamp(atoi(value), -20, 20);
+    } else if (MATCH("rival_defiance_bias")) {
+        cf->rival_defiance_bias = clamp(atoi(value), -20, 20);
     } else if (MATCH("max_satellites")) {
         cf->max_satellites = max(0, atoi(value));
     } else if (MATCH("new_world_builder")) {
@@ -144,6 +148,8 @@ int option_handler(void* user, const char* section, const char* name, const char
         opt_list_parse(cf->computer_satellites, buf, 3, 0, 1000);
     } else if (MATCH("faction_placement")) {
         cf->faction_placement = atoi(value);
+    } else if (MATCH("start_area_limit")) {
+        cf->start_area_limit = clamp(atoi(value), 1, 1000);
     } else if (MATCH("nutrient_bonus")) {
         cf->nutrient_bonus = atoi(value);
     } else if (MATCH("rare_supply_pods")) {
@@ -165,7 +171,7 @@ int option_handler(void* user, const char* section, const char* name, const char
     } else if (MATCH("base_psych")) {
         cf->base_psych = atoi(value);
     } else if (MATCH("nerve_staple_turns")) {
-        cf->nerve_staple_turns = clamp(atoi(value), 0, 1000);
+        cf->nerve_staple_turns = clamp(atoi(value), 0, 255);
     } else if (MATCH("nerve_staple_mod")) {
         cf->nerve_staple_mod = atoi(value);
     } else if (MATCH("delay_drone_riots")) {
@@ -183,7 +189,7 @@ int option_handler(void* user, const char* section, const char* name, const char
     } else if (MATCH("modify_upgrade_cost")) {
         cf->modify_upgrade_cost = atoi(value);
     } else if (MATCH("modify_unit_support")) {
-        cf->modify_unit_support = atoi(value);
+        cf->modify_unit_support = clamp(atoi(value), 0, 2);
     } else if (MATCH("modify_unit_limit")) {
         cf->modify_unit_limit = atoi(value);
     } else if (MATCH("skip_default_balance")) {
@@ -297,13 +303,13 @@ int option_handler(void* user, const char* section, const char* name, const char
         }
     } else if (MATCH("skip_event")) {
         int val = clamp(atoi(value), 0, 32);
-        cf->skip_random_events = (!val ? 0 : cf->skip_random_events | (1 << (val - 1)));
+        cf->skip_random_events = (!val ? 0 : cf->skip_random_events | (1u << (val - 1)));
     } else if (MATCH("skip_faction")) {
         int val = clamp(atoi(value), 0, 32);
-        cf->skip_random_factions = (!val ? 0 : cf->skip_random_factions | (1 << (val - 1)));
+        cf->skip_random_factions = (!val ? 0 : cf->skip_random_factions | (1u << (val - 1)));
     } else if (MATCH("skip_facility")) {
         int val = clamp(atoi(value), 0, 64);
-        cf->skip_gov_facility = (!val ? 0 : cf->skip_gov_facility | (1 << (val - 1)));
+        cf->skip_gov_facility = (!val ? 0 : cf->skip_gov_facility | (uint64_t{1} << (val - 1)));
     } else if (MATCH("crater")) {
         cf->landmarks.crater = max(0, atoi(value));
     } else if (MATCH("volcano")) {
@@ -581,6 +587,11 @@ int cmd_parse(Config* cf) {
     }
     LocalFree(argv);
     return 1;
+}
+
+bool FolderExists(const char* path) {
+    DWORD attrs = GetFileAttributesA(path);
+    return (attrs != INVALID_FILE_ATTRIBUTES) && (attrs & FILE_ATTRIBUTE_DIRECTORY);
 }
 
 bool FileExists(const char* path) {

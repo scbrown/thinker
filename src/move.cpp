@@ -80,6 +80,11 @@ static bool is_pact_base(int x, int y, int faction_id) {
         || has_pact(faction_id, Bases[base_id].faction_id));
 }
 
+static bool allow_remove(VEH* veh) {
+    return *CurrentTurn > VehRemoveTurns
+        && !veh->plr_owner() && !(veh->flags & VFLAG_IS_OBJECTIVE);
+}
+
 static bool veh_base_check(VEH* veh) {
     bool def_unit = veh->is_garrison_unit() && plans[veh->faction_id].contacted_factions;
     bool pol_unit = veh->is_police_unit() && has_abil(veh->unit_id, ABL_POLICE_2X);
@@ -874,10 +879,6 @@ void move_upkeep(int faction_id, UpdateMode mode) {
             if (DEBUG && mode == UM_Full) {
                 assert(goody_at(x, y) == mod_goody_at(x, y));
                 assert(bonus_at(x, y) == mod_bonus_at(x, y));
-                assert(zoc_any(x, y, faction_id) == mod_zoc_any(x, y, faction_id));
-                assert(zoc_sea(x, y, faction_id) == mod_zoc_sea(x, y, faction_id));
-                assert(zoc_veh(x, y, faction_id) == mod_zoc_veh(x, y, faction_id));
-                assert(zoc_move(x, y, faction_id) == mod_zoc_move(x, y, faction_id));
             }
         }
     }
@@ -1571,9 +1572,9 @@ int colony_move(const int id) {
         if (search_route(ts, id, &tx, &ty)) {
             return set_move_to(id, tx, ty);
         }
-        if (*CurrentTurn > VehRemoveTurns
+        if (allow_remove(veh)
         && (*BaseCount < MaxBaseNum || Factions[faction_id].base_count >= 2)
-        && (veh->home_base_id >= 0 || *BaseCount > 16 + random(256))
+        && (veh->state & VSTATE_REQUIRES_SUPPORT || *BaseCount > 16 + random(256))
         && (!at_base || defender_count(veh->x, veh->y, id) > random(8))) {
             return mod_veh_kill(id);
         }
@@ -2248,7 +2249,7 @@ int former_move(const int id) {
         if (search_route(ts, id, &tx, &ty)) {
             return set_move_to(id, tx, ty);
         }
-        if (veh->home_base_id >= 0 && *CurrentTurn > VehRemoveTurns && !random(4)) {
+        if (allow_remove(veh) && veh->state & VSTATE_REQUIRES_SUPPORT && !random(4)) {
             return mod_veh_kill(id);
         }
     }
@@ -2261,7 +2262,7 @@ int artifact_move(const int id) {
     if (base_id >= 0 && Bases[base_id].faction_id == veh->faction_id
     && can_link_artifact(base_id)) {
         debug("artifact_link %2d %2d %s\n", veh->x, veh->y, Bases[base_id].name);
-        mod_study_artifact(id);
+        study_artifact(id);
         return VEH_SKIP;
     }
     if (!veh->at_target() && veh->iter_count < 2
@@ -2392,8 +2393,11 @@ bool can_airdrop(int veh_id, MAP* sq) {
 }
 
 bool allow_airdrop(int x, int y, int faction_id, bool combat, MAP* sq) {
-    if (!sq || is_ocean(sq) || faction_id < 0) {
+    if (!sq || faction_id < 0 || faction_id >= MaxPlayerNum) {
         assert(0);
+        return false;
+    }
+    if (is_ocean(sq)) {
         return false;
     }
     // Aerospace Complex or Air Superiority unit stationed inside base prevents all drops
@@ -2402,7 +2406,7 @@ bool allow_airdrop(int x, int y, int faction_id, bool combat, MAP* sq) {
         if (at_war(faction_id, base->faction_id)
         && map_range(base->x, base->y, x, y) <= AerospaceDefenseRange
         && (has_facility(FAC_AEROSPACE_COMPLEX, i)
-        || mod_stack_check(veh_at(base->x, base->y), 2, PLAN_AIR_SUPERIORITY, -1, -1))) {
+        || stack_check(veh_at(base->x, base->y), 2, PLAN_AIR_SUPERIORITY, -1, -1))) {
             return false;
         }
     }
@@ -2415,7 +2419,7 @@ bool allow_airdrop(int x, int y, int faction_id, bool combat, MAP* sq) {
             return false;
         }
     }
-    if (!combat && mod_zoc_move(x, y, faction_id)) {
+    if (!combat && zoc_move(x, y, faction_id)) {
         return false;
     }
     for (int i = *VehCount - 1; i >= 0; --i) {
@@ -3028,7 +3032,7 @@ int combat_move(const int id) {
         && Bases[veh->home_base_id].faction_id == faction_id
         && Bases[veh->home_base_id].pop_size > 2;
     const bool look_first = !aircraft && !Factions[faction_id].base_count
-        && mod_stack_check(id, 2, PLAN_COLONY, -1, -1);
+        && stack_check(id, 2, PLAN_COLONY, -1, -1);
     auto skip_patrol = [&](TileSearch& ts) -> bool {
         return look_first && ts.dist <= 2 && veh->iter_count < 4 && goody_at(ts.rx, ts.ry);
     };
@@ -3159,6 +3163,9 @@ int combat_move(const int id) {
             - 0.004*min(100, mapdata[{veh->x, veh->y}].unit_near)
             - 0.0005*min(500, p.land_combat_units + p.sea_combat_units);
         best_cover = (triad == TRIAD_LAND && at_base ? 2 : 1) * cover_score(veh->x, veh->y);
+    }
+    if (veh->flags & VFLAG_IS_OBJECTIVE) {
+        best_odds += 0.2;
     }
     TileSearch ts;
     ts.init(veh->x, veh->y, ts_type);
@@ -3687,8 +3694,7 @@ int combat_move(const int id) {
             return set_move_to(id, tx, ty);
         }
     }
-    if (!veh->plr_owner() && *CurrentTurn > VehRemoveTurns
-    && veh->state & VSTATE_REQUIRES_SUPPORT && !random(4)) {
+    if (allow_remove(veh) && veh->state & VSTATE_REQUIRES_SUPPORT && !random(4)) {
         if (!base_found && triad == TRIAD_SEA) {
             return mod_veh_kill(id);
         }

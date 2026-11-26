@@ -24,7 +24,7 @@
 #pragma once
 
 #ifdef BUILD_REL
-    #define MOD_VERSION "Thinker Mod v5.5"
+    #define MOD_VERSION "Thinker Mod v5.6"
 #else
     #define MOD_VERSION "Thinker Mod develop build"
 #endif
@@ -99,7 +99,7 @@
 #endif
 #endif
 
-const int8_t NetVersion = 15; // Network multiplayer
+const int8_t NetVersion = 16; // Network multiplayer
 
 enum VideoMode {
     VM_Native = 0,
@@ -177,6 +177,8 @@ struct Config {
     int expansion_limit = 100;
     int expansion_autoscale = 0;
     int limit_project_start = 0;
+    int rival_friction_bias = 0;
+    int rival_defiance_bias = 0;
     int max_satellites = 20;
     int new_world_builder = 1;
     int world_sea_levels[3] = {46,58,70};
@@ -200,6 +202,7 @@ struct Config {
     int player_satellites[3] = {0,0,0};
     int computer_satellites[3] = {0,0,0};
     int faction_placement = 1;
+    int start_area_limit = 80;
     int nutrient_bonus = 0;
     int rare_supply_pods = 0;
     int simple_cost_factor = 0;
@@ -355,10 +358,16 @@ struct AIPlans {
 #include "patch.h"
 #include "game.h"
 #include "gameturn.h"
+#include "gamewin.h"
 #include "faction.h"
+#include "faction_diplo.h"
+#include "faction_event.h"
+#include "faction_talk.h"
+#include "council.h"
 #include "base.h"
 #include "basewin.h"
 #include "build.h"
+#include "score.h"
 #include "gui.h"
 #include "gui_dialog.h"
 #include "veh.h"
@@ -368,6 +377,7 @@ struct AIPlans {
 #include "net.h"
 #include "map.h"
 #include "mapgen.h"
+#include "monument.h"
 #include "probe.h"
 #include "path.h"
 #include "plan.h"
@@ -390,6 +400,7 @@ extern std::vector<std::pair<std::string,std::string>> faction_pool;
 extern std::vector<std::pair<size_t,size_t>> faction_pair;
 
 DLL_EXPORT DWORD ThinkerModule();
+bool FolderExists(const char* path);
 bool FileExists(const char* path);
 void exit_fail(int32_t addr);
 void exit_fail();

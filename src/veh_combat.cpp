@@ -16,11 +16,11 @@ static int combat_rand(int value) {
 }
 
 static int stack_kill_check(int veh_id) {
-    return mod_stack_check(veh_id, 1, -1, -1, -1)
-        - mod_stack_check(veh_id, 2, PLAN_COLONY, -1, -1)
-        - mod_stack_check(veh_id, 2, PLAN_SUPPLY, -1, -1)
-        - mod_stack_check(veh_id, 2, PLAN_PROBE, -1, -1)
-        - mod_stack_check(veh_id, 2, PLAN_ARTIFACT, -1, -1);
+    return stack_check(veh_id, 1, -1, -1, -1)
+        - stack_check(veh_id, 2, PLAN_COLONY, -1, -1)
+        - stack_check(veh_id, 2, PLAN_SUPPLY, -1, -1)
+        - stack_check(veh_id, 2, PLAN_PROBE, -1, -1)
+        - stack_check(veh_id, 2, PLAN_ARTIFACT, -1, -1);
 }
 
 static void combat_odds_fix(VEH* veh_atk, VEH* veh_def, int* attack_odds, int* defend_odds) {
@@ -490,7 +490,7 @@ static int __cdecl find_defender(int veh_id_def, int veh_id_atk, int combat_type
         && !veh->is_missile() && !veh_atk->is_missile()
         && (has_abil(veh->unit_id, ABL_AIR_SUPERIORITY)
         || (has_abil(veh_atk->unit_id, ABL_AIR_SUPERIORITY)
-        && base_id < 0 && !is_airbase && !mod_stack_check(veh_id, 6, ABL_CARRIER, -1, -1)))) {
+        && base_id < 0 && !is_airbase && !stack_check(veh_id, 6, ABL_CARRIER, -1, -1)))) {
             score += 0x80000;
         } else if (combat_type) {
             if (can_arty(veh->unit_id, true)) {
@@ -498,8 +498,8 @@ static int __cdecl find_defender(int veh_id_def, int veh_id_atk, int combat_type
             }
         } else if (veh->state & VSTATE_DESIGNATE_DEFENDER
         && (base_id >= 0 || is_airbase
-        || mod_stack_check(veh_id, 6, ABL_CARRIER, -1, -1)
-        || !mod_stack_check(veh_id, 3, TRIAD_AIR, -1, -1))) {
+        || stack_check(veh_id, 6, ABL_CARRIER, -1, -1)
+        || !stack_check(veh_id, 3, TRIAD_AIR, -1, -1))) {
             score += 0x80000;
         }
         // Replace old score method to avoid overflow issues with larger veh_ids
@@ -560,15 +560,15 @@ int terrain_defense(VEH* veh_def, VEH* veh_atk)
     }
     int defense = sq->is_rocky();
     if (defense) {
-        *VehBattleDisplayTerrain = label_get(91); // Rocky
+        *VehBattleDisplayTerrain = label_get(TL_Rocky);
     }
     if (!native && !defense && sq->is_fungus() && veh_def->triad() != TRIAD_AIR) {
-        *VehBattleDisplayTerrain = label_get(338); // Fungus
+        *VehBattleDisplayTerrain = label_get(TL_Fungus);
         defense = (has_project(FAC_PHOLUS_MUTAGEN, veh_def->faction_id)
             || veh_def->is_native_unit()) ? 2 : 1;
     }
     if (sq->items & BIT_FOREST && !defense && (!veh_atk || veh_atk->triad() == TRIAD_LAND)) {
-        *VehBattleDisplayTerrain = label_get(291); // Forest
+        *VehBattleDisplayTerrain = label_get(TL_Forest);
         defense = 1;
     }
     return defense + 2;
@@ -582,7 +582,7 @@ bool use_nerve_gas(int faction_id_atk, int faction_id_def) {
     Faction* f_def = &Factions[faction_id_def];
     int value = 0;
     if (*GameRules & RULES_INTENSE_RIVALRY && (f_def->ranking > f_atk->ranking
-    || f_def->diplo_unk_4[faction_id_atk] > f_atk->diplo_unk_4[faction_id_def])) {
+    || f_def->diplo_combat_count[faction_id_atk] > f_atk->diplo_combat_count[faction_id_def])) {
         value = 3 * (f_atk->AI_fight + 1);
     }
     if ((f_atk->diplo_status[faction_id_def] & DIPLO_ATROCITY_VICTIM)
@@ -676,17 +676,17 @@ void __cdecl mod_battle_compute(int veh_id_atk, int veh_id_def, int* offense_out
             // Display PSI attack/defend bonuses
             int rule_psi_atk = MFactions[faction_id_atk].rule_psi;
             if (rule_psi_atk) {
-                add_bat(0, rule_psi_atk, label_get(342)); // Gaian Psi
+                add_bat(0, rule_psi_atk, label_get(TL_GaianPsi));
             }
             if (has_project(FAC_DREAM_TWISTER, faction_id_atk)) {
-                add_bat(0, conf.dream_twister_bonus, label_get(343)); // Dream Twist
+                add_bat(0, conf.dream_twister_bonus, label_get(TL_DreamTwist));
             }
             int rule_psi_def = MFactions[faction_id_def].rule_psi;
             if (rule_psi_def) {
-                add_bat(1, rule_psi_def, label_get(342)); // Gaian Psi
+                add_bat(1, rule_psi_def, label_get(TL_GaianPsi));
             }
             if (has_project(FAC_NEURAL_AMPLIFIER, faction_id_def)) {
-                add_bat(1, conf.neural_amplifier_bonus, label_get(344)); // Neural Amp
+                add_bat(1, conf.neural_amplifier_bonus, label_get(TL_NeuralAmp));
             }
             if (veh_id_def >= 0 && veh_def->unit_id == BSC_FUNGAL_TOWER) {
                 add_bat(1, conf.fungal_tower_bonus, Units[BSC_FUNGAL_TOWER].name); // Fungal Tower
@@ -701,11 +701,11 @@ void __cdecl mod_battle_compute(int veh_id_atk, int veh_id_def, int* offense_out
                 && (veh_atk->is_native_unit() || has_project(FAC_PHOLUS_MUTAGEN, faction_id_atk))
                 && veh_def->offense_value() >= 0) {
                     offense = offense * 150 / 100;
-                    add_bat(0, 50, label_get(338)); // Fungus
+                    add_bat(0, 50, label_get(TL_Fungus));
                 }
                 if (psi_combat & 2 && veh_atk->is_resonance_weapon()) {
                     offense = offense * (ResonanceWeaponValue + 100) / 100;
-                    add_bat(0, ResonanceWeaponValue, label_get(1110)); // Resonance Attack
+                    add_bat(0, ResonanceWeaponValue, label_get(TL_ResonanceAttack));
                 }
                 if (psi_combat
                 && has_abil(veh_atk->unit_id, ABL_EMPATH)
@@ -721,20 +721,19 @@ void __cdecl mod_battle_compute(int veh_id_atk, int veh_id_def, int* offense_out
                 offense = offense * (100 - Rules->combat_penalty_atk_airdrop) / 100;
                 add_bat(0, -Rules->combat_penalty_atk_airdrop,
                     (drop_range(faction_id_atk) <= Rules->max_airdrop_rng_wo_orbital_insert
-                    ? label_get(437) // Air Drop
-                    : label_get(438))); // Orbital Insertion
+                    ? label_get(TL_AirDrop) : label_get(TL_OrbitalInsertion)));
             }
             if (MFactions[faction_id_atk].rule_flags & RFLAG_FANATIC
             && Rules->combat_bonus_fanatic && !combat_type && !psi_combat) {
                 offense = offense * (Rules->combat_bonus_fanatic + 100) / 100;
-                add_bat(0, Rules->combat_bonus_fanatic, label_get(528)); // Belief
+                add_bat(0, Rules->combat_bonus_fanatic, label_get(TL_Belief));
             }
             int bonus_count = MFactions[faction_id_atk].faction_bonus_count;
             for (int i = 0; i < bonus_count; i++) {
                 if (MFactions[faction_id_atk].faction_bonus_id[i] == RULE_OFFENSE) {
                     int rule_off_bonus = MFactions[faction_id_atk].faction_bonus_val1[i];
                     offense = offense * rule_off_bonus / 100;
-                    add_bat(0, rule_off_bonus - 100, label_get(1108)); // Alien Offense
+                    add_bat(0, rule_off_bonus - 100, label_get(TL_AlienOffense));
                 }
             }
             if (psi_combat && faction_id_atk) {
@@ -742,7 +741,7 @@ void __cdecl mod_battle_compute(int veh_id_atk, int veh_id_def, int* offense_out
                 if (planet_atk && Rules->combat_psi_bonus_per_planet) {
                     int modifier = planet_atk * Rules->combat_psi_bonus_per_planet;
                     offense = offense * (modifier + 100) / 100;
-                    add_bat(0, modifier, label_get(625)); // Planet
+                    add_bat(0, modifier, label_get(TL_Planet));
                 }
             }
         }
@@ -754,22 +753,22 @@ void __cdecl mod_battle_compute(int veh_id_atk, int veh_id_def, int* offense_out
             if (veh_atk->triad() == TRIAD_LAND && veh_def->triad() == TRIAD_SEA) {
                 if (gun_vs_ship_art) {
                     offense = offense * (gun_vs_ship_art + 100) / 100;
-                    add_bat(0, gun_vs_ship_art, label_get(435)); // Land Based Guns
+                    add_bat(0, gun_vs_ship_art, label_get(TL_LandBasedGuns));
                 }
             } else if (veh_atk->triad() == TRIAD_SEA && veh_def->triad() == TRIAD_LAND) {
                 if (gun_vs_ship_art) {
                     defense = defense * (gun_vs_ship_art + 100) / 100;
-                    add_bat(1, gun_vs_ship_art, label_get(435)); // Land Based Guns
+                    add_bat(1, gun_vs_ship_art, label_get(TL_LandBasedGuns));
                 }
             } else if (Rules->combat_artillery_bonus_altitude && sq_atk && sq_def) {
                 if (alt_def > alt_atk) {
                     int modifier = (alt_def - alt_atk) * Rules->combat_artillery_bonus_altitude;
                     defense = defense * (modifier + 100) / 100;
-                    add_bat(1, modifier, label_get(576)); // Altitude
+                    add_bat(1, modifier, label_get(TL_Altitude));
                 } else if (alt_def < alt_atk) {
                     int modifier = (alt_atk - alt_def) * Rules->combat_artillery_bonus_altitude;
                     offense = offense * (modifier + 100) / 100;
-                    add_bat(0, modifier, label_get(576)); // Altitude
+                    add_bat(0, modifier, label_get(TL_Altitude));
                 }
             }
         }
@@ -780,7 +779,7 @@ void __cdecl mod_battle_compute(int veh_id_atk, int veh_id_def, int* offense_out
             if (MFactions[faction_id_def].faction_bonus_id[i] == RULE_DEFENSE) {
                 int rule_def_bonus = MFactions[faction_id_def].faction_bonus_val1[i];
                 defense = defense * rule_def_bonus / 100;
-                add_bat(1, rule_def_bonus - 100, label_get(1109)); // Alien Defense
+                add_bat(1, rule_def_bonus - 100, label_get(TL_AlienDefense));
             }
         }
         if (veh_id_atk >= 0 && veh_atk->is_probe()) {
@@ -789,7 +788,7 @@ void __cdecl mod_battle_compute(int veh_id_atk, int veh_id_def, int* offense_out
             int base_id_def = base_at(veh_def->x, veh_def->y);
             if (psi_combat) {
                 if (base_id_def >= 0 && Rules->combat_bonus_intrinsic_base_def) {
-                    add_bat(1, Rules->combat_bonus_intrinsic_base_def, label_get(332)); // Base
+                    add_bat(1, Rules->combat_bonus_intrinsic_base_def, label_get(TL_Base));
                     defense = defense * (Rules->combat_bonus_intrinsic_base_def + 100) / 100;
                 }
                 if (conf.planet_defense_bonus && faction_id_def) {
@@ -798,7 +797,7 @@ void __cdecl mod_battle_compute(int veh_id_atk, int veh_id_def, int* offense_out
                         / (conf.planet_defense_bonus <= 1 ? 2 : 1);
                     if (modifier != 0) {
                         defense = defense * (modifier + 100) / 100;
-                        add_bat(1, modifier, label_get(625)); // Planet
+                        add_bat(1, modifier, label_get(TL_Planet));
                     }
                 }
                 defense *= 4;
@@ -812,7 +811,7 @@ void __cdecl mod_battle_compute(int veh_id_atk, int veh_id_def, int* offense_out
                     && combat_type && veh_def->triad() == TRIAD_LAND && alt_atk > alt_def) {
                         offense = offense * (Rules->combat_artillery_bonus_altitude
                             * (alt_atk - alt_def) + 100) / 100;
-                        add_bat(0, Rules->combat_artillery_bonus_altitude, label_get(576)); // Altitude
+                        add_bat(0, Rules->combat_artillery_bonus_altitude, label_get(TL_Altitude));
                     }
                     if (Rules->combat_mobile_open_ground
                     && !combat_type && base_id_def < 0
@@ -822,56 +821,56 @@ void __cdecl mod_battle_compute(int veh_id_atk, int veh_id_def, int* offense_out
                         if (speed_atk > Rules->move_rate_roads
                         && speed_atk >= speed_def) {
                             offense = offense * (Rules->combat_mobile_open_ground + 100) / 100;
-                            add_bat(0, Rules->combat_mobile_open_ground, label_get(611)); // Mobile in open
+                            add_bat(0, Rules->combat_mobile_open_ground, label_get(TL_MobileInOpen));
                         }
                     }
                     if (Rules->combat_mobile_def_in_rough
                     && !combat_type && (!plain_terrain || base_id_def >= 0)
                     && proto_speed(veh_atk->unit_id) > Rules->move_rate_roads) {
                         defense = defense * (Rules->combat_mobile_def_in_rough + 100) / 100;
-                        // "Rough vs. Mobile" / "Mobile vs. Base"
                         add_bat(1, Rules->combat_mobile_def_in_rough, base_id_def < 0
-                            ? label_get(548) : label_get(612));
+                            ? label_get(TL_RoughVsMobile) : label_get(TL_MobileVsBase));
                     }
-                    // Modify this bonus to apply only when both tiles have roads or magtubes
-                    // and the defender does not have a base or bunker
+                    // Fix 30. [BUG] Fixed "attacking along road" combat bonus in alpha/x.txt.
+                    // Set to 0 by default. Modify this bonus to apply only when both tiles
+                    // have roads or magtubes and the defender does not have a base or bunker.
                     if (Rules->combat_bonus_atk_road
                     && !combat_type && !is_ocean(sq_atk) && !is_ocean(sq_def)
                     && !sq_def->is_base_or_bunker()
                     && sq_atk->items & (BIT_BASE_IN_TILE|BIT_ROAD|BIT_MAGTUBE)
                     && sq_def->items & (BIT_ROAD|BIT_MAGTUBE)) {
                         offense = offense * (Rules->combat_bonus_atk_road + 100) / 100;
-                        add_bat(0, Rules->combat_bonus_atk_road, label_get(606)); // Road Attack
+                        add_bat(0, Rules->combat_bonus_atk_road, label_get(TL_RoadAttack));
                     }
                     if (Rules->combat_penalty_atk_lower_elevation
                     && !combat_type && alt_def > alt_atk
                     && !has_abil(veh_atk->unit_id, ABL_ANTIGRAV_STRUTS)) {
                         defense = defense * (Rules->combat_penalty_atk_lower_elevation + 100) / 100;
-                        add_bat(1, Rules->combat_penalty_atk_lower_elevation, label_get(441)); // Uphill
+                        add_bat(1, Rules->combat_penalty_atk_lower_elevation, label_get(TL_Uphill));
                     }
                     if (Rules->combat_bonus_atk_higher_elevation
                     && !combat_type && alt_atk > alt_def
                     && !has_abil(veh_def->unit_id, ABL_ANTIGRAV_STRUTS)) {
                         offense = offense * (Rules->combat_bonus_atk_higher_elevation + 100) / 100;
-                        add_bat(0, Rules->combat_bonus_atk_higher_elevation, label_get(330)); // Downhill
+                        add_bat(0, Rules->combat_bonus_atk_higher_elevation, label_get(TL_Downhill));
                     }
                 }
                 defense *= terrain_def;
                 if (!plain_terrain) {
                     add_bat(1, 50 * terrain_def - 100,
-                        (*VehBattleDisplayTerrain ? *VehBattleDisplayTerrain : label_get(331))); // Terrain
+                        (*VehBattleDisplayTerrain ? *VehBattleDisplayTerrain : label_get(TL_Terrain)));
                 }
                 char* display_def = NULL; // only one is displayed
                 int def_multi = 100;
                 if (base_id_def >= 0 && veh_id_atk >= 0) {
-                    display_def = label_get(332); // Base
+                    display_def = label_get(TL_Base);
                     int fac_modifier = 0;
                     // Fix: original code checks if faction_id_def has Citizens Defense Force
                     switch (veh_atk->triad()) {
                       case TRIAD_LAND:
                         if (has_facility(FAC_PERIMETER_DEFENSE, base_id_def)) {
                             fac_modifier = conf.facility_defense_value[0];
-                            display_def = label_get(354); // Perimeter
+                            display_def = label_get(TL_Perimeter);
                         }
                         break;
                       case TRIAD_SEA:
@@ -891,16 +890,16 @@ void __cdecl mod_battle_compute(int veh_id_atk, int veh_id_def, int* offense_out
                     }
                     if (has_fac_built(FAC_TACHYON_FIELD, base_id_def)) {
                         fac_modifier += conf.facility_defense_value[3];
-                        display_def = label_get(357); // Tachyon
+                        display_def = label_get(TL_Tachyon);
                     }
                     if (Rules->combat_bonus_intrinsic_base_def
                     && !fac_modifier && !has_abil(veh_atk->unit_id, ABL_BLINK_DISPLACER)) {
                         defense = defense * (Rules->combat_bonus_intrinsic_base_def + 100) / 100;
-                        add_bat(1, Rules->combat_bonus_intrinsic_base_def, label_get(332)); // Base
+                        add_bat(1, Rules->combat_bonus_intrinsic_base_def, label_get(TL_Base));
                     }
                     if (fac_modifier && has_abil(veh_atk->unit_id, ABL_BLINK_DISPLACER)) {
                         fac_modifier = 0;
-                        display_def = label_get(428); // Base vs. Blink
+                        display_def = label_get(TL_BaseVsBlink);
                     }
                     if (Rules->combat_infantry_vs_base
                     && faction_id_atk && !combat_type
@@ -908,19 +907,19 @@ void __cdecl mod_battle_compute(int veh_id_atk, int veh_id_def, int* offense_out
                     && veh_atk->triad() == TRIAD_LAND
                     && veh_atk->speed() == 1) {
                         offense = offense * (Rules->combat_infantry_vs_base + 100) / 100;
-                        add_bat(0, Rules->combat_infantry_vs_base, label_get(547)); // Infantry vs. Base
+                        add_bat(0, Rules->combat_infantry_vs_base, label_get(TL_InfantryVsBase));
                     }
                     def_multi += fac_modifier;
                 }
                 else if (base_id_def < 0 && sq_def && sq_def->is_bunker()
                 && (veh_id_atk < 0 || veh_atk->triad() != TRIAD_AIR)) {
                     def_multi = 150;
-                    display_def = label_get(358); // Bunker
+                    display_def = label_get(TL_Bunker);
                 }
                 else if (is_arty && base_id_def < 0 && sq_def && !is_rocky
                 && !(sq_def->items & BIT_FOREST) && !sq_def->is_fungus()) {
                     def_multi = 150;
-                    display_def = label_get(525); // Open Ground
+                    display_def = label_get(TL_OpenGround);
                 }
                 defense = defense * def_multi / 50;
                 if (def_multi > 100) {
@@ -967,15 +966,15 @@ void __cdecl mod_battle_compute(int veh_id_atk, int veh_id_def, int* offense_out
                     }
                 }
                 if (def_state & DF_Flechette) {
-                    add_bat(1, flechette - 100, label_get(1113)); // Flechette
+                    add_bat(1, flechette - 100, label_get(TL_Flechette));
                 }
                 if (def_state & DF_Sensor) {
                     defense = defense * (Rules->combat_defend_sensor + 100) / 100;
-                    add_bat(1, Rules->combat_defend_sensor, label_get(613)); // Sensor
+                    add_bat(1, Rules->combat_defend_sensor, label_get(TL_Sensor));
                 }
                 if (def_state & DF_GSP) {
                     defense = defense * (Rules->combat_defend_sensor + 100) / 100;
-                    add_bat(1, Rules->combat_defend_sensor, label_get(1123)); // GSP
+                    add_bat(1, Rules->combat_defend_sensor, label_get(TL_GSP));
                 }
             }
             if (veh_id_atk >= 0 && psi_combat & 1
@@ -983,11 +982,11 @@ void __cdecl mod_battle_compute(int veh_id_atk, int veh_id_def, int* offense_out
             && has_abil(veh_def->unit_id, ABL_TRANCE)
             && !has_abil(veh_atk->unit_id, ABL_DISSOCIATIVE_WAVE)) {
                 defense = defense * (Rules->combat_bonus_trance_vs_psi + 100) / 100;
-                add_bat(1, Rules->combat_bonus_trance_vs_psi, label_get(329)); // Trance
+                add_bat(1, Rules->combat_bonus_trance_vs_psi, label_get(TL_Trance));
             }
             if (veh_id_atk >= 0 && psi_combat & 1 && veh_def->is_resonance_armor()) {
                 defense = defense * (ResonanceArmorValue + 100) / 100;
-                add_bat(1, ResonanceArmorValue, label_get(1111)); // Resonance Def.
+                add_bat(1, ResonanceArmorValue, label_get(TL_ResonanceDef));
             }
             // added veh_id_atk checks below when needed
             if (veh_id_atk >= 0 && !psi_combat
@@ -997,12 +996,12 @@ void __cdecl mod_battle_compute(int veh_id_atk, int veh_id_def, int* offense_out
                     int penalty = Rules->combat_penalty_air_supr_vs_ground;
                     if (penalty) {
                         offense = offense * (100 - penalty) / 100;
-                        add_bat(0, -penalty, label_get(448)); // Ground Strike
+                        add_bat(0, -penalty, label_get(TL_GroundStrike));
                     }
                 } else if (Rules->combat_bonus_air_supr_vs_air
                 && !has_abil(veh_def->unit_id, ABL_AIR_SUPERIORITY)) {
                     offense = offense * (Rules->combat_bonus_air_supr_vs_air + 100) / 100;
-                    add_bat(0, Rules->combat_bonus_air_supr_vs_air, label_get(449)); // Air-to-Air
+                    add_bat(0, Rules->combat_bonus_air_supr_vs_air, label_get(TL_AirToAir));
                 }
             }
             if (veh_id_atk >= 0 && !psi_combat
@@ -1013,27 +1012,27 @@ void __cdecl mod_battle_compute(int veh_id_atk, int veh_id_def, int* offense_out
             && has_abil(veh_def->unit_id, ABL_AIR_SUPERIORITY)
             && !veh_atk->is_missile() && !veh_def->is_missile()) {
                 defense = defense * (Rules->combat_bonus_air_supr_vs_air + 100) / 100;
-                add_bat(1, Rules->combat_bonus_air_supr_vs_air, label_get(449)); // Air-to-Air
+                add_bat(1, Rules->combat_bonus_air_supr_vs_air, label_get(TL_AirToAir));
             }
             if (Rules->combat_penalty_non_combat_vs_combat
             && !veh_def->offense_value() && veh_def->defense_value() == 1
             && (faction_id_atk || base_id_def < 0)) {
                 defense = defense * (100 - Rules->combat_penalty_non_combat_vs_combat) / 100;
-                add_bat(1, -Rules->combat_penalty_non_combat_vs_combat, label_get(439)); // Non Combat
+                add_bat(1, -Rules->combat_penalty_non_combat_vs_combat, label_get(TL_NonCombat));
             }
             if (veh_id_atk >= 0 && base_id_def >= 0
             && Rules->combat_bonus_vs_ship_port
             && veh_atk->triad() != TRIAD_SEA
             && veh_def->triad() == TRIAD_SEA) {
                 offense = offense * (Rules->combat_bonus_vs_ship_port + 100) / 100;
-                add_bat(0, Rules->combat_bonus_vs_ship_port, label_get(335)); // In Port
+                add_bat(0, Rules->combat_bonus_vs_ship_port, label_get(TL_InPort));
             }
             if (veh_id_atk >= 0
             && veh_def->is_pulse_armor()
             && veh_atk->triad() == TRIAD_LAND
             && veh_atk->speed() > 1) {
                 defense = defense * (PulseArmorValue + 100) / 100;
-                add_bat(1, PulseArmorValue, label_get(1112)); // Pulse Defense
+                add_bat(1, PulseArmorValue, label_get(TL_PulseDefense));
             }
             if (veh_id_atk >= 0
             && Rules->combat_comm_jammer_vs_mobile
@@ -1042,7 +1041,7 @@ void __cdecl mod_battle_compute(int veh_id_atk, int veh_id_def, int* offense_out
             && veh_atk->triad() == TRIAD_LAND
             && veh_atk->speed() > 1) {
                 defense = defense * (Rules->combat_comm_jammer_vs_mobile + 100) / 100;
-                add_bat(1, Rules->combat_comm_jammer_vs_mobile, label_get(336)); // Jammer
+                add_bat(1, Rules->combat_comm_jammer_vs_mobile, label_get(TL_Jammer));
             }
             if (veh_id_atk >= 0
             && Rules->combat_aaa_bonus_vs_air
@@ -1050,7 +1049,7 @@ void __cdecl mod_battle_compute(int veh_id_atk, int veh_id_def, int* offense_out
             && has_abil(veh_def->unit_id, ABL_AAA)
             && !has_abil(veh_atk->unit_id, ABL_DISSOCIATIVE_WAVE)) {
                 defense = defense * (Rules->combat_aaa_bonus_vs_air + 100) / 100;
-                add_bat(1, Rules->combat_aaa_bonus_vs_air, label_get(337)); // Tracking
+                add_bat(1, Rules->combat_aaa_bonus_vs_air, label_get(TL_Tracking));
             }
         }
     }
@@ -1080,14 +1079,9 @@ void __cdecl planet_busting(int veh_id, int tx, int ty) {
     int shoot_value = 0;
 
     if (faction_id != player_id && base_id >= 0) {
-        MFaction& m = MFactions[faction_id];
-        *PluralDefault = 0;
-        *GenderDefault = m.is_leader_female;
-        parse_says(0, m.title_leader, -1, -1);
-        parse_says(1, m.name_leader, -1, -1);
-        *PluralDefault = m.is_noun_plural;
-        *GenderDefault = m.noun_gender;
-        parse_says(2, m.noun_faction, -1, -1);
+        parse_says(0, get_title(faction_id), -1, -1);
+        parse_says(1, get_name(faction_id), -1, -1);
+        parse_says(2, get_noun(faction_id), -1, -1);
         parse_says(3, Bases[base_id].name, -1, -1);
         int dist = map_range(Bases[base_id].x, Bases[base_id].y, tx, ty);
         const char* img = (dist > reactor_range) ? "astp_sm.pcx" : "baseobl_sm.pcx";
@@ -1122,6 +1116,8 @@ void __cdecl planet_busting(int veh_id, int tx, int ty) {
             }
         }
     }
+    // Fix 34. [BUG] Fixed logic in PB code to prevent ODP/Flechette defenses being called a 2nd time
+    // (with a chance for defenses to fail) even after PB had already been shot down.
     if (!shoot_value) {
         int owner_id = whose_territory(faction_id, tx, ty, 0, 0);
         if (owner_id >= 0 && owner_id != faction_id && !found[owner_id]) {
@@ -1142,6 +1138,9 @@ void __cdecl planet_busting(int veh_id, int tx, int ty) {
         *dword_9B22E0 = -1; // skip displaying TERRAMINE / TERRAYOURS
         FX_play(Sounds, 59);
         *dword_90F7D4 = reactor_range;
+        // Fix: use placeholder veh_ids for effects rendering
+        *VehDrawAttackID = conf.max_veh_num;
+        *VehDrawDefendID = conf.max_veh_num;
         boom(tx, ty, 32);
 
         for (int i = 0; i < blast_range; i++) {
@@ -1178,6 +1177,8 @@ void __cdecl planet_busting(int veh_id, int tx, int ty) {
         boom(tx, ty, 17);
         boom(tx, ty, 18);
         major_atrocity(faction_id, tgt_base_faction_id);
+        *VehDrawAttackID = -1;
+        *VehDrawDefendID = -1;
     }
 }
 
@@ -1224,7 +1225,7 @@ int __cdecl interceptor(int faction_id_def, int faction_id_atk, int tx, int ty) 
         && has_abil(veh->unit_id, ABL_AIR_SUPERIORITY)
         && map_range(veh->x, veh->y, tx, ty) <= conf.intercept_max_range
         && (sq = mapsq(veh->x, veh->y))) {
-            if (sq->is_airbase() || mod_stack_check(i, 6, ABL_CARRIER, -1, -1)) {
+            if (sq->is_airbase() || stack_check(i, 6, ABL_CARRIER, -1, -1)) {
                 // Modified priority for highest HP * Attack, then distance, then newer units
                 int score = 2 * veh->cur_hitpoints() * max(1, veh->eval_offense() + 1)
                     - map_range(veh->x, veh->y, tx, ty);
@@ -1240,7 +1241,10 @@ int __cdecl interceptor(int faction_id_def, int faction_id_atk, int tx, int ty) 
     }
     VEH* veh = &Vehs[veh_id_def];
     if (faction_id_def == MapWin->cOwner || faction_id_atk == MapWin->cOwner) {
-        parse_says(0, &MFactions[faction_id_def].adj_name_faction[0], -1, -1);
+        parse_says(0, get_adjective(faction_id_def), -1, -1);
+        // Fix 2. [CRASH] It is possible usually on larger maps that scrambling air interceptors
+        // would cause the game to crash. Even when the game didn't crash incorrect altitude
+        // values were being used in checks. Both of these have been fixed.
         *VehLiftX = veh->x;
         *VehLiftY = veh->y;
         int base_id = base_find(veh->x, veh->y);
@@ -1342,14 +1346,14 @@ int __cdecl mod_battle_fight_2(int veh_id_atk, int offset, int tx, int ty, int t
         combat_type = CT_CAN_ARTY;
     } else if (can_arty(veh_atk->unit_id, true) && veh_atk->triad() == TRIAD_SEA && !is_ocean(sq_def)) {
         if (sq_def->is_base()
-        || mod_stack_check(veh_id_def, 3, 2, -1, -1) < mod_stack_check(veh_id_def, 1, -1, -1, -1)) {
+        || stack_check(veh_id_def, 3, 2, -1, -1) < stack_check(veh_id_def, 1, -1, -1, -1)) {
             combat_type = CT_CAN_ARTY;
         }
     }
     if (veh_id_def >= 0
     && veh_atk->triad() == TRIAD_AIR
     && !veh_atk->is_missile()
-    && !mod_stack_check(veh_id_def, 6, ABL_AIR_SUPERIORITY, -1, -1)
+    && !stack_check(veh_id_def, 6, ABL_AIR_SUPERIORITY, -1, -1)
     && option && *VehAttackFlags & 2) {
         intercept_state = interceptor(Vehs[veh_id_def].faction_id, faction_id_atk, tx, ty);
     }
@@ -1370,10 +1374,10 @@ int __cdecl mod_battle_fight_2(int veh_id_atk, int offset, int tx, int ty, int t
     bool combat_defend = veh_def->is_combat_unit();
     bool psi_combat = (veh_atk->offense_value() < 0 || veh_def->defense_value() < 0);
     int base_id = base_at(tx, ty);
-    Faction* f_atk = &Factions[faction_id_atk];
-    Faction* f_def = &Factions[faction_id_def];
-    MFaction* m_atk = &MFactions[faction_id_atk];
-    MFaction* m_def = &MFactions[faction_id_def];
+    Faction* const f_atk = &Factions[faction_id_atk];
+    Faction* const f_def = &Factions[faction_id_def];
+    MFaction* const m_atk = &MFactions[faction_id_atk];
+    MFaction* const m_def = &MFactions[faction_id_def];
 
     if (can_arty(veh_atk->unit_id, true) && can_arty(veh_def->unit_id, true)) {
         if (veh_atk->triad() != TRIAD_LAND) {
@@ -1419,13 +1423,13 @@ int __cdecl mod_battle_fight_2(int veh_id_atk, int offset, int tx, int ty, int t
         }
         return value;
     }
-    if (!is_human(faction_id_atk)
-    || !(*VehAttackFlags & 1)
-    || veh_atk->is_probe()
-    || (veh_def->is_artifact() && base_id < 0)
-    || (*MultiplayerActive && intercept_state)) {
-        // nothing
-    } else if (break_treaty(faction_id_atk, faction_id_def, (DIPLO_COMMLINK|DIPLO_TREATY|DIPLO_PACT))) {
+    // Fix: original code used DIPLO_COMMLINK instead of DIPLO_TRUCE to break_treaty
+    if (is_human(faction_id_atk)
+    && (*VehAttackFlags & 1)
+    && !veh_atk->is_probe()
+    && !(veh_def->is_artifact() && base_id < 0)
+    && !(*MultiplayerActive && intercept_state)
+    && break_treaty(faction_id_atk, faction_id_def, (DIPLO_TRUCE|DIPLO_TREATY|DIPLO_PACT))) {
         return 2;
     }
 
@@ -1479,7 +1483,7 @@ int __cdecl mod_battle_fight_2(int veh_id_atk, int offset, int tx, int ty, int t
             offense_out = offense_out * modifier / Rules->move_rate_roads;
             int penalty = 100 * (modifier - Rules->move_rate_roads) / Rules->move_rate_roads;
             if (penalty) {
-                add_bat(0, penalty, label_get(339)); // Hasty
+                add_bat(0, penalty, label_get(TL_Hasty));
             }
         }
         if (combat_type != CT_CAN_ARTY) {
@@ -1502,13 +1506,9 @@ int __cdecl mod_battle_fight_2(int veh_id_atk, int offset, int tx, int ty, int t
         || ((def_status & DIPLO_COMMLINK || atk_status & DIPLO_UNK_800)
         && !(def_status & DIPLO_VENDETTA)))) {
             if (faction_id_def == player_id || *PbemActive) {
-                *PluralDefault = 0;
-                *GenderDefault = m_atk->is_leader_female;
-                parse_says(0, m_atk->title_leader, -1, -1);
-                parse_says(1, m_atk->name_leader, -1, -1);
-                *PluralDefault = m_atk->is_noun_plural;
-                *GenderDefault = m_atk->noun_gender;
-                parse_says(2, m_atk->noun_faction, -1, -1);
+                parse_says(0, get_title(faction_id_atk), -1, -1);
+                parse_says(1, get_name(faction_id_atk), -1, -1);
+                parse_says(2, get_noun(faction_id_atk), -1, -1);
             }
             if (faction_id_def == player_id) {
                 NetMsg_pop(NetMsg, "SURPRISE", -5000, 0, 0);
@@ -1545,7 +1545,7 @@ int __cdecl mod_battle_fight_2(int veh_id_atk, int offset, int tx, int ty, int t
     }
     if (nerve_gas) {
         offense_out += offense_out / 2;
-        add_bat(0, 50, label_get(341)); // Nerve Gas
+        add_bat(0, 50, label_get(TL_NerveGas));
     }
 
     if ((faction_id_atk == player_id || faction_id_def == player_id)
@@ -1591,18 +1591,18 @@ int __cdecl mod_battle_fight_2(int veh_id_atk, int offset, int tx, int ty, int t
                 modifier *= 2;
             }
             if (modifier > 1) {
-                add_bat(0, 100 / modifier - 100, label_get(332)); // Base
+                add_bat(0, 100 / modifier - 100, label_get(TL_Base));
             }
         }
     }
     if (*CurrentTurn < conf.native_weak_until_turn) {
         if (!faction_id_atk) {
             offense_out /= 3;
-            add_bat(0, -67, label_get(312)); // Combat
+            add_bat(0, -67, label_get(TL_Combat));
         }
         if (!faction_id_def) {
             defense_out /= 2;
-            add_bat(1, -50, label_get(312)); // Combat
+            add_bat(1, -50, label_get(TL_Combat));
         }
     }
     if (base_id >= 0 && veh_atk->triad() == TRIAD_AIR) {
@@ -1616,8 +1616,9 @@ int __cdecl mod_battle_fight_2(int veh_id_atk, int offset, int tx, int ty, int t
             SubInterface_set_iface_mode(BattleWin);
             BattleWin_clear(BattleWin);
             StatusWin_draw(StatusWin, veh_id_atk, veh_id_def, offense_out, defense_out, 0);
-            *dword_8C6B3C = 1;
-            parse_gen_name(faction_id_atk, 0, 1);
+            StatusWin->iface_state = 1;
+            parse_says(0, get_title(faction_id_atk), -1, -1);
+            parse_says(1, get_name(faction_id_atk), -1, -1);
             BattleWin_stop_timer(BattleWin);
             if (!popp(ScriptFile, "BADIDEA", 0, "hasty_sm.pcx", 0)) {
                 BattleWin_pulse_timer(BattleWin);
@@ -1635,8 +1636,9 @@ int __cdecl mod_battle_fight_2(int veh_id_atk, int offset, int tx, int ty, int t
             SubInterface_set_iface_mode(BattleWin);
             BattleWin_clear(BattleWin);
             StatusWin_draw(StatusWin, veh_id_atk, veh_id_def, offense_out, defense_out, 0);
-            *dword_8C6B3C = 1;
-            parse_gen_name(faction_id_atk, 0, 1);
+            StatusWin->iface_state = 1;
+            parse_says(0, get_title(faction_id_atk), -1, -1);
+            parse_says(1, get_name(faction_id_atk), -1, -1);
 
             StrBuffer[0] = '\0';
             snprintf(StrBuffer, StrBufLen, "%d.%d", offense_out >> 8, (10 * (offense_out & 0xFF)) >> 8);
@@ -1686,16 +1688,15 @@ int __cdecl mod_battle_fight_2(int veh_id_atk, int offset, int tx, int ty, int t
     bool plr_multi = (*MultiplayerActive && faction_id_def == player_id);
     bool plr_pbem = (*PbemActive && is_human(faction_id_def));
     int render_base = 0;
-    int render_tile = 1;
     int render_battle = 0;
     if (faction_id_atk == player_id || faction_id_def == player_id || (*GameState & STATE_OMNISCIENT_VIEW)) {
         render_battle = 1;
     }
-    if (faction_id_atk != player_id || (veh_atk->is_invisible_lurker() && !veh_atk->is_visible(player_id))) {
-        if (faction_id_def != player_id || (veh_def->is_invisible_lurker() && !veh_def->is_visible(player_id))) {
-            render_tile = 0;
-        }
-    }
+    bool atk_visible = (faction_id_atk == player_id && !veh_atk->is_invisible_lurker())
+        || veh_atk->is_visible(player_id);
+    bool def_visible = (faction_id_def == player_id && !veh_def->is_invisible_lurker())
+        || veh_def->is_visible(player_id);
+    int render_tile = (atk_visible || def_visible);
     if (Factions[player_id].diplo_status[faction_id_atk] & DIPLO_PACT) {
         if(*GamePreferences & PREF_BSC_DONT_QUICK_MOVE_ALLY_VEH) {
             render_battle |= render_tile;
@@ -1706,6 +1707,8 @@ int __cdecl mod_battle_fight_2(int veh_id_atk, int offset, int tx, int ty, int t
     assert(veh_atk->x != veh_def->x || veh_atk->y != veh_def->y);
     assert(veh_atk->faction_id != veh_def->faction_id);
     assert(veh_atk->is_probe() || veh_def->is_artifact() || at_war(faction_id_atk, faction_id_def));
+    // Fix: attacking units being revealed to the defender only when the battle was displayed to the current player.
+    veh_atk->visibility |= (1 << faction_id_def);
 
     if (combat_type == CT_CAN_ARTY) {
         assert(can_arty(veh_atk->unit_id, true));
@@ -1746,7 +1749,7 @@ int __cdecl mod_battle_fight_2(int veh_id_atk, int offset, int tx, int ty, int t
                     combat_type = 0;
                     *VehDrawAttackID = veh_id_atk;
                     *VehDrawDefendID = veh_id_def;
-                    veh_atk->visibility |= (1 << faction_id_def);
+                    // moved veh_atk visibility change before the battle
                     if (!Console_focus(MapWin, tx, ty, faction_id_atk)) {
                         draw_tile(x, y, 2);
                         draw_tile(tx, ty, 2);
@@ -1754,7 +1757,7 @@ int __cdecl mod_battle_fight_2(int veh_id_atk, int offset, int tx, int ty, int t
                     SubInterface_set_iface_mode(BattleWin);
                     BattleWin_clear(BattleWin);
                     StatusWin_draw(StatusWin, veh_id_atk, veh_id_def, offense_out, defense_out, 1);
-                    *dword_8C6B3C = 1;
+                    StatusWin->iface_state = 1;
                     flush_input();
                     if (!(veh_id_def >= 0 && damage_limit && veh_def->damage_taken == damage_limit
                     && veh_def->next_veh_id_stack >= 0)) {
@@ -1800,8 +1803,8 @@ int __cdecl mod_battle_fight_2(int veh_id_atk, int offset, int tx, int ty, int t
                 stack_veh(iter_veh_id, 2);
                 stack_kill(iter_veh_id);
                 iter_veh_id = stack_fix(veh_at(tx, ty));
-                f_atk->diplo_unk_3[faction_id_def]++;
-                f_atk->diplo_unk_4[faction_id_def]++;
+                f_atk->diplo_combat_total[faction_id_def]++;
+                f_atk->diplo_combat_count[faction_id_def]++;
             }
         }
         draw_tile_fixup(tx, ty, 1, 2);
@@ -1815,10 +1818,10 @@ int __cdecl mod_battle_fight_2(int veh_id_atk, int offset, int tx, int ty, int t
         add_goal(faction_id_def, AI_GOAL_PREV_DEFEND, 2, tx, ty, -1);
     }
     if (render_battle) {
-        if (*MultiplayerActive && *dword_6E8150) {
+        if (*MultiplayerActive && BaseWin->zoom_active) {
             render_base = 1;
         }
-        veh_atk->visibility |= (1 << faction_id_def);
+        // moved veh_atk visibility change before the battle
         *VehDrawAttackID = veh_id_atk;
         *VehDrawDefendID = veh_id_def;
         if (!Console_focus(MapWin, tx, ty, faction_id_atk)) {
@@ -1829,7 +1832,7 @@ int __cdecl mod_battle_fight_2(int veh_id_atk, int offset, int tx, int ty, int t
         SubInterface_set_iface_mode(BattleWin);
         BattleWin_clear(BattleWin);
         StatusWin_draw(StatusWin, veh_id_atk, veh_id_def, offense_out, defense_out, combat_type);
-        *dword_8C6B3C = 1;
+        StatusWin->iface_state = 1;
         flush_input();
         if (!shift_key_down() && !(combat_type & CT_CAN_ARTY)) {
             veh_scoot(veh_id_atk, x, y, offset, 1);
@@ -1848,7 +1851,7 @@ int __cdecl mod_battle_fight_2(int veh_id_atk, int offset, int tx, int ty, int t
             && veh_def->order != ORDER_HOLD
             && base_id < 0
             && !(sq_def->items & (BIT_AIRBASE|BIT_BUNKER))
-            && mod_stack_check(veh_id_def, 1, -1, -1, -1) == 1) {
+            && stack_check(veh_id_def, 1, -1, -1, -1) == 1) {
                 retreat_value = (veh_def->cur_hitpoints() + 1) / 2;
             }
         }
@@ -1921,16 +1924,16 @@ int __cdecl mod_battle_fight_2(int veh_id_atk, int offset, int tx, int ty, int t
             if (detach_value && veh_def->cur_hitpoints() > 0) {
                 detach_value -= veh_def_val;
                 if (detach_value <= 0 && combat_rand(100) < 50) {
-                    int capture_id = -1;
+                    const int capture_id = veh_def->faction_id;
                     if (veh_id_def >= 0) {
                         int iter_veh_id = veh_top(veh_id_def);
                         int iter_base_id = base_find(tx, ty);
                         while (iter_veh_id >= 0) {
                             VEH* veh = &Vehs[iter_veh_id];
-                            capture_id = veh->faction_id;
                             parse_says(0, veh->name(), -1, -1);
                             veh->faction_id = veh_atk->faction_id;
-                            if (Bases[iter_base_id].faction_id != veh_atk->faction_id
+                            if (iter_base_id < 0
+                            || Bases[iter_base_id].faction_id != veh_atk->faction_id
                             || Bases[iter_base_id].pop_size < 3) {
                                 veh->home_base_id = -1;
                             } else {
@@ -1939,7 +1942,7 @@ int __cdecl mod_battle_fight_2(int veh_id_atk, int offset, int tx, int ty, int t
                             debug("battle_fight detach %s -> %s\n", veh_atk->name(), veh->name());
                             veh_skip(iter_veh_id);
                             iter_veh_id = veh->next_veh_id_stack;
-                        };
+                        }
                     }
                     bit_set(tx, ty, BIT_SUPPLY_REMOVE, 1);
                     owner_set(tx, ty, veh_atk->faction_id);
@@ -1949,11 +1952,11 @@ int __cdecl mod_battle_fight_2(int veh_id_atk, int offset, int tx, int ty, int t
                         draw_tile(tx, ty, 2);
                     }
                     if (veh_atk->faction_id == player_id) {
-                        parse_says(1, MFactions[capture_id].adj_name_faction, -1, -1);
+                        parse_says(1, get_adjective(capture_id), -1, -1);
                         popp(ScriptFile, "WEMARINEDETACH", 0, "navun_sm.pcx", 0);
                     }
                     else if (capture_id == player_id) {
-                        parse_says(1, MFactions[veh_atk->faction_id].adj_name_faction, -1, -1);
+                        parse_says(1, get_adjective(veh_atk->faction_id), -1, -1);
                         popp(ScriptFile, "THEYMARINEDETACH", 0, "navun_sm.pcx", 0);
                     }
                     marine_detach = 1;
@@ -1970,7 +1973,7 @@ int __cdecl mod_battle_fight_2(int veh_id_atk, int offset, int tx, int ty, int t
                     int val1 = 0, val2 = 0;
                     for (auto& m : iterate_tiles(tx, ty, 1, 9)) {
                         if ((triad == TRIAD_AIR || (is_ocean(m.sq) == (triad == TRIAD_SEA)))
-                        && !mod_zoc_move(m.x, m.y, faction_id_def) && !goody_at(m.x, m.y)) {
+                        && !zoc_move(m.x, m.y, faction_id_def) && !goody_at(m.x, m.y)) {
                             int index = m.i - 1; // TableOffset -> BaseOffset
                             if (!m.sq->is_fungus()
                             || has_project(FAC_PHOLUS_MUTAGEN, faction_id_def)
@@ -2131,7 +2134,7 @@ int __cdecl mod_battle_fight_2(int veh_id_atk, int offset, int tx, int ty, int t
                 StrBuffer[0] = '\0';
                 say_stats_3(StrBuffer, veh_atk->unit_id);
                 parse_says(4, StrBuffer, -1, -1);
-                int tgt_base_id = base_find_3(tx, ty, -1, -1, -1, player_id);
+                int tgt_base_id = base_find_3(tx, ty, -1, -1, -1, faction_id_def);
                 if (tgt_base_id >= 0) {
                     parse_says(5, Bases[tgt_base_id].name, -1, -1);
                 }
@@ -2143,12 +2146,12 @@ int __cdecl mod_battle_fight_2(int veh_id_atk, int offset, int tx, int ty, int t
             }
             stack_veh(veh_id_atk, 1);
             battle_kill_stack(veh_id_atk, &num_killed, &num_relics, &credits_income, -1, faction_id_def);
-            f_def->diplo_unk_3[faction_id_atk]++;
-            f_def->diplo_unk_4[faction_id_atk]++;
+            f_def->diplo_combat_total[faction_id_atk]++;
+            f_def->diplo_combat_count[faction_id_atk]++;
             goto END_UPKEEP;
         }
-        f_atk->diplo_unk_3[faction_id_def]++;
-        f_atk->diplo_unk_4[faction_id_def]++;
+        f_atk->diplo_combat_total[faction_id_def]++;
+        f_atk->diplo_combat_count[faction_id_def]++;
         FactionCombatWin[faction_id_atk]++;
         FactionCombatLoss[faction_id_def]++;
         if (plr_multi || plr_pbem) {
@@ -2178,7 +2181,7 @@ int __cdecl mod_battle_fight_2(int veh_id_atk, int offset, int tx, int ty, int t
         || veh_atk->triad() == TRIAD_AIR
         || veh_atk->is_probe()
         || veh_def->plan() == PLAN_NAVAL_SUPERIORITY
-        || (!is_ocean(sq_def) && mod_stack_check(veh_id_def, 2, PLAN_COLONY, -1, -1))) {
+        || (!is_ocean(sq_def) && stack_check(veh_id_def, 2, PLAN_COLONY, -1, -1))) {
             if (!veh_def->is_artifact()) {
                 if (!faction_id_atk
                 || ((!veh_cargo(veh_id_def) || base_id >= 0 || veh_atk->is_probe())
@@ -2221,15 +2224,13 @@ int __cdecl mod_battle_fight_2(int veh_id_atk, int offset, int tx, int ty, int t
                 VEH* veh = &Vehs[iter_veh_id];
                 int next_veh_id = veh->next_veh_id_stack;
                 if (veh->cur_hitpoints() <= 0 || !veh->faction_id) {
-                    battle_kill(iter_veh_id, &num_killed, &num_relics, &credits_income, veh_id_atk, faction_id_atk);
-                    if (iter_veh_id == veh_id_def) {
-                        veh_id_def = -1;
-                    }
-                    if (iter_veh_id < veh_id_def) {
-                        veh_id_def--;
-                    }
-                    if (iter_veh_id < next_veh_id) {
-                        next_veh_id--;
+                    if (battle_kill(iter_veh_id, &num_killed, &num_relics, &credits_income, veh_id_atk, faction_id_atk)) {
+                        if (veh_id_atk > iter_veh_id) {
+                            veh_id_atk--;
+                        }
+                        if (next_veh_id > iter_veh_id) {
+                            next_veh_id--;
+                        }
                     }
                 }
                 iter_veh_id = next_veh_id;
@@ -2258,19 +2259,24 @@ int __cdecl mod_battle_fight_2(int veh_id_atk, int offset, int tx, int ty, int t
         && veh_who(tx, ty) < 0
         && (f_def->diff_level || !is_human(faction_id_def))) {
             base->pop_size--;
-            nerve_gas = 0;
-        }
-        if (nerve_gas) {
-            base->pop_size -= (base->pop_size + 1) / 2;
-            if (base->pop_size < 1 && is_objective(base_id)) {
-                base->pop_size = 1;
+            if (base->pop_size > 0) {
+                base->factions_pop_size_intel[faction_id_atk] = base->pop_size;
+            } else {
+                nerve_gas = 0;
             }
         }
         if (base->pop_size > 0) {
-            base->factions_pop_size_intel[faction_id_atk] = base->pop_size;
             if (!is_human(faction_id_def)) {
                 mod_base_reset(base_id, 0);
             }
+            if (nerve_gas) {
+                base->pop_size -= (base->pop_size + 1) / 2;
+                if (is_objective(base_id) && base->pop_size < 1) {
+                    base->pop_size = 1;
+                }
+            }
+        }
+        if (base->pop_size > 0) {
             if (nerve_gas) {
                 spot_base(base_id, faction_id_atk);
             }
@@ -2359,7 +2365,7 @@ END_BATTLE:
                 if (has_treaty(faction_id_atk, faction_id_def, DIPLO_VENDETTA)) {
                     snprintf(StrBuffer, StrBufLen, "THEIRBOOTY%d", clamp(num_relics, 1, 2));
                 } else { // Alien artifact captured
-                    parse_says(0, parse_set(faction_id_atk), -1, -1);
+                    parse_says(0, get_noun(faction_id_atk), -1, -1);
                     snprintf(StrBuffer, StrBufLen, "THEIRBOOTY3");
                 }
                 net_pop(StrBuffer, 0);
@@ -2369,6 +2375,7 @@ END_BATTLE:
                 net_pop(StrBuffer, 0);
             }
         }
+        // Fix 36. [BUG] Fixed a bug that would display NERVEGAS message even when attack on base failed.
         if (nerve_gas && strlen(base_name) && atk_alive) {
             parse_says(0, base_name, -1, -1);
             net_pop("NERVEGAS", 0);
@@ -2385,7 +2392,7 @@ END_BATTLE:
         StatusWin_redraw(StatusWin);
         if (render_base) {
             BaseWin_focus(BaseWin);
-            GraphicWin_redraw(MainWin);
+            GraphicWin_redraw(MainInfc);
             do_all_draws();
         }
         if (*GameMorePreferences & MPREF_ADV_PAUSE_AFTER_BATTLES) {
@@ -2401,17 +2408,17 @@ END_BATTLE:
     switch (treaty_report) {
     case 1:
         parse_says(0, m_atk->adj_name_faction, -1, -1);
-        parse_says(1, parse_set(faction_id_def), -1, -1);
+        parse_says(1, get_noun(faction_id_def), -1, -1);
         NetMsg_pop_2("VENDETTAREPORT", 0);
         break;
     case 2:
         parse_says(0, m_atk->adj_name_faction, -1, -1);
-        parse_says(1, parse_set(faction_id_def), -1, -1);
+        parse_says(1, get_noun(faction_id_def), -1, -1);
         NetMsg_pop_2("PACTATTACKED", 0);
         break;
     case 3:
-        parse_says(0, parse_set(faction_id_atk), -1, -1);
-        parse_says(1, parse_set(faction_id_def), -1, -1);
+        parse_says(0, get_noun(faction_id_atk), -1, -1);
+        parse_says(1, get_noun(faction_id_def), -1, -1);
         NetMsg_pop_2("PACTATTACKING", 0);
         break;
     }
@@ -2432,19 +2439,12 @@ END_BATTLE:
         // Fix: removed moves_spent increase after veh_skip is already called
         veh->flags &= ~VFLAG_FULL_MOVE_SKIPPED;
     }
-    // Fix: immediate return after veh is removed, adjust return value based on fuel status
+    // Fix: immediate return after veh is removed
     if (veh->is_missile()) {
         kill(*CurrentVehID);
         return 0;
     }
-    if (is_human(faction_id_atk)
-    || base_id < 0
-    || veh_who(tx, ty) >= 0
-    || veh->triad() != TRIAD_AIR
-    || veh_range == 0) {
-        return 1;
-    }
-    return (veh->movement_turns + 1 < veh_range);
+    return 1;
 }
 
 
