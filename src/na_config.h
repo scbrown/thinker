@@ -235,6 +235,18 @@ struct NaConfig {
     the fork — once per base per recompute — so it is off by default and stays that way.
     */
     int yield_observe = 0;
+    /*
+    Neural Amplifier: allow the OPERATOR verbs on the command channel (aegis-8fye.9). 0, the
+    default, refuses them.
+
+    Operator verbs are the ones a seat must never reach: the apply* family (apply, apply-tech,
+    apply-se, apply-hurry), which bypass the decision hook and write production, research,
+    social engineering and energy directly; and the fixture verbs (withdraw, unit-turn,
+    settle-mode, probe-withdrawal-demand, probe-foreign-unit), which rewrite game state or switch
+    A/B modes for a test. A seat plays through move/skip/build and the decision hook; anything
+    else on the channel is the operator's, and a run that wants it says so in thinker.ini.
+    */
+    int operator_verbs = 0;
 };
 
 /*

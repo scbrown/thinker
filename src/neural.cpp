@@ -9,6 +9,7 @@
 #include "gui_dialog.h"
 #include "faction.h"
 #include "lib/ini.h"
+#include "na_order_policy.h"
 
 /*
 The observation sink.
@@ -4695,20 +4696,42 @@ The turn check is the load-bearing one. This tick runs whenever the window pumps
 while another faction is being processed, so without it an agent could order units on someone
 else's turn — which the engine would in some cases happily do.
 */
+static NaPolicyState na_policy_state() {
+    NaPolicyState s;
+    s.halted = *GameHalted;
+    s.routed_mask = conf.na.llm_factions;
+    s.current_faction = *CurrentPlayerFaction;
+    s.operator_verbs = conf.na.operator_verbs;
+    return s;
+}
+
+// The decision itself lives in na_order_policy.h so it can be tested without a game.
 static bool na_order_gate(int faction_id, char* why, size_t n) {
-    if (*GameHalted) {
-        snprintf(why, n, "game is halted; retry");
-        return false;
+    return na_policy_order(na_policy_state(), faction_id, why, n);
+}
+
+/*
+Operator verbs (aegis-8fye.9): the apply* family and the fixture verbs. Refused with a reason
+unless na_operator_verbs=1. Checked before anything is parsed, so a refused seat gets no
+information about the board out of a validation message.
+*/
+static bool na_operator_gate(const char* verb) {
+    char why[160];
+    if (na_policy_operator(na_policy_state(), verb, why, sizeof(why))) {
+        return true;
     }
-    if (!llm_enabled(faction_id)) {
-        snprintf(why, n, "faction %d is not routed to the orchestrator (llm_factions)", faction_id);
-        return false;
+    na_cmd_result(verb, why, false);
+    return false;
+}
+
+// Gate an apply* verb on the faction DERIVED from its entity; reports the refusal itself.
+static bool na_apply_gate(const char* verb, int faction_id) {
+    char why[160];
+    if (na_order_gate(faction_id, why, sizeof(why))) {
+        return true;
     }
-    if (faction_id != *CurrentPlayerFaction) {
-        snprintf(why, n, "not faction %d's turn (current is %d)", faction_id, *CurrentPlayerFaction);
-        return false;
-    }
-    return true;
+    na_cmd_result(verb, why, false);
+    return false;
 }
 
 /*
@@ -6898,15 +6921,23 @@ void na_command_tick(void* hwnd_raw) {
     rather than unlikely. A rejected action leaves production untouched and says why.
     */
     if (strncmp(line, "apply ", 6) == 0) {
+        if (!na_operator_gate("apply")) {
+            return;
+        }
         int base_id = -1;
         char kind[32] = {};
         int id = -1;
         if (sscanf(line + 6, "%d %31[^:]:%d", &base_id, kind, &id) != 3
-        || base_id < 0 || base_id >= *BaseCount) {
+        || base_id < 0 || base_id >= *BaseCount || base_id >= MaxBaseNum) {
             na_cmd_result("apply", "expected: apply <base_id> unit:<n>|facility:<n>", false);
             return;
         }
+        // The base's OWNER, never a faction the caller names: a seat cannot set production in
+        // a base it does not own, and cannot act outside its own turn.
         const int fid = Bases[base_id].faction_id;
+        if (!na_apply_gate("apply", fid)) {
+            return;
+        }
         int item = 99999;
         if (strcmp(kind, "unit") == 0) {
             if (id < 0 || id >= MaxProtoNum
@@ -6962,11 +6993,19 @@ void na_command_tick(void* hwnd_raw) {
     accumulated points so a caller can see what is in flight rather than having to assume.
     */
     if (strncmp(line, "apply-tech ", 11) == 0) {
+        if (!na_operator_gate("apply-tech")) {
+            return;
+        }
         int fid = -1;
         int tech_id = -1;
         if (sscanf(line + 11, "%d tech:%d", &fid, &tech_id) != 2
         || fid <= 0 || fid >= MaxPlayerNum) {
             na_cmd_result("apply-tech", "expected: apply-tech <faction_id> tech:<n>", false);
+            return;
+        }
+        // The entity IS the faction, so the argument is used — but only a routed faction on its
+        // own turn passes, so naming someone else's faction is refused, not applied.
+        if (!na_apply_gate("apply-tech", fid)) {
             return;
         }
         if (tech_id < 0 || tech_id >= MaxTechnologyNum || !tech_avail(tech_id, fid)) {
@@ -7014,6 +7053,9 @@ void na_command_tick(void* hwnd_raw) {
     ignored, because a decision to hold is still a decision and coverage counts what fired.
     */
     if (strncmp(line, "apply-se ", 9) == 0) {
+        if (!na_operator_gate("apply-se")) {
+            return;
+        }
         int fid = -1;
         int field = -1;
         int model = -1;
@@ -7025,6 +7067,10 @@ void na_command_tick(void* hwnd_raw) {
         }
         if (fid <= 0 || fid >= MaxPlayerNum) {
             na_cmd_result("apply-se", "need 0 < faction_id < 8", false);
+            return;
+        }
+        // As apply-tech: the argument is checked against the faction whose turn it is.
+        if (!na_apply_gate("apply-se", fid)) {
             return;
         }
         Faction& plr = Factions[fid];
@@ -7100,6 +7146,9 @@ void na_command_tick(void* hwnd_raw) {
     how a faction gets free production.
     */
     if (strncmp(line, "apply-hurry ", 12) == 0) {
+        if (!na_operator_gate("apply-hurry")) {
+            return;
+        }
         int base_id = -1;
         char what[16] = {};
         if (sscanf(line + 12, "%d hurry:%15s", &base_id, what) != 2
@@ -7109,6 +7158,10 @@ void na_command_tick(void* hwnd_raw) {
             return;
         }
         BASE& base = Bases[base_id];
+        // The base's owner pays, so the base's owner is who must be on turn and routed.
+        if (!na_apply_gate("apply-hurry", base.faction_id)) {
+            return;
+        }
         Faction& plr = Factions[base.faction_id];
 
         if (strcmp(what, "none") == 0) {
@@ -7540,6 +7593,9 @@ void na_command_tick(void* hwnd_raw) {
     }
 
     if (strncmp(line, "unit-turn", 9) == 0) {
+        if (!na_operator_gate("unit-turn")) {
+            return;
+        }
         const char* arg = line + 9;
         while (*arg == ' ') {
             arg++;
@@ -7557,6 +7613,9 @@ void na_command_tick(void* hwnd_raw) {
     }
 
     if (strncmp(line, "settle-mode", 11) == 0) {
+        if (!na_operator_gate("settle-mode")) {
+            return;
+        }
         const char* arg = line + 11;
         while (*arg == ' ') {
             arg++;
@@ -7583,6 +7642,9 @@ void na_command_tick(void* hwnd_raw) {
         return;
     }
     if (strncmp(line, "probe-withdrawal-demand", 23) == 0) {
+        if (!na_operator_gate("probe-withdrawal-demand")) {
+            return;
+        }
         int faction = 0;
         int target = 0;
         if (sscanf(line + 23, "%d %d", &faction, &target) != 2
@@ -7607,6 +7669,9 @@ void na_command_tick(void* hwnd_raw) {
         return;
     }
     if (strncmp(line, "probe-foreign-unit", 18) == 0) {
+        if (!na_operator_gate("probe-foreign-unit")) {
+            return;
+        }
         int owner = 0;
         const int faction = *CurrentPlayerFaction;
         int veh_id = -1;
@@ -7665,6 +7730,9 @@ void na_command_tick(void* hwnd_raw) {
         return;
     }
     if (strncmp(line, "withdraw", 8) == 0) {
+        if (!na_operator_gate("withdraw")) {
+            return;
+        }
         const char* arg = line + 8;
         while (*arg == ' ') {
             arg++;
@@ -8433,7 +8501,8 @@ static const NaOption NaOptions[] = {
     {"na_tech_steal_observe", &NaConfig::tech_steal_observe},
     {"na_defend_goal_observe", &NaConfig::defend_goal_observe},
     {"na_name_observe", &NaConfig::name_observe},
-    {"na_yield_observe", &NaConfig::yield_observe},};
+    {"na_yield_observe", &NaConfig::yield_observe},
+    {"na_operator_verbs", &NaConfig::operator_verbs},};
 
 bool na_option_handler(Config* cf, const char* name, const char* value) {
     for (const NaOption& opt : NaOptions) {

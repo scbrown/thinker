@@ -121,3 +121,11 @@ set_target_properties(na_http_test PROPERTIES PREFIX "" SUFFIX ".exe")
 # with no output, which reads exactly like a hung test rather than a missing DLL.
 target_link_options(na_http_test PRIVATE -static)
 target_link_libraries(na_http_test PRIVATE ws2_32)
+
+# The seat order policy (aegis-8fye.9): header-only, no engine headers, so it
+# runs under Wine with no game the same way na_http_test does.
+add_executable(na_order_policy_test EXCLUDE_FROM_ALL
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/na_order_policy_test.cpp
+)
+set_target_properties(na_order_policy_test PROPERTIES PREFIX "" SUFFIX ".exe")
+target_link_options(na_order_policy_test PRIVATE -static)
