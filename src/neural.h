@@ -515,6 +515,11 @@ its decision would have been raised, and then it never is.
 */
 void na_announce_turn();
 
+// The per-faction policy overlay as last received with a /turn reply (na_policy.h). Only for
+// factions with an LLM seat on an AI slot; every other entry is the empty overlay.
+struct NaPolicy;
+extern NaPolicy na_policy[];
+
 /*
 The faction economy totals are zeroed and re-accumulated per base inside
 mod_production_phase, and mod_base_build fires inside that window. These bracket it so
