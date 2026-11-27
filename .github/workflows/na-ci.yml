@@ -44,6 +44,8 @@ jobs:
         run: |
           python3 tests/check_native_choice_withheld.py
           python3 tests/check_defer_recognised.py
+      - name: Policy overlay registry mirrors the orchestrator and stays write-only
+        run: python3 tests/check_na_policy_registry.py
 
   build:
     name: MinGW cross-compile (thinker.dll + thinker.exe)

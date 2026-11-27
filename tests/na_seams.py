@@ -14,7 +14,7 @@ import re
 
 # Files that are entirely ours. Nothing in them can be lost to a merge, so
 # nothing in them is a seam.
-OURS = {"neural.cpp", "na_http.cpp"}
+OURS = {"neural.cpp", "na_http.cpp", "na_policy.cpp"}
 
 # A function definition at file scope: starts in column 0, has a parameter list,
 # and is not a declaration (no trailing semicolon). Indented code (if/while/else,
