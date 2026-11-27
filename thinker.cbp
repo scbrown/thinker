@@ -80,6 +80,8 @@
 		<Unit filename="src/build.h" />
 		<Unit filename="src/config.cpp" />
 		<Unit filename="src/config.h" />
+		<Unit filename="src/council.cpp" />
+		<Unit filename="src/council.h" />
 		<Unit filename="src/debug.cpp" />
 		<Unit filename="src/debug.h" />
 		<Unit filename="src/engine.cpp" />
@@ -92,10 +94,18 @@
 		<Unit filename="src/engine_win.h" />
 		<Unit filename="src/faction.cpp" />
 		<Unit filename="src/faction.h" />
+		<Unit filename="src/faction_diplo.cpp" />
+		<Unit filename="src/faction_diplo.h" />
+		<Unit filename="src/faction_event.cpp" />
+		<Unit filename="src/faction_event.h" />
+		<Unit filename="src/faction_talk.cpp" />
+		<Unit filename="src/faction_talk.h" />
 		<Unit filename="src/game.cpp" />
 		<Unit filename="src/game.h" />
 		<Unit filename="src/gameturn.cpp" />
 		<Unit filename="src/gameturn.h" />
+		<Unit filename="src/gamewin.cpp" />
+		<Unit filename="src/gamewin.h" />
 		<Unit filename="src/goal.cpp" />
 		<Unit filename="src/goal.h" />
 		<Unit filename="src/gui.cpp" />
@@ -113,6 +123,8 @@
 		<Unit filename="src/map.h" />
 		<Unit filename="src/mapgen.cpp" />
 		<Unit filename="src/mapgen.h" />
+		<Unit filename="src/monument.cpp" />
+		<Unit filename="src/monument.h" />
 		<Unit filename="src/move.cpp" />
 		<Unit filename="src/move.h" />
 		<Unit filename="src/net.cpp" />
@@ -131,6 +143,8 @@
 		<Unit filename="src/random.h" />
 		<Unit filename="src/savegame.cpp" />
 		<Unit filename="src/savegame.h" />
+		<Unit filename="src/score.cpp" />
+		<Unit filename="src/score.h" />
 		<Unit filename="src/strings.cpp" />
 		<Unit filename="src/strings.h" />
 		<Unit filename="src/tech.cpp" />

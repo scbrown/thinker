@@ -347,16 +347,18 @@ int __cdecl action_terraform(int veh_id, int item_id, int toggle) {
     if (item_id == FORMER_RAISE_LAND || item_id == FORMER_LOWER_LAND || item_id == FORMER_CONDENSER) {
         if (*dword_9B22E0 >= 0) {
             parse_says(0, Bases[*dword_9B22E0].name, -1, -1);
-            parse_says(1, MFactions[faction_id].adj_name_faction, -1, -1);
+            parse_says(1, get_adjective(faction_id), -1, -1);
             if (faction_id == player_id) {
                 NetMsg_pop(NetMsg, "TERRAMINE", 5000, 0, 0);
             } else if (base_find_2(x, y, player_id) >= 0 && *BaseFindDist < 6) {
                 NetMsg_pop(NetMsg, "TERRAYOURS", 5000, 0, 0);
             }
         }
-        if (MapBaseIdClosestSubmergedVeh[player_id] >= 0) {
-            parse_says(0, Bases[MapBaseIdClosestSubmergedVeh[faction_id]].name, -1, -1);
-            parse_says(1, MFactions[faction_id].adj_name_faction, -1, -1);
+        // Fix: use only the current faction for MapBaseIdClosestSubmergedVeh
+        int near_base_id = MapBaseIdClosestSubmergedVeh[player_id];
+        if (near_base_id >= 0 && item_id != FORMER_CONDENSER) {
+            parse_says(0, Bases[near_base_id].name, -1, -1);
+            parse_says(1, get_adjective(faction_id), -1, -1);
             if (faction_id == player_id) {
                 NetMsg_pop(NetMsg, "DROWNMINE", 5000, 0, 0);
             } else {
@@ -623,7 +625,7 @@ void __cdecl action_destroy(int veh_id, int tgt_item, int tgt_x, int tgt_y) {
     } else {
         if (mapsq(tx, ty)->base_who() >= 0) {
             if (faction_id == player_id) {
-                boom(tx, ty, 128);
+                boom_veh(tx, ty, 0x80, veh_id);
             }
             return;
         }
@@ -643,10 +645,10 @@ void __cdecl action_destroy(int veh_id, int tgt_item, int tgt_x, int tgt_y) {
         }
         if (!skip_boom) {
             if (faction_id && faction_id != player_id) {
-                boom(tx, ty, 128);
-                boom(veh->x, veh->y, 128);
+                boom_veh(tx, ty, 0x80, veh_id);
+                boom_veh(veh->x, veh->y, 0x80, veh_id);
             }
-            boom(tx, ty, 128);
+            boom_veh(tx, ty, 0x80, veh_id);
         }
         int owner = whose_territory(faction_id, tx, ty, 0, 0);
         if (owner != faction_id) {
@@ -656,7 +658,7 @@ void __cdecl action_destroy(int veh_id, int tgt_item, int tgt_x, int tgt_y) {
                 if (on_map(px, py) && map_range(veh->x, veh->y, px, py) <= 2) {
                     int stack_id = stack_fix(veh_at(px, py));
                     if (stack_id >= 0) {
-                        if (mod_stack_check(stack_id, 15, owner, -1, -1)) {
+                        if (stack_check(stack_id, 15, owner, -1, -1)) {
                             mod_battle_fight(veh_id, i, 1, 1, 0);
                             return;
                         }
@@ -747,11 +749,9 @@ void __cdecl action_destroy(int veh_id, int tgt_item, int tgt_x, int tgt_y) {
                 add_goal(owner, AI_GOAL_ATTACK, 5, veh->x, veh->y, -1);
                 if (owner == player_id) {
                     int base_id = base_find_3(tx, ty, -1, -1, -1, player_id);
-                    *GenderDefault = MFactions[faction_id].noun_gender;
-                    *PluralDefault = MFactions[faction_id].is_noun_plural;
-                    parse_says(0, MFactions[faction_id].noun_faction, -1, -1);
+                    parse_says(0, get_noun(faction_id), -1, -1);
                     parse_says(1, base_id >= 0 ? Bases[base_id].name : "", -1, -1);
-                    parse_says(3, MFactions[faction_id].adj_name_faction, -1, -1);
+                    parse_says(3, get_adjective(faction_id), -1, -1);
                     const char* msg = is_bombard ? "HAVEDESTROYED1" : "HAVEDESTROYED";
                     NetMsg_pop(NetMsg, msg, 5000, 0, 0);
                 }
@@ -995,7 +995,7 @@ int __cdecl action_airdrop(int veh_id, int tx, int ty, int flags) {
                 int base_id = base_at(px, py);
                 if (base_id >= 0) {
                     if (has_facility(FAC_AEROSPACE_COMPLEX, base_id)
-                    || mod_stack_check(veh_at(px, py), 2, PLAN_AIR_SUPERIORITY, -1, -1)) {
+                    || stack_check(veh_at(px, py), 2, PLAN_AIR_SUPERIORITY, -1, -1)) {
                         if ((*VehAttackFlags & 1) && faction_id == player_id) {
                             parse_says(0, Bases[base_id].name, -1, -1);
                             NetMsg_pop(NetMsg, "AIRDEFENSES", -5000, 0,
@@ -1066,13 +1066,10 @@ int __cdecl action_airdrop(int veh_id, int tx, int ty, int flags) {
         return 0;
     }
     if (is_visible && faction_id != player_id) {
-        int base_id = base_find_3(tx, ty, -1, -1, -1, 1);
-        if (base_id >= 0) {
-            parse_says(0, Bases[base_id].name, -1, -1);
-        }
-        *GenderDefault = MFactions[faction_id].noun_gender;
-        *PluralDefault = MFactions[faction_id].is_noun_plural;
-        parse_says(1, MFactions[faction_id].noun_faction, -1, -1);
+        // Fix: check for bases visible to player_id instead of unrelated faction slot
+        int base_id = base_find_3(tx, ty, -1, -1, -1, player_id);
+        parse_says(0, base_id >= 0 ? Bases[base_id].name : "", -1, -1);
+        parse_says(1, get_noun(faction_id), -1, -1);
         if (drop_range(faction_id) >= Rules->max_airdrop_rng_wo_orbital_insert) {
             popp(ScriptFile, "MADEORBITAL", 0, image_drop, 0);
         } else {
@@ -1096,7 +1093,7 @@ int __cdecl action_airdrop(int veh_id, int tx, int ty, int flags) {
     for (int v = veh_top(veh_id); v >= 0; v = Vehs[v].next_veh_id_stack) {
         if (v != veh_id) { veh_skip(v); }
     }
-    if (veh_id == MapWin->iUnit && MapWin->fUnitNotViewMode) {
+    if (veh_id == MapWin->VehID && MapWin->InVehMode) {
         Console_cursor_next(MapWin, tx, ty);
     }
     stack_put(veh_id, tx, ty);
@@ -1118,7 +1115,7 @@ int __cdecl action_airdrop(int veh_id, int tx, int ty, int flags) {
     spot_all(veh_id, 1);
     Console_update_data(MapWin, 0);
     if (goody_val) {
-        mod_goody_box(veh_id);
+        goody_box(veh_id);
     }
     if (faction_id != player_id && !(*GameState & STATE_OMNISCIENT_VIEW)
     && is_visible && !MapWin->field_23BF0 && !shift_key_down() && !*MultiplayerActive) {
@@ -1175,7 +1172,7 @@ void __cdecl action_destruct(int veh_id) {
     VEH* veh = &Vehs[veh_id];
     int vx = veh->x;
     int vy = veh->y;
-    boom(vx, vy, 0);
+    boom_veh(vx, vy, 0, veh_id);
     int weapon_val = weap_val(veh->unit_id, veh->faction_id);
     int blast_damage = clamp(weapon_val, 1, 20) * Units[veh->unit_id].reactor_id / 2;
     kill(veh_id);
@@ -1213,20 +1210,19 @@ void __cdecl action_oblit(int veh_id, int base_id) {
     BASE* base = &Bases[base_id];
     int faction_id = veh->faction_id;
     int faction_id_fmr = base->faction_id_former;
-    parse_num(0, 10 * base->pop_size);
-    parse_says(0, base->name, -1, -1);
-    *PluralDefault = 0;
-    *GenderDefault = MFactions[player_id].is_leader_female;
-    parse_says(1, MFactions[player_id].title_leader, -1, -1);
-    parse_says(2, MFactions[faction_id_fmr].adj_name_faction, -1, -1);
-    *PluralDefault = 0;
-    *GenderDefault = MFactions[faction_id].is_leader_female;
-    parse_says(3, MFactions[faction_id].title_leader, -1, -1);
-    parse_says(4, MFactions[faction_id].name_leader, -1, -1);
-
+    int pop_num = 10 * base->pop_size;
+    char name[StrBufLen];
+    snprintf(name, StrBufLen, "%s", base->name);
     bool is_visible = (base->faction_id == player_id) || (base->visibility & (1 << player_id));
     mod_base_kill(base_id);
     draw_map(1);
+    // Fix: base obliterate popup sometimes did not display the proper base name
+    parse_num(0, pop_num);
+    parse_says(0, name, -1, -1);
+    parse_says(1, get_title(player_id), -1, -1);
+    parse_says(2, get_adjective(faction_id_fmr), -1, -1);
+    parse_says(3, get_title(faction_id), -1, -1);
+    parse_says(4, get_name(faction_id), -1, -1);
 
     if (faction_id == player_id) {
         popp(ScriptFile, "OBLITTED", 0, "baseobl_sm.pcx", 0);
@@ -1360,10 +1356,10 @@ int  __cdecl shoot_it(int faction_id_atk, int faction_id_def, int tx, int ty, in
         parse_num(0, plr_def->satellites_ODP);
         parse_num(1, remaining_odp);
         if (faction_id_def == player_id) {
-            parse_says(1, MFactions[faction_id_atk].adj_name_faction, -1, -1);
+            parse_says(1, get_adjective(faction_id_atk), -1, -1);
             popp(ScriptFile, label_we_shot, 0, "space_sm.pcx", 0);
         } else if (faction_id_atk == player_id) {
-            parse_says(1, MFactions[faction_id_def].adj_name_faction, -1, -1);
+            parse_says(1, get_adjective(faction_id_def), -1, -1);
             popp(ScriptFile, label_they_shot, 0, "space_sm.pcx", 0);
         }
     };
@@ -1379,10 +1375,10 @@ int  __cdecl shoot_it(int faction_id_atk, int faction_id_def, int tx, int ty, in
                 if (game_rand() % 100 < MissileDefendChance) {
                     parse_says(0, Bases[base_id].name, -1, -1);
                     if (faction_id_def == player_id) {
-                        parse_says(1, MFactions[faction_id_atk].adj_name_faction, -1, -1);
+                        parse_says(1, get_adjective(faction_id_atk), -1, -1);
                         popp(ScriptFile, flag ? "FWESHOTIT2" : "TWESHOTIT2", 0, "space_sm.pcx", 0);
                     } else if (faction_id_atk == player_id) {
-                        parse_says(1, MFactions[Bases[base_id].faction_id].adj_name_faction, -1, -1);
+                        parse_says(1, get_adjective(Bases[base_id].faction_id), -1, -1);
                         popp(ScriptFile, flag ? "FTHEYSHOTIT2" : "TTHEYSHOTIT2", 0, "space_sm.pcx", 0);
                     }
                     return 1;
@@ -1395,9 +1391,7 @@ int  __cdecl shoot_it(int faction_id_atk, int faction_id_def, int tx, int ty, in
             if (faction_id_def == player_id) {
                 popp(ScriptFile, flag ? "FWEMUSTSAC" : "TWEMUSTSAC", 0, "space_sm.pcx", 0);
             } else if (faction_id_atk == player_id) {
-                *GenderDefault = MFactions[faction_id_def].noun_gender;
-                *PluralDefault = MFactions[faction_id_def].is_noun_plural;
-                parse_says(0, MFactions[faction_id_def].noun_faction, -1, -1);
+                parse_says(0, get_noun(faction_id_def), -1, -1);
                 popp(ScriptFile, "THEYMUSTSAC", 0, "space_sm.pcx", 0);
             }
             plr_def->satellites_ODP--;
@@ -1412,7 +1406,7 @@ int  __cdecl shoot_it(int faction_id_atk, int faction_id_def, int tx, int ty, in
                 parse_num(0, plr_def->satellites_ODP);
                 int base_id = base_find(tx, ty);
                 parse_says(0, base_id >= 0 ? Bases[base_id].name : "", -1, -1);
-                parse_says(1, MFactions[faction_id_atk].adj_name_faction, -1, -1);
+                parse_says(1, get_adjective(faction_id_atk), -1, -1);
                 int value = popp(ScriptFile, flag ? "FUNGALSAC" : "TECTONICSAC", 0, "space_sm.pcx", 0);
                 if (!value) {
                     plr_def->satellites_ODP--;
@@ -1425,10 +1419,10 @@ int  __cdecl shoot_it(int faction_id_atk, int faction_id_def, int tx, int ty, in
                 } else {
                     if (has_flechette) {
                         if (faction_id_def == player_id) {
-                            parse_says(1, MFactions[faction_id_atk].adj_name_faction, -1, -1);
+                            parse_says(1, get_adjective(faction_id_atk), -1, -1);
                             popp(ScriptFile, "WEFAILEDFLECHETTE", 0, "space_sm.pcx", 0);
                         } else if (faction_id_atk == player_id) {
-                            parse_says(1, MFactions[faction_id_def].adj_name_faction, -1, -1);
+                            parse_says(1, get_adjective(faction_id_def), -1, -1);
                             popp(ScriptFile, "THEYFAILEDFLECHETTE", 0, "space_sm.pcx", 0);
                         }
                     }
@@ -1439,10 +1433,10 @@ int  __cdecl shoot_it(int faction_id_atk, int faction_id_def, int tx, int ty, in
     }
     if (has_flechette) {
         if (faction_id_def == player_id) {
-            parse_says(1, MFactions[faction_id_atk].adj_name_faction, -1, -1);
+            parse_says(1, get_adjective(faction_id_atk), -1, -1);
             popp(ScriptFile, "WEFAILEDFLECHETTE", 0, "space_sm.pcx", 0);
         } else if (faction_id_atk == player_id) {
-            parse_says(1, MFactions[faction_id_def].adj_name_faction, -1, -1);
+            parse_says(1, get_adjective(faction_id_def), -1, -1);
             popp(ScriptFile, "THEYFAILEDFLECHETTE", 0, "space_sm.pcx", 0);
         }
     }
@@ -1456,7 +1450,7 @@ void  __cdecl action_tectonic(int veh_id, int tx, int ty) {
     const int range = TableRange[reactor_id];
     const int tgt_base_id = base_find(tx, ty);
     int is_visible = 0;
-    FX_play2(Sounds, 83, Vehs[veh_id].x, Vehs[veh_id].y);
+    FX_play_loc(Sounds, 83, Vehs[veh_id].x, Vehs[veh_id].y);
 
     if (faction_id_atk != player_id) {
         if (!(Factions[player_id].player_flags & PFLAG_MAP_REVEALED)) {
@@ -1475,13 +1469,9 @@ void  __cdecl action_tectonic(int veh_id, int tx, int ty) {
     }
     kill(veh_id);
     if (faction_id_atk != player_id && tgt_base_id >= 0) {
-        *GenderDefault = MFactions[faction_id_atk].is_leader_female;
-        *PluralDefault = 0;
-        parse_says(0, MFactions[faction_id_atk].title_leader, -1, -1);
-        parse_says(1, MFactions[faction_id_atk].name_leader, -1, -1);
-        *GenderDefault = MFactions[faction_id_atk].noun_gender;
-        *PluralDefault = MFactions[faction_id_atk].is_noun_plural;
-        parse_says(2, MFactions[faction_id_atk].noun_faction, -1, -1);
+        parse_says(0, get_title(faction_id_atk), -1, -1);
+        parse_says(1, get_name(faction_id_atk), -1, -1);
+        parse_says(2, get_noun(faction_id_atk), -1, -1);
         parse_says(3, Bases[tgt_base_id].name, -1, -1);
         popp(ScriptFile, "TECTONICMISSILE", 0, "tectonic_sm.pcx", 0);
     }
@@ -1520,13 +1510,9 @@ void  __cdecl action_tectonic(int veh_id, int tx, int ty) {
         draw_map(1);
         if (is_visible) {
             parse_says(0, Bases[tgt_base_id].name, -1, -1);
-            *GenderDefault = MFactions[faction_id_atk].is_leader_female;
-            *PluralDefault = 0;
-            parse_says(1, MFactions[faction_id_atk].title_leader, -1, -1);
-            parse_says(2, MFactions[faction_id_atk].name_leader, -1, -1);
-            *GenderDefault = MFactions[faction_id_atk].noun_gender;
-            *PluralDefault = MFactions[faction_id_atk].is_noun_plural;
-            parse_says(3, MFactions[faction_id_atk].noun_faction, -1, -1);
+            parse_says(1, get_title(faction_id_atk), -1, -1);
+            parse_says(2, get_name(faction_id_atk), -1, -1);
+            parse_says(3, get_noun(faction_id_atk), -1, -1);
             popp(ScriptFile, "TECMOFIED", 0, "tectonic_sm.pcx", 0);
         }
         TectonicDetonationCount[faction_id_atk]++;
@@ -1540,17 +1526,13 @@ void  __cdecl action_fungal(int veh_id, int tx, int ty) {
     const int unit_id = Vehs[veh_id].unit_id;
     const int tgt_base_id = base_find(tx, ty);
     int is_visible = 0;
-    FX_play2(Sounds, 84, Vehs[veh_id].x, Vehs[veh_id].y);
+    FX_play_loc(Sounds, 84, Vehs[veh_id].x, Vehs[veh_id].y);
     kill(veh_id);
 
     if (faction_id_atk != player_id && tgt_base_id >= 0) {
-        *GenderDefault = MFactions[faction_id_atk].is_leader_female;
-        *PluralDefault = 0;
-        parse_says(0, MFactions[faction_id_atk].title_leader, -1, -1);
-        parse_says(1, MFactions[faction_id_atk].name_leader, -1, -1);
-        *GenderDefault = MFactions[faction_id_atk].noun_gender;
-        *PluralDefault = MFactions[faction_id_atk].is_noun_plural;
-        parse_says(2, MFactions[faction_id_atk].noun_faction, -1, -1);
+        parse_says(0, get_title(faction_id_atk), -1, -1);
+        parse_says(1, get_name(faction_id_atk), -1, -1);
+        parse_says(2, get_noun(faction_id_atk), -1, -1);
         parse_says(3, Bases[tgt_base_id].name, -1, -1);
         popp(ScriptFile, "FUNGALMISSILE", 0, "fungpayld_sm.pcx", 0);
     }
@@ -1634,13 +1616,9 @@ void  __cdecl action_fungal(int veh_id, int tx, int ty) {
 
         if (is_visible) {
             parse_says(0, Bases[tgt_base_id].name, -1, -1);
-            *PluralDefault = 0;
-            *GenderDefault = MFactions[faction_id_atk].is_leader_female;
-            parse_says(1, MFactions[faction_id_atk].title_leader, -1, -1);
-            parse_says(2, MFactions[faction_id_atk].name_leader, -1, -1);
-            *GenderDefault = MFactions[faction_id_atk].noun_gender;
-            *PluralDefault = MFactions[faction_id_atk].is_noun_plural;
-            parse_says(3, MFactions[faction_id_atk].noun_faction, -1, -1);
+            parse_says(1, get_title(faction_id_atk), -1, -1);
+            parse_says(2, get_name(faction_id_atk), -1, -1);
+            parse_says(3, get_noun(faction_id_atk), -1, -1);
             popp(ScriptFile, "FUNGMOTIZED", 0, "fungpayld_sm.pcx", 0);
         }
     }
@@ -1731,13 +1709,9 @@ void __cdecl action_give(int veh_id, int faction_id_tgt) {
     draw_radius(vx, vy, 3, 2);
     if (faction_id_tgt == player_id) {
         parse_says(0, Units[veh->unit_id].name, -1, -1);
-        *PluralDefault = 0;
-        *GenderDefault = MFactions[faction_id].is_leader_female;
-        parse_says(1, MFactions[faction_id].title_leader, -1, -1);
-        parse_says(2, MFactions[faction_id].name_leader, -1, -1);
-        *PluralDefault = MFactions[faction_id].is_noun_plural;
-        *GenderDefault = MFactions[faction_id].noun_gender;
-        parse_says(3, MFactions[faction_id].noun_faction, -1, -1);
+        parse_says(1, get_title(faction_id), -1, -1);
+        parse_says(2, get_name(faction_id), -1, -1);
+        parse_says(3, get_noun(faction_id), -1, -1);
         Console_focus(MapWin, vx, vy, faction_id);
         int near_id = base_find(vx, vy);
         if (near_id >= 0) {
@@ -1752,9 +1726,7 @@ void __cdecl action_give(int veh_id, int faction_id_tgt) {
             }
         }
     } else if (faction_id == player_id) {
-        *PluralDefault = MFactions[faction_id_tgt].is_noun_plural;
-        *GenderDefault = MFactions[faction_id_tgt].noun_gender;
-        parse_says(3, MFactions[faction_id_tgt].noun_faction, -1, -1);
+        parse_says(3, get_noun(faction_id_tgt), -1, -1);
         if (faction_id_tgt) {
             NetMsg_pop(NetMsg, "GAVEUNIT", 5000, 0, 0);
         } else {
@@ -1776,7 +1748,7 @@ void __cdecl action_gate(int veh_id, int base_id) {
         draw_tile(Bases[src_base_id].x, Bases[src_base_id].y, 2);
     }
     draw_tile(tgt->x, tgt->y, 2);
-    if (veh_id == MapWin->iUnit) {
+    if (veh_id == MapWin->VehID) {
         Console_focus(MapWin, veh->x, veh->y, veh->faction_id);
     }
 }
@@ -1889,10 +1861,7 @@ int __cdecl order_veh(int veh_id, int offset, int flag) {
                 parse_says(0, Bases[base_id].name, -1, -1);
                 Popup_start(&cur_popup, "SCRIPT", "ARTIFACT", -1, 0, 0, 0);
                 int w = 0, h = 0;
-                if (!Buffer_get_pcx_dimensions("art_dis_sm.pcx", &w, &h)
-                && !Sprite_init(&cur_popup.sprite, "art_dis_sm.pcx", w, h)) {
-                    cur_popup.field_2144 = &cur_popup.sprite;
-                }
+                Popup_init_icon(&cur_popup, "art_dis_sm.pcx", &w, &h);
                 parse_num(0, Bases[base_id].minerals_accumulated);
                 int item_id = Bases[base_id].queue_items[0];
                 int cost;
@@ -2007,8 +1976,8 @@ int __cdecl order_veh(int veh_id, int offset, int flag) {
                 if (Factions[veh_fc_id].diplo_status[tgt_fc_id] & DIPLO_PACT) {
                     if (!move_delay && veh_fc_id == MapWin->cOwner) {
                         if (base_id < 0) {
-                            if (mod_stack_check(stack_veh_id, 2, PLAN_PROBE, tgt_fc_id, -1)) {
-                                parse_says(0, MFactions[tgt_fc_id].adj_name_faction, -1, -1);
+                            if (stack_check(stack_veh_id, 2, PLAN_PROBE, tgt_fc_id, -1)) {
+                                parse_says(0, get_adjective(tgt_fc_id), -1, -1);
                                 if (X_pop("PROBEPACTTEAM", 0)) {
                                     Vehs[veh_id].flags |= VFLAG_PROBE_PACT_OPERATIONS;
                                 } else {
@@ -2017,7 +1986,7 @@ int __cdecl order_veh(int veh_id, int offset, int flag) {
                             }
                         } else {
                             parse_says(0, Bases[base_id].name, -1, -1);
-                            parse_says(1, MFactions[tgt_fc_id].adj_name_faction, -1, -1);
+                            parse_says(1, get_adjective(tgt_fc_id), -1, -1);
                             if (X_pop("PROBEPACT", 0)) {
                                 Vehs[veh_id].flags |= VFLAG_PROBE_PACT_OPERATIONS;
                             } else {
@@ -2030,7 +1999,7 @@ int __cdecl order_veh(int veh_id, int offset, int flag) {
             if (check) {
                 if (base_id < 0) {
                     if (!(Factions[veh_fc_id].diplo_status[tgt_fc_id] & DIPLO_PACT)
-                    && (stack_veh_id < 0 || !mod_stack_check(stack_veh_id, 2, PLAN_PROBE, -1, -1))) {
+                    && (stack_veh_id < 0 || !stack_check(stack_veh_id, 2, PLAN_PROBE, -1, -1))) {
                         move_probe = 1;
                         if (probe(veh_id, -1, stack_veh_id, 1) && *MultiplayerActive
                         && !*ControlTurnC && *VehAttackFlags & 1 && !(*VehAttackFlags & 2)) {
@@ -2045,7 +2014,7 @@ int __cdecl order_veh(int veh_id, int offset, int flag) {
                             tgt_fc_id = Vehs[stack_veh_id].faction_id;
                         }
                     }
-                } else if ((stack_veh_id < 0 || !mod_stack_check(stack_veh_id, 2, PLAN_PROBE, -1, -1))
+                } else if ((stack_veh_id < 0 || !stack_check(stack_veh_id, 2, PLAN_PROBE, -1, -1))
                 && (is_human(veh_fc_id) || !(Factions[veh_fc_id].diplo_status[tgt_fc_id] & DIPLO_PACT)
                 || (Vehs[veh_id].waypoint_x[0] == Bases[base_id].x && Vehs[veh_id].waypoint_y[0] == Bases[base_id].y))) {
                     if (tgt_fc_id == MapWin->cOwner) {
@@ -2070,21 +2039,21 @@ int __cdecl order_veh(int veh_id, int offset, int flag) {
         }
         if (veh_triad == TRIAD_LAND && tgt_at_sea) {
             if (veh_fc_id == tgt_fc_id || Factions[veh_fc_id].diplo_status[tgt_fc_id] & DIPLO_PACT) {
-                if (mod_stack_check(stack_veh_id, 8, veh_fc_id, -1, -1) <= 0) {
+                if (stack_check(stack_veh_id, 8, veh_fc_id, -1, -1) <= 0) {
                     if (base_id < 0
                     || (!has_abil(Vehs[veh_id].unit_id, ABL_AMPHIBIOUS)
-                    && !mod_stack_check(stack_veh_id, 2, 7, -1, -1)
-                    && !mod_stack_check(veh_id, 2, 7, -1, -1))) {
+                    && !stack_check(stack_veh_id, 2, 7, -1, -1)
+                    && !stack_check(veh_id, 2, 7, -1, -1))) {
                         if (base_id >= 0
-                        && !mod_stack_check(stack_veh_id, 2, 7, -1, -1)
-                        && !mod_stack_check(veh_id, 2, 7, -1, -1)) {
+                        && !stack_check(stack_veh_id, 2, 7, -1, -1)
+                        && !stack_check(veh_id, 2, 7, -1, -1)) {
                             if (veh_fc_id == MapWin->cOwner && *VehAttackFlags & 1) {
                                 parse_says(0, Ability[abil_index(8)].name, -1, -1);
                                 NetMsg_pop(NetMsg, "AMPHIBBASE2", 5000, 0, 0);
                             }
                             goto MOV_END;
                         }
-                        int stack_val = mod_stack_check(stack_veh_id, 2, 7, -1, -1);
+                        int stack_val = stack_check(stack_veh_id, 2, 7, -1, -1);
                         if (stack_val && veh_fc_id == MapWin->cOwner && *VehAttackFlags & 1) {
                             if (stack_val <= 1) {
                                 NetMsg_pop(NetMsg, "FULLTRANSPORT", 5000, 0, 0);
@@ -2109,8 +2078,8 @@ int __cdecl order_veh(int veh_id, int offset, int flag) {
             } else {
                 if (stack_veh_id < 0
                 || !has_abil(Vehs[veh_id].unit_id, ABL_AIR_SUPERIORITY)
-                || !mod_stack_check(stack_veh_id, 18, -1, -1, -1)
-                || mod_stack_check(stack_veh_id, 6, ABL_CARRIER, -1, -1)) {
+                || !stack_check(stack_veh_id, 18, -1, -1, -1)
+                || stack_check(stack_veh_id, 6, ABL_CARRIER, -1, -1)) {
                     goto MOV_END;
                 }
                 goto MOV_SPOT;
@@ -2121,8 +2090,8 @@ int __cdecl order_veh(int veh_id, int offset, int flag) {
             && Vehs[veh_id].plan() != PLAN_PROBE
             && !(Units[Vehs[veh_id].unit_id].ability_flags & ABL_CLOAKED)
             && stack_veh_id < 0
-            && mod_zoc_move(veh_x, veh_y, veh_fc_id)
-            && mod_zoc_move(tgt_x, tgt_y, veh_fc_id)) {
+            && zoc_move(veh_x, veh_y, veh_fc_id)
+            && zoc_move(tgt_x, tgt_y, veh_fc_id)) {
                 if (veh_fc_id != MapWin->cOwner || move_delay || !(*VehAttackFlags & 1)) {
                     goto MOV_END;
                 }
@@ -2244,7 +2213,7 @@ int __cdecl order_veh(int veh_id, int offset, int flag) {
                 bit_set(tgt_x, tgt_y, BIT_SUPPLY_REMOVE, 1);
                 if (veh_fc_id == MapWin->cOwner) {
                     FX_play(Sounds, 13);
-                    parse_says(0, MFactions[tgt_fc_id].adj_name_faction, -1, -1);
+                    parse_says(0, get_adjective(tgt_fc_id), -1, -1);
                     parse_says(1, Vehs[stack_veh_id].name(), -1, -1);
                     NetMsg_pop(NetMsg, tgt_at_sea ? "ISLESPOTTED" : "WORMSSPOTTED", 5000, 0, 0);
                 }
@@ -2270,7 +2239,7 @@ MOV_SPOT:
             draw_tile(tgt_x, tgt_y, 2);
             if (veh_fc_id == MapWin->cOwner) {
                 FX_play(Sounds, 13);
-                parse_says(0, MFactions[tgt_fc_id].adj_name_faction, -1, -1);
+                parse_says(0, get_adjective(tgt_fc_id), -1, -1);
                 parse_says(1, Vehs[stack_veh_id].name(), -1, -1);
                 NetMsg_pop(NetMsg, tgt_fc_id ? "SPOTTED" : "SPOTTED0", 5000, 0, 0);
             }
@@ -2285,15 +2254,15 @@ MOV_SPOT:
                 spot_stack(stack_veh_id, veh_fc_id);
                 draw_tile(tgt_x, tgt_y, 2);
                 FX_play(Sounds, 13);
-                parse_says(0, MFactions[tgt_fc_id].adj_name_faction, -1, -1);
+                parse_says(0, get_adjective(tgt_fc_id), -1, -1);
                 parse_says(1, Vehs[stack_veh_id].name(), -1, -1);
                 NetMsg_pop(NetMsg, tgt_fc_id ? "SPOTTED" : "SPOTTED0", 5000, 0, 0);
                 goto MOV_END;
             }
         }
         if (base_id < 0 && !(mapsq(tgt_x, tgt_y)->items & BIT_AIRBASE)
-        && mod_stack_check(stack_veh_id, 18, -1, -1, -1)
-        && !mod_stack_check(stack_veh_id, 6, 128, -1, -1)
+        && stack_check(stack_veh_id, 18, -1, -1, -1)
+        && !stack_check(stack_veh_id, 6, 128, -1, -1)
         && !has_abil(Vehs[veh_id].unit_id, ABL_AIR_SUPERIORITY)) {
             if (veh_fc_id == MapWin->cOwner && *VehAttackFlags & 1) {
                 parse_says(0, Ability[abil_index(32)].name, -1, -1);
@@ -2329,7 +2298,7 @@ MOV_SPOT:
                 goto MOV_END;
             }
         }
-        if (Vehs[veh_id].weapon_mode() != WMODE_PROBE || !mod_stack_check(stack_veh_id, 2, 11, -1, -1)) {
+        if (Vehs[veh_id].weapon_mode() != WMODE_PROBE || !stack_check(stack_veh_id, 2, 11, -1, -1)) {
             if (!Vehs[veh_id].offense_value()) {
                 if (*VehAttackFlags & 1 && veh_fc_id == MapWin->cOwner) {
                     FX_play(Sounds, 51);
@@ -2338,18 +2307,16 @@ MOV_SPOT:
                 goto MOV_END;
             }
             if (Vehs[stack_veh_id].plan() == PLAN_PROBE
-            && mod_stack_check(stack_veh_id, 1, -1, -1, -1) >= 1
+            && stack_check(stack_veh_id, 1, -1, -1, -1) >= 1
             && !*MultiplayerActive
             && (Factions[veh_fc_id].diplo_status[tgt_fc_id] & (DIPLO_TRUCE|DIPLO_TREATY))
             && !(Factions[veh_fc_id].diplo_status[tgt_fc_id] & DIPLO_PACT)) {
                 int near_base_id = base_find(tgt_x, tgt_y);
                 if (near_base_id < 0 || Bases[near_base_id].faction_id != veh_fc_id) {
                     if (veh_fc_id == MapWin->cOwner) {
-                        parse_says(0, MFactions[tgt_fc_id].adj_name_faction, -1, -1);
+                        parse_says(0, get_adjective(tgt_fc_id), -1, -1);
                         parse_says(1, Vehs[stack_veh_id].name(), -1, -1);
-                        *PluralDefault = 0;
-                        *GenderDefault = MFactions[veh_fc_id].is_leader_female;
-                        parse_says(2, MFactions[veh_fc_id].title_leader, -1, -1);
+                        parse_says(2, get_title(veh_fc_id), -1, -1);
                         int choice;
                         if (!MFactions[tgt_fc_id].is_alien()) {
                             choice = popp(ScriptFile, "ENEMYPROBE2", 0, "capture_sm.pcx", 0);
@@ -2361,11 +2328,9 @@ MOV_SPOT:
                         }
                     }
                 } else {
-                    parse_says(0, MFactions[tgt_fc_id].adj_name_faction, -1, -1);
+                    parse_says(0, get_adjective(tgt_fc_id), -1, -1);
                     parse_says(1, Vehs[stack_veh_id].name(), -1, -1);
-                    *PluralDefault = 0;
-                    *GenderDefault = MFactions[veh_fc_id].is_leader_female;
-                    parse_says(2, MFactions[veh_fc_id].title_leader, -1, -1);
+                    parse_says(2, get_title(veh_fc_id), -1, -1);
                     int choice;
                     if (!is_human(veh_fc_id)) {
                         choice = 1;
@@ -2398,16 +2363,12 @@ MOV_SPOT:
                         }
                         draw_tile(tgt_x, tgt_y, 2);
                         if (tgt_fc_id == MapWin->cOwner) {
-                            parse_says(0, MFactions[veh_fc_id].adj_name_faction, -1, -1);
-                            *PluralDefault = 0;
-                            *GenderDefault = MFactions[tgt_fc_id].is_leader_female;
-                            parse_says(1, MFactions[tgt_fc_id].title_leader, -1, -1);
+                            parse_says(0, get_adjective(veh_fc_id), -1, -1);
+                            parse_says(1, get_title(tgt_fc_id), -1, -1);
                             NetMsg_pop(NetMsg, "GOTMYPROBE", 5000, 0, 0);
                         } else if (veh_fc_id == MapWin->cOwner) {
-                            parse_says(0, MFactions[tgt_fc_id].adj_name_faction, -1, -1);
-                            *PluralDefault = 0;
-                            *GenderDefault = MFactions[veh_fc_id].is_leader_female;
-                            parse_says(1, MFactions[veh_fc_id].title_leader, -1, -1);
+                            parse_says(0, get_adjective(tgt_fc_id), -1, -1);
+                            parse_says(1, get_title(veh_fc_id), -1, -1);
                             NetMsg_pop(NetMsg, "GOTYOURPROBE", 5000, 0, 0);
                         }
                         goto MOV_END;
@@ -2549,7 +2510,7 @@ MOV_NAVAL:
             // from a sea base without there being a transport in land tile.
             if (veh_triad == TRIAD_LAND && !has_abil(Vehs[veh_id].unit_id, ABL_AMPHIBIOUS)) {
                 veh_sq = mapsq(veh_x, veh_y);
-                if (veh_sq->base_who() >= 0 && !mod_stack_check(veh_id, 2, PLAN_NAVAL_TRANSPORT, -1, -1)) {
+                if (veh_sq->base_who() >= 0 && !stack_check(veh_id, 2, PLAN_NAVAL_TRANSPORT, -1, -1)) {
                     if (veh_fc_id == MapWin->cOwner && *VehAttackFlags & 1) {
                         parse_says(0, Ability[abil_index(8)].name, -1, -1);
                         NetMsg_pop(NetMsg, "AMPHIBBASE2", 5000, 0, 0);
@@ -2565,7 +2526,7 @@ MOV_NAVAL:
                 goto MOV_END;
             }
             // Fix 39. [BUG] #DISEMBARKFAIL wasn't being displayed due to incorrect logic check.
-            if (!mod_stack_check(veh_id, 2, PLAN_NAVAL_TRANSPORT, -1, -1)) {
+            if (!stack_check(veh_id, 2, PLAN_NAVAL_TRANSPORT, -1, -1)) {
                 goto MOV_END;
             }
             Vehs[veh_id].order = ORDER_NONE;
@@ -2767,13 +2728,9 @@ MOV_NAVAL:
         if (tgt_fc_id != veh_fc_id && !(Factions[veh_fc_id].diplo_status[tgt_fc_id] & DIPLO_PACT)) {
             if (Factions[tgt_fc_id].diplo_status[veh_fc_id] & (DIPLO_TRUCE|DIPLO_TREATY|DIPLO_PACT)
             && tgt_fc_id == MapWin->cOwner) {
-                *PluralDefault = 0;
-                *GenderDefault = MFactions[veh_fc_id].is_leader_female;
-                parse_says(0, MFactions[veh_fc_id].title_leader, -1, -1);
-                parse_says(1, MFactions[veh_fc_id].name_leader, -1, -1);
-                *PluralDefault = MFactions[veh_fc_id].is_noun_plural;
-                *GenderDefault = MFactions[veh_fc_id].noun_gender;
-                parse_says(2, MFactions[veh_fc_id].noun_faction, -1, -1);
+                parse_says(0, get_title(veh_fc_id), -1, -1);
+                parse_says(1, get_name(veh_fc_id), -1, -1);
+                parse_says(2, get_noun(veh_fc_id), -1, -1);
                 NetMsg_pop(NetMsg, "SURPRISE", 5000, 0, 0);
             }
             if (veh_fc_id == MapWin->cOwner) {
@@ -3019,7 +2976,7 @@ MOV_NAVAL:
             if (find_count) {
                 Vehs[veh_id].moves_spent += find_count * Rules->move_rate_roads;
                 if (veh_fc_id == MapWin->cOwner) {
-                    parse_says(0, MFactions[find_fc_id].adj_name_faction, -1, -1);
+                    parse_says(0, get_adjective(find_fc_id), -1, -1);
                     NetMsg_pop(NetMsg, "GIBRALTAR", 5000, 0, 0);
                 }
             }
@@ -3065,7 +3022,7 @@ MOV_NAVAL:
                             && Vehs[cur_id].order == ORDER_SENTRY_BOARD
                             && veh_speed(cur_id, 0) - Vehs[cur_id].moves_spent > 0) {
                                 Vehs[cur_id].order = ORDER_NONE;
-                                MapWin->iUnit = cur_id;
+                                MapWin->VehID = cur_id;
                             }
                         }
                     }
@@ -3111,7 +3068,7 @@ MOV_UPKEEP:
                 fuel_check = true;
             } else if (moves > 0) {
                 fuel_check = (clamp(moves, 0, 999) > Rules->move_rate_roads)
-                    || mod_zoc_veh(tgt_x, tgt_y, veh_fc_id);
+                    || zoc_veh(tgt_x, tgt_y, veh_fc_id);
             }
         }
         if (fuel_check) {
@@ -3142,10 +3099,10 @@ MOV_UPKEEP:
                     } else {
                         Vehs[veh_id].state |= VSTATE_HAS_MOVED;
                         if (visual_tgl) {
-                            boom(Vehs[veh_id].x, Vehs[veh_id].y, 128);
+                            boom_veh(Vehs[veh_id].x, Vehs[veh_id].y, 0x80, veh_id);
                         }
+                        // Fix: adjust incorrect upper bounds checking
                         if (val_range != 1 || Vehs[veh_id].chassis_type() != CHS_COPTER) {
-                            // Fix: adjust incorrect upper bounds checking
                             Vehs[veh_id].damage_taken = Vehs[veh_id].max_hitpoints();
                         } else {
                             Vehs[veh_id].damage_taken += 3 * Vehs[veh_id].reactor_type();
@@ -3175,14 +3132,14 @@ MOV_UPKEEP:
     if (tgt_sq->items & BIT_MONOLITH && veh_triad != TRIAD_AIR && !move_fight) {
         if (offset >= 0 || (Vehs[veh_id].offense_value()
         && (Vehs[veh_id].damage_taken || !(Vehs[veh_id].state & VSTATE_MONOLITH_UPGRADED)))) {
-            mod_monolith(veh_id);
+            monolith(veh_id);
         }
     }
-    if (goody_val && veh_triad != TRIAD_AIR && veh_fc_id && mod_goody_box(veh_id)) {
+    if (goody_val && veh_triad != TRIAD_AIR && veh_fc_id && goody_box(veh_id)) {
         goto MOV_END;
     }
     if (Vehs[veh_id].plan() == PLAN_ARTIFACT && offset < 8 && base_id < 0
-    && mod_stack_check(veh_id, 1, -1, -1, -1) == 1) {
+    && stack_check(veh_id, 1, -1, -1, -1) == 1) {
         for (int i = 0; i < 8; i++) {
             int px = wrap(tgt_x + BaseOffsetX[i]);
             int py = tgt_y + BaseOffsetY[i];
@@ -3194,22 +3151,18 @@ MOV_UPKEEP:
                 int iter_fc_id = Vehs[iter_id].faction_id;
                 if (iter_fc_id && iter_fc_id != veh_fc_id) {
                     if (!(Factions[veh_fc_id].diplo_status[iter_fc_id] & DIPLO_PACT)) {
-                        if (mod_stack_check(iter_id, 1, -1, -1, -1) > mod_stack_check(iter_id, 2, 12, -1, -1)) {
+                        if (stack_check(iter_id, 1, -1, -1, -1) > stack_check(iter_id, 2, 12, -1, -1)) {
                             Vehs[veh_id].faction_id = Vehs[iter_id].faction_id;
                             Vehs[veh_id].order = ORDER_NONE;
                             draw_tile(tgt_x, tgt_y, 2);
                             owner_set(tgt_x, tgt_y, Vehs[veh_id].faction_id);
                             if (veh_fc_id == MapWin->cOwner) {
-                                MapWin->iUnit = -1;
-                                *PluralDefault = MFactions[iter_fc_id].is_noun_plural;
-                                *GenderDefault = MFactions[iter_fc_id].noun_gender;
-                                parse_says(0, MFactions[iter_fc_id].noun_faction, -1, -1);
+                                MapWin->VehID = -1;
+                                parse_says(0, get_noun(iter_fc_id), -1, -1);
                                 popp(ScriptFile, "TOOKARTIFACT", 0, "artstolen_sm.pcx", 0);
                             } else if (Vehs[iter_id].faction_id == MapWin->cOwner) {
                                 parse_says(0, Vehs[iter_id].name(), -1, -1);
-                                *PluralDefault = MFactions[veh_fc_id].is_noun_plural;
-                                *GenderDefault = MFactions[veh_fc_id].noun_gender;
-                                parse_says(1, MFactions[veh_fc_id].noun_faction, -1, -1);
+                                parse_says(1, get_noun(veh_fc_id), -1, -1);
                                 popp(ScriptFile, "TAKENARTIFACT", 0, "artstolen_sm.pcx", 0);
                             }
                             veh_fc_id = Vehs[veh_id].faction_id;
@@ -3222,7 +3175,7 @@ MOV_UPKEEP:
     }
     if (Vehs[veh_id].plan() == PLAN_ARTIFACT && base_id >= 0 && Vehs[veh_id].movement_turns) {
         if (Vehs[veh_id].movement_turns == 1) {
-            if (mod_study_artifact(veh_id)) {
+            if (study_artifact(veh_id)) {
                 veh_id = -1;
                 goto MOV_END;
             }
@@ -3248,7 +3201,7 @@ MOV_UPKEEP:
                 if (Vehs[cur_id].moves_spent <= veh_speed(cur_id, 0)) { // might evaluate always true
                     stack_veh(cur_id, 0);
                     if (Vehs[veh_id].waypoint_x[0] == cur_id) {
-                        MapWin->iUnit = cur_id;
+                        MapWin->VehID = cur_id;
                         Vehs[cur_id].order = ORDER_NONE;
                         break;
                     }
@@ -3264,7 +3217,7 @@ MOV_UPKEEP:
     && is_ocean(mapsq(tgt_x, tgt_y))
     && base_id < 0) {
         if (veh_speed(veh_id, 0) - Vehs[veh_id].moves_spent <= 0) {
-            if (mod_zoc_any(Vehs[veh_id].x, Vehs[veh_id].y, veh_fc_id)
+            if (zoc_any(Vehs[veh_id].x, Vehs[veh_id].y, veh_fc_id)
             || (!thinker_move_upkeep(veh_fc_id)
             && (Vehs[veh_id].visibility & FactionStatus[0] || Vehs[veh_id].status_icon == 'u'))) {
                 for (int cur_id = veh_top(veh_id); cur_id >= 0; cur_id = Vehs[cur_id].next_veh_id_stack) {
@@ -3319,7 +3272,7 @@ MOV_END:
                     if (Vehs[veh_id].state & VSTATE_UNK_8
                     && Vehs[veh_id].x == tgt_x
                     && Vehs[veh_id].y == tgt_y
-                    && !mod_zoc_veh(tgt_x, tgt_y, veh_fc_id)) {
+                    && !zoc_veh(tgt_x, tgt_y, veh_fc_id)) {
                         Vehs[veh_id].state &= ~VSTATE_UNK_8;
                     }
                 }

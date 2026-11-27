@@ -20,7 +20,7 @@ bool has_wmode(int faction_id, VehWeaponMode mode) {
     }
     for (int i = 0; i < MaxProtoFactionNum; i++) {
         UNIT* u = &Units[i];
-        if (mod_veh_avail(i, faction_id, -1) && u->weapon_mode() == mode) {
+        if (veh_avail(i, faction_id, -1) && u->weapon_mode() == mode) {
             return true;
         }
     }
@@ -36,7 +36,7 @@ bool has_aircraft(int faction_id) {
     }
     for (int i = 0; i < MaxProtoFactionNum; i++) {
         UNIT* u = &Units[i];
-        if (mod_veh_avail(i, faction_id, -1) && u->triad() == TRIAD_AIR && !u->is_missile()) {
+        if (veh_avail(i, faction_id, -1) && u->triad() == TRIAD_AIR && !u->is_missile()) {
             return true;
         }
     }
@@ -52,7 +52,7 @@ bool has_ships(int faction_id) {
     }
     for (int i = 0; i < MaxProtoFactionNum; i++) {
         UNIT* u = &Units[i];
-        if (mod_veh_avail(i, faction_id, -1) && u->triad() == TRIAD_SEA) {
+        if (veh_avail(i, faction_id, -1) && u->triad() == TRIAD_SEA) {
             return true;
         }
     }
@@ -102,6 +102,16 @@ int prod_count(int item_id, int faction_id, int base_skip_id) {
         }
     }
     return n;
+}
+
+/*
+Higher values indicate more hostile relations (broken treaties or similar).
+*/
+int diplo_relation(int faction_id, int faction_id_2) {
+    return clamp(Factions[faction_id].integrity_blemishes
+        + Factions[faction_id_2].diplo_betrayed[faction_id]
+        - Factions[faction_id].diplo_gifts[faction_id_2]
+        + clamp(Factions[faction_id].eliminated_count - 1, 0, 4), -10, 10);
 }
 
 /*
@@ -326,8 +336,8 @@ void __cdecl treaty_on(int faction_id_1, int faction_id_2, uint32_t status) {
     }
     if (status & DIPLO_VENDETTA) {
         if (plr1->diplo_status[faction_id_2] & (DIPLO_TRUCE|DIPLO_TREATY|DIPLO_PACT)) {
-            plr1->diplo_unk_4[faction_id_2] = 0;
-            plr2->diplo_unk_4[faction_id_1] = 0;
+            plr1->diplo_combat_count[faction_id_2] = 0;
+            plr2->diplo_combat_count[faction_id_1] = 0;
         }
         status |= (DIPLO_UNK_80000000|DIPLO_UNK_100|DIPLO_COMMLINK);
         plr1->diplo_status[faction_id_2] &= ~DiploExcludeFight;
@@ -344,7 +354,7 @@ void __cdecl treaty_on(int faction_id_1, int faction_id_2, uint32_t status) {
     plr1->diplo_status[faction_id_2] |= status;
     plr2->diplo_status[faction_id_1] |= status;
     if (is_player && status & (DIPLO_VENDETTA|DIPLO_COMMLINK|DIPLO_TRUCE|DIPLO_TREATY|DIPLO_PACT)) {
-        if (*dword_7FE06C) {
+        if (MultiWin->is_visible) {
             GraphicWin_redraw(MultiWin);
         }
     }
@@ -380,7 +390,7 @@ void __cdecl set_treaty(int faction_id_1, int faction_id_2, uint32_t status, boo
                 probe_renew_set(faction_id_1, faction_id_2, turns);
                 if (faction_id_1 == MapWin->cOwner) {
                     ParseNumTable[0] = turns;
-                    parse_says(0, parse_set(faction_id_2), -1, -1);
+                    parse_says(0, get_noun(faction_id_2), -1, -1);
                     NetMsg_pop(NetMsg, "SPYRENEW", 5000, 0, 0);
                 }
             }
@@ -460,10 +470,8 @@ void __cdecl atrocity(int faction_id, int faction_id_tgt, int skip_init_check, i
                             }
                             if (toggle) {
                                 if (faction_id == *CurrentPlayerFaction) {
-                                    *PluralDefault = 0;
-                                    *GenderDefault = m_plr->is_leader_female;
-                                    parse_says(0, m_plr->title_leader, -1, -1);
-                                    parse_says(1, m_plr->name_leader, -1, -1);
+                                    parse_says(0, get_title(faction_id), -1, -1);
+                                    parse_says(1, get_name(faction_id), -1, -1);
                                     diplomacy_caption(faction_id, i);
                                     X_pops("ATROCIOUSITY", FactionPortraits[i], 0);
                                 }
@@ -490,14 +498,10 @@ void __cdecl atrocity(int faction_id, int faction_id_tgt, int skip_init_check, i
                 if (is_human(faction_id) && !is_human(faction_id_tgt) && !prev_victim && plr->atrocities >= 5) {
                     Factions[faction_id_tgt].player_flags |= PFLAG_COMMIT_ATROCITIES_WANTONLY;
                 }
-                *PluralDefault = 0;
-                *GenderDefault = m_plr->is_leader_female;
-                parse_says(0, m_plr->title_leader, -1, -1);
-                parse_says(1, m_plr->name_leader, -1, -1);
-                *PluralDefault = 0;
-                *GenderDefault = MFactions[faction_id_tgt].is_leader_female;
-                parse_says(2, MFactions[faction_id_tgt].title_leader, -1, -1);
-                parse_says(3, MFactions[faction_id_tgt].name_leader, -1, -1);
+                parse_says(0, get_title(faction_id), -1, -1);
+                parse_says(1, get_name(faction_id), -1, -1);
+                parse_says(2, get_title(faction_id_tgt), -1, -1);
+                parse_says(3, get_name(faction_id_tgt), -1, -1);
                 parse_num(0, turns);
                 if (!m_plr->is_alien()) {
                     if (faction_id == *CurrentPlayerFaction) {
@@ -517,7 +521,6 @@ void __cdecl atrocity(int faction_id, int faction_id_tgt, int skip_init_check, i
 }
 
 void __cdecl major_atrocity(int faction_id, int faction_id_tgt) {
-    MFaction* m = &MFactions[faction_id];
     Faction* plr = &Factions[faction_id];
     if (faction_id_tgt >= 0) {
         set_treaty(faction_id_tgt, faction_id, DIPLO_MAJOR_ATROCITY_VICTIM|DIPLO_ATROCITY_VICTIM|DIPLO_WANT_REVENGE, 1);
@@ -540,20 +543,12 @@ void __cdecl major_atrocity(int faction_id, int faction_id_tgt) {
                     Factions[i].diplo_status[faction_id] |= DIPLO_UNK_40;
                     Factions[i].diplo_merc[faction_id] = 50;
                     plr->diplo_spoke[i] = *CurrentTurn;
-                    *PluralDefault = 0;
-                    *GenderDefault = MFactions[i].is_leader_female;
-                    parse_says(0, MFactions[i].title_leader, -1, -1);
-                    parse_says(1, MFactions[i].name_leader, -1, -1);
-                    *PluralDefault = MFactions[i].is_noun_plural;
-                    *GenderDefault = MFactions[i].noun_gender;
-                    parse_says(2, MFactions[i].noun_faction, -1, -1);
-                    *PluralDefault = 0;
-                    *GenderDefault = m->is_leader_female;
-                    parse_says(3, m->title_leader, -1, -1);
-                    parse_says(4, m->name_leader, -1, -1);
-                    *PluralDefault = m->is_noun_plural;
-                    *GenderDefault = m->noun_gender;
-                    parse_says(5, m->noun_faction, -1, -1);
+                    parse_says(0, get_title(i), -1, -1);
+                    parse_says(1, get_name(i), -1, -1);
+                    parse_says(2, get_noun(i), -1, -1);
+                    parse_says(3, get_title(faction_id), -1, -1);
+                    parse_says(4, get_name(faction_id), -1, -1);
+                    parse_says(5, get_noun(faction_id), -1, -1);
                     snprintf(StrBuffer, StrBufLen, "MAJORATROCITY%d", faction_id != *CurrentPlayerFaction);
                     popp(ScriptFile, StrBuffer, 0, "council_sm.pcx", 0);
                 }
@@ -590,28 +585,17 @@ int __cdecl break_treaty(int faction_id, int faction_id_tgt, uint32_t status) {
 
 void __cdecl intervention(int faction_id_def, int faction_id_atk) {
     for (int i = 1; i < MaxPlayerNum; i++) {
-        MFaction* m = &MFactions[i];
         Faction* plr = &Factions[i];
         if (i != faction_id_def && i != faction_id_atk && is_alive(i)
         && plr->diplo_status[faction_id_def] & DIPLO_PACT
         && !(plr->diplo_status[faction_id_atk] & (DIPLO_VENDETTA|DIPLO_PACT))) {
-            *PluralDefault = m->is_noun_plural;
-            *GenderDefault = m->noun_gender;
-            parse_says(0, m->noun_faction, -1, -1);
-            *PluralDefault = MFactions[faction_id_def].is_noun_plural;
-            *GenderDefault = MFactions[faction_id_def].noun_gender;
-            parse_says(1, MFactions[faction_id_def].noun_faction, -1, -1);
-            *PluralDefault = 0;
-            *GenderDefault = m->is_leader_female;
-            parse_says(2, m->title_leader, -1, -1);
-            parse_says(3, m->name_leader, -1, -1);
-            *PluralDefault = 0;
-            *GenderDefault = MFactions[faction_id_atk].is_leader_female;
-            parse_says(4, MFactions[faction_id_atk].title_leader, -1, -1);
-            parse_says(5, MFactions[faction_id_atk].name_leader, -1, -1);
-            *PluralDefault = MFactions[faction_id_atk].is_noun_plural;
-            *GenderDefault = MFactions[faction_id_atk].noun_gender;
-            parse_says(6, MFactions[faction_id_atk].noun_faction, -1, -1);
+            parse_says(0, get_noun(i), -1, -1);
+            parse_says(1, get_noun(faction_id_def), -1, -1);
+            parse_says(2, get_title(i), -1, -1);
+            parse_says(3, get_name(i), -1, -1);
+            parse_says(4, get_title(faction_id_atk), -1, -1);
+            parse_says(5, get_name(faction_id_atk), -1, -1);
+            parse_says(6, get_noun(faction_id_atk), -1, -1);
             if (is_human(faction_id_atk) || is_human(faction_id_def)) {
                 if (is_human(faction_id_atk)) {
                     Factions[faction_id_atk].diplo_spoke[i] = *CurrentTurn;
@@ -629,38 +613,24 @@ void __cdecl intervention(int faction_id_def, int faction_id_atk) {
 }
 
 void __cdecl double_cross(int faction_id_atk, int faction_id_def, int faction_id_other) {
-    MFaction* m_atk = &MFactions[faction_id_atk];
     Faction* plr_atk = &Factions[faction_id_atk];
     Faction* plr_def = &Factions[faction_id_def];
 
     if (*MultiplayerActive) {
         if (faction_id_def != *CurrentPlayerFaction || faction_id_other <= 0) {
             if (faction_id_def == *CurrentPlayerFaction && is_human(faction_id_atk)) {
-                *PluralDefault = 0;
-                *GenderDefault = m_atk->is_leader_female;
-                parse_says(0, m_atk->title_leader, -1, -1);
-                parse_says(1, m_atk->name_leader, -1, -1);
-                *PluralDefault = m_atk->is_noun_plural;
-                *GenderDefault = m_atk->noun_gender;
-                parse_says(2, m_atk->noun_faction, -1, -1);
+                parse_says(0, get_title(faction_id_atk), -1, -1);
+                parse_says(1, get_name(faction_id_atk), -1, -1);
+                parse_says(2, get_noun(faction_id_atk), -1, -1);
                 NetMsg_pop(NetMsg, "VENDETTAWARNING", 5000, 0, 0);
             }
         } else {
-            MFaction* m_other = &MFactions[faction_id_other];
-            *PluralDefault = 0;
-            *GenderDefault = m_other->is_leader_female;
-            parse_says(0, m_other->title_leader, -1, -1);
-            parse_says(1, m_other->name_leader, -1, -1);
-            *PluralDefault = m_other->is_noun_plural;
-            *GenderDefault = m_other->noun_gender;
-            parse_says(2, m_other->noun_faction, -1, -1);
-            *PluralDefault = 0;
-            *GenderDefault = m_atk->is_leader_female;
-            parse_says(3, m_atk->title_leader, -1, -1);
-            parse_says(4, m_atk->name_leader, -1, -1);
-            *PluralDefault = m_atk->is_noun_plural;
-            *GenderDefault = m_atk->noun_gender;
-            parse_says(5, m_atk->noun_faction, -1, -1);
+            parse_says(0, get_title(faction_id_other), -1, -1);
+            parse_says(1, get_name(faction_id_other), -1, -1);
+            parse_says(2, get_noun(faction_id_other), -1, -1);
+            parse_says(3, get_title(faction_id_atk), -1, -1);
+            parse_says(4, get_name(faction_id_atk), -1, -1);
+            parse_says(5, get_noun(faction_id_atk), -1, -1);
             NetMsg_pop(NetMsg, "INCITED", 5000, 0, 0);
         }
     }
@@ -778,7 +748,7 @@ int __cdecl steal_tech(int faction_id, int faction_id_tgt, int is_steal) {
     }
     int tech_id = mod_tech_pick(faction_id, 0, faction_id_tgt, is_steal ? "STEALTECH" : "ACQUIRETECH");
     if (tech_id < 0) {
-        tech_id = 9999;
+        tech_id = Tech_ID_WorldMap;
     }
     /*
     Neural Amplifier (na-yd4): recorded AFTER the 9999 normalisation, so the record carries the
@@ -795,22 +765,19 @@ int __cdecl steal_tech(int faction_id, int faction_id_tgt, int is_steal) {
     if (*MultiplayerActive && faction_id == *CurrentPlayerFaction) {
         message_data(0x244C, 0, faction_id, tech_id, faction_id_tgt, 0);
     } else {
-        if (faction_id_tgt == *CurrentPlayerFaction && tech_id != 9999) {
-            MFaction* m = &MFactions[faction_id];
-            *PluralDefault = m->is_noun_plural;
-            *GenderDefault = m->noun_gender;
-            parse_says(0, m->noun_faction, -1, -1);
+        if (faction_id_tgt == *CurrentPlayerFaction && tech_id != Tech_ID_WorldMap) {
+            parse_says(0, get_noun(faction_id), -1, -1);
             StrBuffer[0] = '\0';
             say_tech(StrBuffer, tech_id, 0);
             parse_says(1, StrBuffer, -1, -1);
             NetMsg_pop(NetMsg, "STOLETECH", 5000, 0, 0);
         }
         tech_achieved(faction_id, tech_id, faction_id_tgt, 0);
-        if (!is_human(faction_id) && tech_id != 9999) {
+        if (!is_human(faction_id) && tech_id != Tech_ID_WorldMap) {
             mod_bases_reset(-1, faction_id, 0);
         }
     }
-    return tech_id == 9999;
+    return tech_id == Tech_ID_WorldMap;
 }
 
 int __cdecl spying(int faction_id) {
@@ -908,7 +875,7 @@ int __cdecl great_satan(int faction_id, int is_aggressive) {
             factor = 4;
             diff_factor = DIFF_TRANSCEND;
         } else if (Factions[faction_id].diff_level >= DIFF_LIBRARIAN
-            || *GameRules & RULES_VICTORY_CONQUEST || *ObjectiveReqVictory <= 1000) {
+        || *GameRules & RULES_VICTORY_CONQUEST || *ObjectiveReqVictory <= 1000) {
             factor = 2;
             diff_factor = DIFF_LIBRARIAN;
         } else {
@@ -1022,7 +989,7 @@ void __cdecl cause_friction(int faction_id, int faction_id_with, int friction) {
     Faction* f = &Factions[faction_id];
     f->diplo_friction[faction_id_with] = clamp(f->diplo_friction[faction_id_with] + friction, 0, 20);
     if (*DiploFrictionFactionID == faction_id && *DiploFrictionFactionIDWith == faction_id_with) {
-        *DiploFriction = clamp(*DiploFriction + friction, 0, 20); // Fix: add variable bounding
+        *DiploFriction += friction;
     }
 }
 
@@ -1052,7 +1019,10 @@ int __cdecl get_mood(int friction) {
     if (friction <= 17) {
         return MOOD_QUARRELSOME;
     }
-    return (friction > 19) + MOOD_BELLIGERENT; // or MOOD_SEETHING if condition is true
+    if (friction <= 19) {
+        return MOOD_BELLIGERENT;
+    }
+    return MOOD_SEETHING;
 }
 
 /*
@@ -1093,6 +1063,85 @@ int __cdecl energy_value(int loan_principal) {
         goodwill += ((weight >= 0) ? ((energy > weight) ? weight : energy) : 0) / divisor++;
     }
     return (goodwill + 4) / 5;
+}
+
+void __cdecl say_special(char* dest, const char* text, int faction_id) {
+    char input[StrBufLen];
+    char output[StrBufLen];
+    const char* gender = "";
+    int is_leader_female = MFactions[faction_id].is_leader_female;
+
+    if (is_leader_female == 0) {
+        gender = "M";
+    } else if (is_leader_female == 1) {
+        gender = "F";
+    } else if (is_leader_female == 2) {
+        gender = "N";
+    }
+    snprintf(input, StrBufLen, "$<%s1:%s>", gender, text);
+    parse_string(input, output);
+    size_t len = strnlen(dest, StrBufLen);
+    snprintf(&dest[len], StrBufLen - len, "%s", output);
+}
+
+void __cdecl say_fac_special(char* dest, const char* text, int faction_id) {
+    char input[StrBufLen];
+    char output[StrBufLen];
+    const char* gender = "";
+    const char* plural = "";
+    int noun_gender = MFactions[faction_id].noun_gender;
+    int is_noun_plural = MFactions[faction_id].is_noun_plural;
+
+    if (noun_gender == 0) {
+        gender = "M";
+    } else if (noun_gender == 1) {
+        gender = "F";
+    } else if (noun_gender == 2) {
+        gender = "N";
+    }
+    if (is_noun_plural == 0) {
+        plural = "1";
+    } else if (is_noun_plural == 1) {
+        plural = "2";
+    }
+    snprintf(input, StrBufLen, "$<%s%s:%s>", gender, plural, text);
+    parse_string(input, output);
+    size_t len = strnlen(dest, StrBufLen);
+    snprintf(&dest[len], StrBufLen - len, "%s", output);
+}
+
+char* __cdecl get_phrase(int faction_id, int index) {
+    MFaction* fac = &MFactions[faction_id];
+    if (text_open(fac->filename, fac->search_key)
+    && text_open(fac->filename, fac->filename)) {
+        parse_says(0, fac->search_key, -1, -1);
+        parse_says(1, fac->filename, -1, -1);
+        X_pop("PLAYERFILE", 0);
+        return label_get(TL_NONE);
+    }
+    for (int i = 0; i < index + 9; i++) {
+        text_get();
+    }
+    return text_buf_ptr();
+}
+
+char* __cdecl get_noun_phrase(int faction_id, int index) {
+    MFaction* fac = &MFactions[faction_id];
+    if (text_open(fac->filename, fac->search_key)
+    && text_open(fac->filename, fac->filename)) {
+        parse_says(0, fac->search_key, -1, -1);
+        parse_says(1, fac->filename, -1, -1);
+        X_pop("PLAYERFILE", 0);
+        return label_get(TL_NONE);
+    }
+    for (int i = 0; i < index + 9; i++) {
+        text_get();
+    }
+    char noun[StrBufLen];
+    snprintf(noun, StrBufLen, "%s", text_item());
+    noun_item(GenderDefault, PluralDefault);
+    snprintf(text_buf_ptr(), StrBufLen, "%s", noun);
+    return text_buf_ptr();
 }
 
 char* __cdecl get_adjective(int faction_id) {
@@ -1143,15 +1192,15 @@ char* __cdecl get_pact(int faction_id) {
     *PluralDefault = 0;
     *GenderDefault = MFactions[faction_id].is_leader_female;
     if (MFactions[faction_id].is_leader_female) {
-        return label_get(202); // Pact Sister
+        return label_get(TL_PactSister);
     }
-    return label_get(201); // Pact Brother
+    return label_get(TL_PactBrother);
 }
 
 char* __cdecl get_pacts(int faction_id) {
     *PluralDefault = 1;
     *GenderDefault = MFactions[faction_id].is_leader_female;
-    return label_get(MFactions[faction_id].is_leader_female ? 204 : 203);
+    return label_get(MFactions[faction_id].is_leader_female ? TL_PactSisters : TL_PactBrothers);
 }
 
 char* __cdecl get_pacts_2(int faction_id, int faction_id_2) {
@@ -1159,21 +1208,21 @@ char* __cdecl get_pacts_2(int faction_id, int faction_id_2) {
     int is_female_2 = MFactions[faction_id_2].is_leader_female;
     *PluralDefault = 1;
     *GenderDefault = is_female_1 && is_female_2;
-    return label_get(is_female_1 && is_female_2 ? 204 : 203);
+    return label_get(is_female_1 && is_female_2 ? TL_PactSisters : TL_PactBrothers);
 }
 
 char* __cdecl get_pact_hood(int faction_id, int faction_id_2) {
     *PluralDefault = 0;
     *GenderDefault = 0;
     if (MFactions[faction_id].is_leader_female && MFactions[faction_id_2].is_leader_female) {
-        return label_get(206); // Pact of Sisterhood
+        return label_get(TL_PactOfSisterhood);
     }
-    return label_get(205); // Pact of Brotherhood
+    return label_get(TL_PactOfBrotherhood);
 }
 
 char* __cdecl get_his_her(int faction_id, int tgl) {
     snprintf(PlrBuf, StrBufLen, "%s",
-        MFactions[faction_id].is_leader_female ? label_get(208) : label_get(207));
+        MFactions[faction_id].is_leader_female ? label_get(TL_Her2) : label_get(TL_His));
     if (tgl == 1) {
         PlrBuf[0] = toupper((unsigned char)PlrBuf[0]);
     } else if (tgl != 0) {
@@ -1184,7 +1233,7 @@ char* __cdecl get_his_her(int faction_id, int tgl) {
 
 char* __cdecl get_him_her(int faction_id, int tgl) {
     snprintf(PlrBuf, StrBufLen, "%s",
-        MFactions[faction_id].is_leader_female ? label_get(200) : label_get(199));
+        MFactions[faction_id].is_leader_female ? label_get(TL_Her) : label_get(TL_Him));
     if (tgl == 1) {
         PlrBuf[0] = toupper((unsigned char)PlrBuf[0]);
     } else if (tgl != 0) {
@@ -1195,13 +1244,24 @@ char* __cdecl get_him_her(int faction_id, int tgl) {
 
 char* __cdecl get_he_she(int faction_id, int tgl) {
     snprintf(PlrBuf, StrBufLen, "%s",
-        MFactions[faction_id].is_leader_female ? label_get(210) : label_get(209));
+        MFactions[faction_id].is_leader_female ? label_get(TL_She) : label_get(TL_He));
     if (tgl == 1) {
         PlrBuf[0] = toupper((unsigned char)PlrBuf[0]);
     } else if (tgl != 0) {
         CharUpperA(PlrBuf);
     }
     return PlrBuf;
+}
+
+void __cdecl compute_faction_modifiers(int faction_id) {
+    MFaction* fac = &MFactions[faction_id];
+    auto initial = (CSocialEffect*)&Factions[faction_id].SE_economy_base;
+    memset(initial, 0, sizeof(CSocialEffect));
+    for (int i = 0; i < fac->faction_bonus_count; i++) {
+        if (fac->faction_bonus_id[i] == RULE_SOCIAL) {
+            initial->values[fac->faction_bonus_val1[i]] += fac->faction_bonus_val2[i];
+        }
+    }
 }
 
 /*
@@ -1817,44 +1877,181 @@ static void veh_init_stack(int unit_id, int faction_id, int x, int y, int num) {
     }
 }
 
-static int __cdecl setup_values(int faction_id, int a2, int a3) {
-    Faction* f = &Factions[faction_id];
-    int value = setup_player(faction_id, a2, a3);
-    if (!faction_id) {
-        return value;
-    }
-    int num_colony = is_human(faction_id) ? conf.player_colony_pods : conf.computer_colony_pods;
-    int num_former = is_human(faction_id) ? conf.player_formers : conf.computer_formers;
+// Original faction placement from setup_player, returns true if suitable location is found.
+static bool setup_player_find_start(int faction_id, int setup_id, bool is_probe, int* tx, int* ty) {
+    const bool aquatic = MFactions[faction_id].is_aquatic();
+    const bool human = is_human(faction_id);
+    const bool flat = map_is_flat();
+    const bool special_spawn = setup_id == -282;
+    const bool initial_spawn = !*CurrentTurn || special_spawn;
+    int x = 0;
+    int y = 0;
+    int region = 0;
+    int iter = 0;
+    bool failed = false;
 
-    for (int i = 0; i < *VehCount; i++) {
-        VEH* veh = &Vehs[i];
-        if (veh->faction_id == faction_id) {
-            MAP* sq = mapsq(veh->x, veh->y);
-            int colony = (is_ocean(sq) ? BSC_SEA_ESCAPE_POD : BSC_COLONY_POD);
-            int former = (is_ocean(sq) ? BSC_SEA_FORMERS : BSC_FORMERS);
-            for (int j = 0; j < num_colony; j++) {
-                veh_init_free(colony, faction_id, veh->x, veh->y);
+    while (true) {
+        int edge_x = (flat ? clamp(*MapAreaX * (1024 - iter) / 0x2000, 0, 9999) : 0);
+        int edge_y = clamp(*MapAreaY * (1024 - iter) / 0x2000, 0, 9999);
+        x = game_randv(*MapAreaX - 2*edge_x) + edge_x;
+        y = game_randv(*MapAreaY - 2*edge_y) + edge_y;
+        x = (x & ~1) + (y & 1);
+
+        int landmark_dist = 32;
+        for (int dist = 0; dist < 8 && landmark_dist == 32; dist++) {
+            for (auto& m : iterate_tiles(x, y, (dist > 0 ? TableRange[dist-1] : 0), TableRange[dist])) {
+                int code = m.sq->code_at();
+                if (code > 0 && code < 128) {
+                    landmark_dist = dist;
+                    break;
+                }
             }
-            for (int j = 0; j < num_former; j++) {
-                veh_init_free(former, faction_id, veh->x, veh->y);
+        }
+        int score = 0;
+        for (auto& m : iterate_tiles(x, y, 0, 21)) {
+            if (aquatic) {
+                if (!m.sq->is_fungus()) {
+                    score += 2 * (2 - m.sq->alt_level()) + 1;
+                }
+            } else if (!m.sq->is_fungus() && m.sq->alt_level() >= ALT_SHORE_LINE
+            && m.sq->rocky_level() <= LEVEL_ROLLING && !m.sq->is_arid()) {
+                score++;
             }
+        }
+        if (aquatic) {
+            score /= 3;
+        }
+        MAP* sq = mapsq(x, y);
+        assert(sq);
+        region = sq->region;
+        uint32_t nearby = 0;
+        for (int i = 1; i < MaxPlayerNum; i++) {
+            if (Factions[i].region_total_bases[region]) {
+                nearby |= (1 << i);
+            }
+        }
+        int base_id = (aquatic || special_spawn
+            ? base_find(x, y) : base_find_3(x, y, -1, region, -1, -1));
+        if (base_id < 0) {
+            *BaseFindDist = 32;
+        }
+        if (initial_spawn) {
+            for (int i = 0; i < *VehCount; i++) {
+                if (region_at(Vehs[i].x, Vehs[i].y) == region) {
+                    nearby |= (1 << Vehs[i].faction_id);
+                    *BaseFindDist = min(*BaseFindDist, vector_dist(x, y, Vehs[i].x, Vehs[i].y));
+                }
+            }
+        }
+        if (++iter > 1024 && (!human || *CurrentTurn)) {
+            failed = true;
             break;
         }
+        if (aquatic ? sq->alt_level() > ALT_OCEAN_SHELF : sq->alt_level() < ALT_SHORE_LINE) {
+            continue;
+        }
+        if (sq->is_fungus() || (!aquatic && sq->rocky_level() > LEVEL_ROLLING)) {
+            continue;
+        }
+        const int scale = iter / 64;
+        if (*BaseFindDist < (initial_spawn ? 6 : 12) * *MapAreaSqRoot / 56
+        || sq->alt_level() >= ALT_TWO_ABOVE_SEA
+        || sq->anything_at() >= 0) {
+            continue;
+        }
+        if (y < 2 || y >= *MapAreaY - 2 || score < 12 - iter / 80) {
+            continue;
+        }
+        if (*BaseFindDist < *MapAreaSqRoot * (16 - scale) / 56) {
+            continue;
+        }
+        Continent* area = &Continents[region];
+        if (initial_spawn && iter < 900 && area->tile_count < 36 - scale) {
+            continue;
+        }
+        if (!aquatic) {
+            int open_min = (human ? 8 * (6 - *DiffLevel) : 8) + 24 - iter / 16 - *CurrentTurn / 16;
+            if (area->open_terrain * (*MapOceanCoverage + 1) / 2 < open_min) {
+                continue;
+            }
+        }
+        if (area->tile_count < 48 * (5 - (human ? *DiffLevel : 3)) - *CurrentTurn / 16 - iter / 4) {
+            continue;
+        }
+        if (nearby && !special_spawn && area->tile_count / (bit_count(nearby) + 1) < 64 - scale) {
+            continue;
+        }
+        int site = 0;
+        if (!(sq->items & BIT_BASE_RADIUS)) {
+            site = sq->val2 >> 4;
+            if (!site) {
+                site = world_site(x, y, 0);
+                site_set(x, y, site);
+            }
+        }
+        if (site < 15 - scale && !*CurrentTurn && !(*GameRules & RULES_LOOK_FIRST)) {
+            continue;
+        }
+        if (!aquatic && (landmark_dist < (1024 - iter) / 128 || !landmark_dist)) {
+            continue;
+        }
+        if (*CurrentTurn && !special_spawn && sq->owner > 0) {
+            continue;
+        }
+        if (base_id >= 0 && Bases[base_id].faction_id == setup_id
+        && region_at(Bases[base_id].x, Bases[base_id].y) == region) {
+            continue;
+        }
+        break;
     }
-    if (is_human(faction_id)) {
-        f->satellites_nutrient = conf.player_satellites[0];
-        f->satellites_mineral = conf.player_satellites[1];
-        f->satellites_energy = conf.player_satellites[2];
-    } else {
-        f->satellites_nutrient = conf.computer_satellites[0];
-        f->satellites_mineral = conf.computer_satellites[1];
-        f->satellites_energy = conf.computer_satellites[2];
+    // Probe initiated spawns still adjust the last tile even if the search failed
+    if (initial_spawn && (!failed || is_probe)) {
+        int best_site = -1;
+        int best_x = x;
+        int best_y = y;
+        for (auto& m : iterate_tiles(x, y, 0, 21)) {
+            if ((m.sq->alt_level() < ALT_SHORE_LINE) != aquatic
+            || m.sq->region != region
+            || m.sq->alt_level() >= ALT_TWO_ABOVE_SEA
+            || m.sq->is_fungus()
+            || m.sq->anything_at() >= 0) {
+                continue;
+            }
+            base_find(m.x, m.y);
+            for (int i = 0; i < *VehCount; i++) {
+                *BaseFindDist = min(*BaseFindDist, vector_dist(x, y, Vehs[i].x, Vehs[i].y));
+            }
+            if (*BaseFindDist < 6) {
+                continue;
+            }
+            int site = 0;
+            if (!(m.sq->items & BIT_BASE_RADIUS)) {
+                site = m.sq->val2 >> 4;
+                if (!site) {
+                    site = world_site(m.x, m.y, 0);
+                    site_set(m.x, m.y, site);
+                }
+            }
+            for (auto& adj : iterate_tiles(m.x, m.y, 1, 9)) {
+                if (aquatic) {
+                    site += 2 - adj.sq->alt_level();
+                } else if (adj.sq->alt_level() < ALT_SHORE_LINE) {
+                    site++;
+                    break;
+                }
+            }
+            if (site > best_site) {
+                best_site = site;
+                best_x = m.x;
+                best_y = m.y;
+            }
+        }
+        x = best_x;
+        y = best_y;
     }
-    if (!*CurrentTurn) {
-        // Update default governor settings
-        f->base_governor_adv |= GOV_MAY_PROD_NATIVE;
-    }
-    return value;
+    *tx = x;
+    *ty = y;
+    return !failed || is_probe;
 }
 
 static bool has_suffix(const char* str) {
@@ -1872,9 +2069,6 @@ int __cdecl mod_setup_player(int faction_id, int setup_id, int is_probe) {
     const bool plr_aquatic = m->is_aquatic();
     debug("setup_player %d %d %d %d %s\n", *CurrentTurn, faction_id, setup_id, is_probe, m->filename);
 
-    if (DEBUG && !conf.faction_placement) {
-        return setup_values(faction_id, setup_id, is_probe);
-    }
     // Modify the original version to check by filename if multiple similar factions are active.
     // If any duplicates are found, each one will have their faction_id as name suffix.
     for (int i = 1; i < MaxPlayerNum; i++) {
@@ -1903,7 +2097,7 @@ int __cdecl mod_setup_player(int faction_id, int setup_id, int is_probe) {
     }
     for (int i = *VehCount - 1; i >= 0; --i) {
         VEH* veh = &Vehs[i];
-        if (veh->faction_id == faction_id && (faction_id || veh->unit_id != BSC_FUNGAL_TOWER)) {
+        if (i < *VehCount && veh->faction_id == faction_id && (faction_id || veh->unit_id != BSC_FUNGAL_TOWER)) {
             kill(i);
         }
     }
@@ -1931,7 +2125,7 @@ int __cdecl mod_setup_player(int faction_id, int setup_id, int is_probe) {
         plr->unk_37 = 0;
         for (int i = 0; i < 8; i++) {
             plr->saved_queue_size[i] = 0;
-            snprintf(&plr->saved_queue_name[i][0], 24, "%s %d", label_get(609), i+1); // Template
+            snprintf(&plr->saved_queue_name[i][0], 24, "%s %d", label_get(TL_Template), i+1);
         }
         memset(&plr->SE_Politics_pending, 0, 32u); // pending / current
         memset(&plr->SE_economy_pending, 0, 44u); // only pending
@@ -2012,8 +2206,8 @@ int __cdecl mod_setup_player(int faction_id, int setup_id, int is_probe) {
             plr->diplo_gifts[i] = 0;
             plr->diplo_wrongs[i] = 0;
             plr->diplo_betrayed[i] = 0;
-            plr->diplo_unk_3[i] = 0;
-            plr->diplo_unk_4[i] = 0;
+            plr->diplo_combat_total[i] = 0;
+            plr->diplo_combat_count[i] = 0;
         }
         plr->loan_balance[i] = 0;
         plr->loan_payment[i] = 0;
@@ -2093,11 +2287,15 @@ int __cdecl mod_setup_player(int faction_id, int setup_id, int is_probe) {
     int region = 0;
     int x = -1;
     int y = -1;
-    // This replaces the entire old faction placement method
-    if (is_probe || !spawn_flag) {
-        find_start(faction_id, &x, &y);
-        if (!(sq = mapsq(x, y))) {
-            // skipped
+    if (!spawn_flag) {
+        int found;
+        if (DEBUG && !conf.faction_placement) {
+            found = setup_player_find_start(faction_id, setup_id, is_probe, &x, &y);
+        } else {
+            found = find_start(faction_id, setup_id, is_probe, &x, &y);
+        }
+        if (!found || !(sq = mapsq(x, y))) {
+            spawn_skip = true;
         } else {
             region = sq->region;
         }
@@ -2126,9 +2324,7 @@ int __cdecl mod_setup_player(int faction_id, int setup_id, int is_probe) {
             }
             if (is_player) {
                 int k = (setup_id < 0 ? 0 : setup_id);
-                *GenderDefault = MFactions[k].noun_gender;
-                *PluralDefault = MFactions[k].is_noun_plural;
-                parse_says(0, &MFactions[k].noun_faction[0], -1, -1);
+                parse_says(0, get_noun(k), -1, -1);
                 if (*MultiplayerActive) {
                     net_game_close();
                     *ControlTurnA = 1;
@@ -2312,13 +2508,14 @@ int __cdecl mod_setup_player(int faction_id, int setup_id, int is_probe) {
                 // Calculation for nearby opponents is slightly modified from the original to exclude native units
                 uint32_t nearby = 0;
                 for (int i = 1; i < MaxPlayerNum; i++) {
-                    if (Factions[i].region_total_bases[region]) {
-                        nearby |= (1 << Bases[i].faction_id);
+                    if (i != faction_id && Factions[i].region_total_bases[region]) {
+                        nearby |= (1 << i);
                     }
                 }
                 for (int i = 0; i < *VehCount; i++) {
-                    if (Vehs[i].faction_id && region_at(Vehs[i].x, Vehs[i].y) == region) {
-                        nearby |= (1 << Vehs[i].faction_id);
+                    int owner = Vehs[i].faction_id;
+                    if (owner && owner != faction_id && region_at(Vehs[i].x, Vehs[i].y) == region) {
+                        nearby |= (1 << owner);
                     }
                 }
                 int tile_ratio = Continents[region].tile_count / (bit_count(nearby) + 1);
@@ -2367,9 +2564,10 @@ int __cdecl mod_setup_player(int faction_id, int setup_id, int is_probe) {
                     if (unit_id >= 0) {
                         char buf[StrBufLen] = {};
                         mod_make_proto(unit_id, CHS_FOIL, WPN_COLONY_MODULE, ARM_NO_ARMOR, ABL_NONE, REC_FISSION);
+                        Units[unit_id].unit_flags &= ~(UNIT_UNK_40 | UNIT_UNK_80);
+                        Units[unit_id].unit_flags |= UNIT_PROTOTYPED;
                         mod_name_proto(&buf[0], unit_id, faction_id,
                             CHS_FOIL, WPN_COLONY_MODULE, ARM_NO_ARMOR, ABL_NONE, REC_FISSION);
-                        Units[unit_id].unit_flags |= UNIT_PROTOTYPED;
                         Units[unit_id].unit_flags &= ~UNIT_CUSTOM_NAME_SET;
                         strcpy_n(&Units[unit_id].name[0], MaxProtoNameLen, buf);
                     }
@@ -2389,7 +2587,7 @@ int __cdecl mod_setup_player(int faction_id, int setup_id, int is_probe) {
             int spawn_val_c = -1;
             for (int unit_id = 0; unit_id < MaxProtoNum; unit_id++) {
                 UNIT* u = &Units[unit_id];
-                if (mod_veh_avail(unit_id, faction_id, -1) && u->offense_value() != 0) {
+                if (veh_avail(unit_id, faction_id, -1) && u->offense_value() != 0) {
                     if ((plr_aquatic && u->triad() == TRIAD_SEA) || (!plr_aquatic && u->triad() == TRIAD_LAND)) {
                         int v1 = 8 * armor_val(unit_id, faction_id) - weap_val(unit_id, faction_id);
                         if (v1 > spawn_val_a) {
@@ -2430,11 +2628,11 @@ int __cdecl mod_setup_player(int faction_id, int setup_id, int is_probe) {
             plr->unk_27 = 3 * plr->tech_ranking / 4;
         }
         if (faction_id == *CurrentPlayerFaction) {
-            MapWin->iTileX = x;
-            MapWin->iTileY = y;
+            MapWin->TileX = x;
+            MapWin->TileY = y;
             for (int i = 0; i < 32; i++) {
-                MapWin->aiCursorPositionsX[i] = x;
-                MapWin->aiCursorPositionsY[i] = y;
+                MapWin->CursorListX[i] = x;
+                MapWin->CursorListY[i] = y;
             }
         }
         return 1; // Valid spawn, return value non-zero
@@ -2473,16 +2671,10 @@ int __cdecl mod_eliminate_player(int faction_id, int setup_id) {
             setup_id = 0;
         }
         draw_map(1);
-        *GenderDefault = m->noun_gender;
-        *PluralDefault = m->is_noun_plural;
-        parse_says(0, m->noun_faction, -1, -1);
-        *GenderDefault = MFactions[setup_id].noun_gender;
-        *PluralDefault = MFactions[setup_id].is_noun_plural;
-        parse_says(1, MFactions[setup_id].noun_faction, -1, -1);
-        *GenderDefault = m->is_leader_female;
-        *PluralDefault = 0;
-        parse_says(2, m->title_leader, -1, -1);
-        parse_says(3, m->name_leader, -1, -1);
+        parse_says(0, get_noun(faction_id), -1, -1);
+        parse_says(1, get_noun(setup_id), -1, -1);
+        parse_says(2, get_title(faction_id), -1, -1);
+        parse_says(3, get_name(faction_id), -1, -1);
         parse_says(4, get_his_her(faction_id, 0), -1, -1);
         char name[StrBufLen] = {};
         char file[StrBufLen] = {};
@@ -2525,7 +2717,7 @@ int __cdecl mod_eliminate_player(int faction_id, int setup_id) {
                 }
                 draw_tiles(x, y, 2);
                 MapWin_set_center(MapWin, x, y, 1);
-                parse_says(6, m->adj_name_faction, -1, -1);
+                parse_says(6, get_adjective(faction_id), -1, -1);
                 if (!plr_alien) {
                     popp(ScriptFile, "TRACKED", 0, "escpod_sm.pcx", 0);
                 } else {

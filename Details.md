@@ -126,9 +126,9 @@ It is also possible to place multiple similar landmarks if the corresponding lan
 
 The new map generator is entirely different from the original version, so it does not use most variables specified in `alphax.txt` WorldBuilder section. Only in limited cases, such as river or fungus placement, WorldBuilder variables might be used by the game engine when the new map generator is enabled.
 
-Thinker also includes modified `faction_placement` algorithm that tries to balance faction starting locations more evenly across the whole map area while avoiding unusable spawns on tiny islands. The selection also takes into account land quality near the spawn. The effect is most noticeable on Huge map sizes. It is possible to disable this option but it is not recommended since other spawn-related features might depend on it.
+Thinker also includes modified faction placement method that tries to balance faction starting locations more evenly across the whole map area while avoiding unusable spawns on small islands. The selection also takes into account land quality near the spawn. It is possible to adjust minimum allowed continent size for faction placement with `start_area_limit` option. This value is the initial limit for standard maps and it is scaled depending on different map related factors.
 
-When `nutrient_bonus` option is higher than zero, the placement algorithm adds this many additional nutrient bonus resources at each start. The placement also strongly favors spawns on river tiles for easier movement in the early game.
+When `nutrient_bonus` option is higher than zero, the placement method adds the chosen amount of nutrient bonus resources at each start unless the faction is respawning after being eliminated earlier. The placement also strongly favors spawns on river tiles for easier movement in the early game.
 
 Another optional setting `rare_supply_pods` is not dependent on faction placement, instead it affects the whole map by reducing the frequency of random supply pods significantly. Thematically it never made much sense that the supply pods would be excessively abundant across the whole planet surface, while the Unity spaceship would supposedly only have limited space for extra supplies.
 
@@ -462,7 +462,7 @@ If the line mentions a config variable name in parentheses, the patch can be opt
 28. Patch Energy Market Crash event to reduce energy reserves only by 1/2 instead of 3/4. The event can also be entirely disabled with skip_event option.
 29. Bases that have sufficient drone control facilities before the growth phase can grow without triggering possible drone riots on the same turn (delay_drone_riots).
 30. Remove drone revolt event due to issues with the original code. Sometimes this caused rioting player-owned bases to join other factions while this did not happen on AI factions. REVOLT faction ability has alternative usage and it can lower the captured base assimilation time.
-31. Patch captured base extra drone effect to last a variable time from 20 to 50 turns depending on the base size and faction modifiers. The AI will also rename captured bases only after they are fully assimilated.
+31. Patch captured base extra drone effect to last a variable time from 20 to 50 turns depending on the base size and faction modifiers. This also applies to bases received through diplomacy threats. The AI will rename captured bases only after they are fully assimilated.
 32. When a base is captured that was previously owned by active third faction and the time to assimilate the base was more than zero, the previous owner is preserved after capture.
 33. Fix diplomacy dialog appearing multiple times when both human and alien factions are involved in a base capture by adjusting the location for spawned colony pods.
 34. Fix missing defender bonus mentioned in the manual "Units in a headquarters base automatically gain +1 Morale when defending".
@@ -470,7 +470,7 @@ If the line mentions a config variable name in parentheses, the patch can be opt
 36. Fix issue where Accelerated Start option may sometimes freeze the game when selecting a random secret project for Hive. Patched version will not assign Citizens Defense Force or Command Nexus for a faction that already has those facilities for free, unless all other choices among the first seven projects have been exhausted, also Empath Guild is always skipped.
 37. Disable legacy upkeep code in the game engine that might cause AI formers to be reassigned to nearby bases that are owned by other factions.
 38. Disable undocumented game startup code that spawned additional colony pods for factions if the difficulty level matched pre-defined rules. The same starting units can now be selected from the config file for all difficulty levels (skip_default_balance).
-39. Prevent the AI from making unnecessary trades where it sells their techs for maps owned by the player. The patch removes TRADETECH4 / TRADETECH5 dialogue paths making the AI usually demand a credit payment for any techs.
+39. Modify TRADETECH4/TRADETECH5 dialog paths to make the AI avoid selling important techs for maps owned by the player unless additional tech related checks are sufficient.
 40. Fix some issues where AI declared war based on calculations using incorrect variables. AI is also less likely to declare war at early stages when it has only few bases built.
 41. Fix visual issues where the game sometimes did not update the map properly when recentering it offscreen on native resolution mode.
 42. Fix issues where the game would crash on resolutions not divisible by 8. If an unsupported resolution is used, the game will attempt to automatically switch to the closest supported size.
@@ -507,6 +507,27 @@ If the line mentions a config variable name in parentheses, the patch can be opt
 73. Remove original leftover debug code that activated the scenario editor mode when any savegame with specific filenames were loaded.
 74. Fix multiple significant data consistency issues or possible game crashes when loading or writing savegames. The game will do additional checks to reject any savegames that may contain corrupted data.
 75. Modify random faction selection to use custom rules with skip_faction and faction_pair options. Skipped factions always override pairing rules but otherwise the pairs are resolved in the order they are defined.
+76. Fix inconsistent calculations with faction rankings when Security Nexus counters do not match the actual units present on the map.
+77. Fix mistake in rankings calculations that caused any non-PB, non-PSI combat unit not to count towards the rating unless the weapon value is equal to the current maximum across all factions.
+78. Game warns at startup when parsed labels.txt has fewer lines than the required count to avoid possible game crashes.
+79. Fix base obliterate, airdrop/orbital insertion and units drowning popup sometimes not displaying the proper base name.
+80. Restore missing dialog for PROTOPACT when an AI suggests to transfer prototypes. This updated dialog option only transfers the mentioned prototype to the player faction.
+81. Fix issue where diplomacy dialog sometimes mixed up INTRODUCEENEMY and INTRODUCEENEMYALIEN labels.
+82. Fix unimplemented dialog checks and remove VENDETTA5X reference for CYBORG faction filename.
+83. Fix issues with AI planet buster dialog when URGENTCOMM "Switching to main viewscreen" message does not open the diplomacy window and PLANETBUSTER0 message appears every time.
+84. Fix game not recentering base swap proposal dialog minimap when another base is selected from the list.
+85. Restore GIMMETECH2 dialog response when an AI asks for two techs in return for a pact. It used duplicated labels in script.txt and is now provided by modmenu.txt.
+86. Restore BASEGIFT1/BASEGIFT2 dialog responses to base gifts instead of always showing the generic BASEGIFT message.
+87. Fix TURNABOUT counter proposal when demanding withdrawal so that AI units are no longer withdrawn when the player chooses "Never mind. Let our forces remain in place."
+88. Fix pact proposals where a negative computed price could make the AI demand a negative amount of energy credits and transfer credits from the AI to the player.
+89. Fix AI council calls that depend on undefined values when Progenitors are alive and the Supreme Leader motion is available.
+90. Fix AI sometimes choosing the wrong faction to favor in Planetary Governor votes depending on inconsistent checks on faction rankings.
+91. Fix AI personality checks in the energy gift dialog comparing the gifting faction instead of the receiving AI.
+92. Modify Spartan and Believer AI personality checks to behave similarly with energy gifts as in the tech gift dialog.
+93. Fix AI tech valuations in pact and treaty proposals using the player's tech value instead of the AI's. This affected both the price and the friction relief.
+94. Fix Peacekeeper AI scaling the tech bribe thresholds for joint attack proposals too high.
+95. Fix the faction holding a captured leader being told that it had liberated that leader when another faction's probe team broke into its headquarters and freed the leader. This is displayed by modmenu.txt label WILLYFREE2.
+96. Fix attacking units being revealed to the defender only when the battle was displayed to the current player.
 
 
 Scient's patch

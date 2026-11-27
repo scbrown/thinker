@@ -2,71 +2,13 @@
 
 #include "main.h"
 
-enum PopDialog {
-    PopDialogCheckbox = 0x1, // Multiple choices
-    PopDialogListChoice = 0x2, // Only one choice
-    PopDialogTextInput = 0x4,
-    PopDialogBtnCancel = 0x40,
-    PopDialogLargeWindow = 0x80, // Large square window placed on top left
-    PopDialogSmallWindow = 0x400, // Narrow window
-    PopDialogUnk1000 = 0x1000,
-    PopDialogUnk10000 = 0x10000, // Removes portrait and ok buttons?
-    PopDialogUnk40000 = 0x40000, // Removes ok buttons?
-    PopDialogUnk100000 = 0x100000,
-};
-
-enum DiploProposal {
-    DiploProposalMakeGift = 1,
-    DiploProposalMakePact = 2,
-    DiploProposalMakeTreaty = 3,
-    DiploProposalTechTrade = 4,
-    DiploProposalBuyTech = 5, // mention related prototype?
-    DiploProposalNeedEnergy = 6,
-    DiploProposalTradeMaps = 7,
-    DiploProposalJointAttack = 8,
-    DiploProposalBaseSwap = 9,
-    DiploProposalCloseDialog = 10,
-    DiploProposalRepayLoan = 11,
-    DiploProposalCouncilVote = 12,
-    DiploProposalTradeCommlink = 13,
-};
-
-enum DiploCounter {
-    DiploCounterFriendship = 1, // goodwill and friendship
-    DiploCounterNameAPrice = 2, // need but name your price
-    DiploCounterThreaten = 3, // threaten with attack or cancel pact
-    DiploCounterResearchData = 4, // valuable research data
-    DiploCounterEnergyPayment = 5, // modest sum of energy credits
-    DiploCounterLoanPayment = 6, // schedule of loan payments
-    DiploCounterGiveBase = 8, // turn over one of my bases
-};
-
-void parse_gen_name(int faction_id, size_t title_value, size_t name_value);
-void parse_noun_name(int faction_id, size_t title_value, size_t name_value);
+void __thiscall Popup_init_icon(Popup* This, const char* filename, int* px, int* py);
+int __thiscall Popup_load_icon(Popup* This, Sprite* image, int a3, void* a4);
 int __cdecl X_pop(const char* label, fp_none fn);
 int __cdecl X_pop_2(const char* filename, const char* label, fp_none fn);
-int __cdecl X_pop_6(const char* label, int a2, fp_none fn);
-int __cdecl X_pops(const char* label, Sprite* a2, fp_none fn);
-int __cdecl X_pops_11(const char* label, int a2, Sprite* a3, fp_none fn);
-int __cdecl X_dialog(const char* label, int faction2);
-int __cdecl X_dialog(const char* filename, const char* label, int faction2);
-int __cdecl DiploPop_spying(int faction_id);
-int __cdecl mod_threaten(int faction1, int faction2);
-int __cdecl mod_base_swap(int faction1, int faction2);
-int base_trade_value(int base_id, int faction1, int faction2);
-int na_should_buy_base(int faction1, int cost);
-void na_probe_diplo_base_swap(int faction1, int faction2, int base_id);
-int __cdecl mod_energy_trade(int faction1, int faction2);
-int __cdecl mod_buy_tech(int faction1, int faction2, int counter_id, int high_price, int proposal_id);
-int na_tech_purchase_price(int faction1, int faction2, int tech_id, int high_price);
-void na_probe_diplo_tech_trade(int faction1, int faction2, int tech_id, int high_price);
-struct NaEnergyLoanTerms {
-    int score;
-    int amount;
-    int turns;
-    int payment;
-    int available_income;
-    int eligible;
-};
-NaEnergyLoanTerms na_energy_loan_terms(int faction1, int faction2);
-void na_probe_diplo_energy_loan(int faction1, int faction2);
+int __cdecl X_pop_6(const char* label, uint32_t flags, fp_none fn);
+int __cdecl X_pops(const char* label, Sprite* image, fp_none fn);
+int __cdecl X_pops_11(const char* label, uint32_t flags, Sprite* image, fp_none fn);
+int __cdecl X_dialog(const char* label, int faction_id);
+int __cdecl X_dialog_alt(const char* filename, const char* label, int faction_id);
+

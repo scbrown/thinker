@@ -4,31 +4,16 @@
 // Due to internal implementation differences, any FILE* pointers must
 // never be passed directly from modified to original functions or vice versa.
 
-const char* FileExtensionMap = "MP";
-const char* FileExtensionSave = "SAV";
+const char* FileExtMap = "MP";
+const char* FileExtScn = "SC";
+const char* FileExtSav = "SAV";
 
-int* const dword_6FF69C = (int*)0x6FF69C;
-int* const dword_6FF6A0 = (int*)0x6FF6A0;
-int* const dword_6FF6A4 = (int*)0x6FF6A4;
-int* const dword_6FF6A8 = (int*)0x6FF6A8;
-int* const dword_6FF6D4 = (int*)0x6FF6D4;
-int* const dword_6FF6F4 = (int*)0x6FF6F4;
-int* const dword_93A9B8 = (int*)0x93A9B8;
-int* const dword_93A9D8 = (int*)0x93A9D8;
 int* const dword_93F798 = (int*)0x93F798;
 int* const dword_94B558 = (int*)0x94B558;
-int* const dword_9A67DC = (int*)0x9A67DC;
-int* const dword_9A67E0 = (int*)0x9A67E0;
-int* const dword_939E5C = (int*)0x939E5C;
-int* const dword_939E58 = (int*)0x939E58;
-int* const dword_93D4F8 = (int*)0x93D4F8;
-void* const unk_93D4FC = (void*)0x93D4FC;
-void* const unk_93E978 = (void*)0x93E978;
 void* const unk_9B2178 = (void*)0x9B2178;
 void* const unk_9B208D = (void*)0x9B208D;
 char* const unk_945D80 = (char*)0x945D80;
 char* const unk_9B2078 = (char*)0x9B2078;
-Console* const UnkWin_8EB48C = (Console*)0x8EB48C;
 StringStruct* const DiploTextTable = (StringStruct*)0x93A7B8; // [8]
 StringStruct (*const DiploMessageTable)[8] = (StringStruct (*)[8])0x737CD8; // [8][8]
 
@@ -170,10 +155,10 @@ int __cdecl game_data(FILE* fp, int write_file) {
         memcpy(LastSavePath, prefs.LastSavePath, 0x100u);
         *ClimateValueA = prefs.ClimateValueA;
         *ClimateValueB = prefs.ClimateValueB;
-        *dword_9A67DC = prefs.dword_9A67DC;
+        *ScoreBonusPts = prefs.ScoreBonusPts;
         *ClimateValueC = prefs.ClimateValueC;
         *ClimateFutureChange = prefs.ClimateFutureChange;
-        memcpy(dword_9A67E0, prefs.dword_9A67E0, 0x20u);
+        memcpy(ScorePopTotal, prefs.ScorePopTotal, 0x20u);
         memcpy(SunspotDuration, &prefs.SunspotDuration, 0x28u);
     }
     if (*SaveFileVersion < 4) {
@@ -184,7 +169,7 @@ int __cdecl game_data(FILE* fp, int write_file) {
             if (!file_feed(GamePreferences, 0x398u, 1u, fp)) {
                 return 1;
             }
-            if (!file_feed(unk_93E978, 0xCE0u, 1u, fp)) {
+            if (!file_feed(DiploPlrList, 0xCE0u, 1u, fp)) {
                 return 1;
             }
             if (!file_feed(dword_93F798, 4u, 1u, fp)) {
@@ -402,6 +387,7 @@ int __cdecl game_data(FILE* fp, int write_file) {
     if (*SaveFileVersion < 7) {
         clear_monuments();
     } else {
+        static_assert(sizeof(Monument) * 8 == 0x27A0u, "");
         if (!file_feed(Monuments, 0x27A0u, 1u, fp)) {
             return 1;
         }
@@ -413,16 +399,16 @@ int __cdecl game_data(FILE* fp, int write_file) {
             return 1;
         }
     }
-    if (!file_feed(&MapWin->fUnitNotViewMode, 4u, 1u, fp)) {
+    if (!file_feed(&MapWin->InVehMode, 4u, 1u, fp)) {
         return 1;
     }
-    if (!file_feed(&MapWin->iUnit, 4u, 1u, fp)) {
+    if (!file_feed(&MapWin->VehID, 4u, 1u, fp)) {
         return 1;
     }
-    if (!file_feed(&MapWin->aiCursorPositionsX[MapWin->iCursorPositionCurrent], 4u, 1u, fp)) {
+    if (!file_feed(&MapWin->CursorListX[MapWin->CursorListIndex], 4u, 1u, fp)) {
         return 1;
     }
-    if (!file_feed(&MapWin->aiCursorPositionsY[MapWin->iCursorPositionCurrent], 4u, 1u, fp)) {
+    if (!file_feed(&MapWin->CursorListY[MapWin->CursorListIndex], 4u, 1u, fp)) {
         return 1;
     }
     if (*SaveFileWrite) {
@@ -436,7 +422,7 @@ int __cdecl game_data(FILE* fp, int write_file) {
             return 1;
         }
     }
-    if (game_io(UnkWin_8EB48C, fp)) {
+    if (game_io(&WorldWin->oMapWin, fp)) {
         return 1;
     }
     if (*GameMoreRules & MRULES_UNK_20) {
@@ -528,12 +514,12 @@ int __cdecl game_data(FILE* fp, int write_file) {
                 }
             }
         }
-        if (!file_feed(dword_6FF69C, 4u, 1u, fp)) return 1;
-        if (!file_feed(dword_6FF6A0, 4u, 1u, fp)) return 1;
-        if (!file_feed(dword_6FF6A4, 4u, 1u, fp)) return 1;
-        if (!file_feed(dword_6FF6A8, 4u, 1u, fp)) return 1;
-        if (!file_feed(dword_6FF6D4, 0x20u, 1u, fp)) return 1;
-        if (!file_feed(dword_6FF6F4, 0x20u, 1u, fp)) return 1;
+        if (!file_feed(&CouncWin->proposal_type, 4u, 1u, fp)) return 1;
+        if (!file_feed(&CouncWin->candidate_faction_id, 4u, 1u, fp)) return 1;
+        if (!file_feed(&CouncWin->proposal_outcome, 4u, 1u, fp)) return 1;
+        if (!file_feed(&CouncWin->prev_gov_faction_id, 4u, 1u, fp)) return 1;
+        if (!file_feed(&CouncWin->faction_vote, 0x20u, 1u, fp)) return 1;
+        if (!file_feed(&CouncWin->faction_vote_count, 0x20u, 1u, fp)) return 1;
         if (!file_feed(CouncilSessionPending, 4u, 1u, fp)) return 1;
         if (!file_feed(CouncilProposal, 0x20u, 1u, fp)) return 1;
         if (!file_feed(CouncilVoteState, 0x20u, 1u, fp)) return 1;
@@ -544,24 +530,24 @@ int __cdecl game_data(FILE* fp, int write_file) {
         if (!file_feed(dword_93A9D8, 0x20u, 1u, fp)) return 1;
     }
     if (write_file) {
-        if (!fwrite(dword_939E5C, 4u, 1u, fp)) {
+        if (!fwrite(CanvasWidth, 4u, 1u, fp)) {
             return 1;
         }
-        if (!fwrite(dword_939E58, 4u, 1u, fp)) {
+        if (!fwrite(CanvasHeight, 4u, 1u, fp)) {
             return 1;
         }
     } else {
-        int val1 = 0, val2 = 0;
-        if (!fread(&val1, 4u, 1u, fp)) {
+        int px = 0, py = 0;
+        if (!fread(&px, 4u, 1u, fp)) {
             return 1;
         }
-        if (!fread(&val2, 4u, 1u, fp)) {
+        if (!fread(&py, 4u, 1u, fp)) {
             return 1;
         }
-        if (val1 != *dword_939E5C || val2 != *dword_939E58) {
+        if (px != *CanvasWidth || py != *CanvasHeight) {
             for (int i = 1; i < 8; ++i) {
                 if (MapWinPtr[i]) {
-                    MapWinPtr[i]->iDrawToggleA = 0;
+                    MapWinPtr[i]->DrawToggleA = 0;
                 }
             }
         }
@@ -569,13 +555,13 @@ int __cdecl game_data(FILE* fp, int write_file) {
     return 0;
 }
 
-int __cdecl game_io(Console* state, FILE* fp) {
-    if (!file_feed(&state->iDrawToggleB, 4u, 1u, fp)) return 1;
-    if (!file_feed(&state->iDrawToggleA, 4u, 1u, fp)) return 1;
-    if (!file_feed(&state->iWhatToDrawFlags, 4u, 1u, fp)) return 1;
-    if (!file_feed(&state->iZoomFactor, 4u, 1u, fp)) return 1;
-    if (!file_feed(&state->iTileX, 4u, 1u, fp)) return 1;
-    return file_feed(&state->iTileY, 4u, 1u, fp) == 0;
+int __cdecl game_io(MapWindow* state, FILE* fp) {
+    if (!file_feed(&state->DrawToggleB, 4u, 1u, fp)) return 1;
+    if (!file_feed(&state->DrawToggleA, 4u, 1u, fp)) return 1;
+    if (!file_feed(&state->DrawFlags, 4u, 1u, fp)) return 1;
+    if (!file_feed(&state->ZoomFactor, 4u, 1u, fp)) return 1;
+    if (!file_feed(&state->TileX, 4u, 1u, fp)) return 1;
+    return file_feed(&state->TileY, 4u, 1u, fp) == 0;
 }
 
 int __cdecl encrypt_write(void* src_ptr, size_t len, size_t cnt, FILE* fp) {
@@ -668,7 +654,7 @@ void __cdecl map_wipe() {
 }
 
 int __cdecl map_init() {
-    snprintf(MapFilePath, StrBufLen, "maps\\%s.%s", label_get(676), FileExtensionMap);
+    snprintf(MapFilePath, StrBufLen, "maps\\%s.%s", label_get(TL_Untitled), FileExtMap);
     *MapHalfX = *MapAreaX / 2;
     *MapAreaTiles = *MapAreaY * (*MapAreaX / 2);
     *MapAreaSqRoot = quick_root(*MapAreaY * (*MapAreaX / 2));
@@ -846,14 +832,15 @@ int __cdecl mod_save_daemon(const char* filename) {
     }
     if (*MultiplayerActive) {
         *GameState |= STATE_UNK_10000000;
-        *dword_93F798 = *dword_93D4F8;
-        memcpy(unk_93E978, unk_93D4FC, 0xCE0u);
+        *dword_93F798 = NetState->field_768;
+        static_assert(sizeof(NetState->plr_list) == 0xCE0u, "");
+        memcpy(DiploPlrList, &NetState->plr_list, 0xCE0u);
     }
     char path[StrBufLen];
     if (strchr(filename, '.')) {
         snprintf(path, sizeof(path), "%s", filename);
     } else {
-        snprintf(path, sizeof(path), "%s.%s", filename, FileExtensionSave);
+        snprintf(path, sizeof(path), "%s.%s", filename, FileExtSav);
     }
     debug("save_daemon %s\n", path);
     FILE* file = env_open(path, "wb");
@@ -903,9 +890,9 @@ int __cdecl mod_load_daemon(const char* filename, int flag) {
         return SAVE_LOAD_OLD;
     }
     for (int i = 2; i < 8; ++i) {
-        Console* win = MapWinPtr[i];
-        if (win && win->iDrawToggleA) {
-            win->iDrawToggleA = 0;
+        MapWindow* win = MapWinPtr[i];
+        if (win && win->DrawToggleA) {
+            win->DrawToggleA = 0;
             MapWin_close(win);
         }
     }
@@ -924,16 +911,16 @@ int __cdecl mod_load_daemon(const char* filename, int flag) {
     }
     if (!*MultiplayerActive) {
         for (int i = 2; i < 8; ++i) {
-            Console* ptr = MapWinPtr[i];
+            MapWindow* ptr = MapWinPtr[i];
             if (ptr) {
-                ptr->iDrawToggleA = 0;
+                ptr->DrawToggleA = 0;
             }
         }
     }
     *ComputeBaseID = -1;
     Path_init(Paths);
     if (flag) {
-        mod_world_linearize_contours();
+        world_linearize_contours();
     }
     memcpy(AltNatural, ElevDetail, sizeof(ElevDetail));
     for (int fc = 1; fc < MaxPlayerNum; ++fc) {
@@ -971,11 +958,11 @@ int __cdecl mod_load_daemon(const char* filename, int flag) {
     // if (*GameRules & RULES_IRONMAN) {
     //     remove(filename);
     // }
-    int cursor_x = MapWin->aiCursorPositionsX[MapWin->iCursorPositionCurrent];
-    int cursor_y = MapWin->aiCursorPositionsY[MapWin->iCursorPositionCurrent];
+    int cursor_x = MapWin->CursorListX[MapWin->CursorListIndex];
+    int cursor_y = MapWin->CursorListY[MapWin->CursorListIndex];
     for (int i = 0; i < 32; ++i) {
-        MapWin->aiCursorPositionsX[i] = cursor_x;
-        MapWin->aiCursorPositionsY[i] = cursor_y;
+        MapWin->CursorListX[i] = cursor_x;
+        MapWin->CursorListY[i] = cursor_y;
     }
     rebuild_vehicle_bits();
     rebuild_base_bits();
@@ -1002,7 +989,7 @@ int __cdecl mod_save_map_daemon(const char* filename) {
     if (strchr(filename, '.')) {
         snprintf(path, sizeof(path), "%s", filename);
     } else {
-        snprintf(path, sizeof(path), "%s.%s", filename, FileExtensionMap);
+        snprintf(path, sizeof(path), "%s.%s", filename, FileExtMap);
     }
     FILE* fp = env_open(path, "wb");
     if (fp) {
@@ -1026,7 +1013,7 @@ int __cdecl mod_save_map_daemon(const char* filename) {
 int __cdecl mod_load_map_daemon(const char* filename) {
     int is_save = 0;
     char* ext = strrchr(filename, '.'); // Fix: select the last dot from the filename
-    if (ext && !_stricmp(ext + 1, FileExtensionSave)) {
+    if (ext && !_stricmp(ext + 1, FileExtSav)) {
         is_save = 1;
     }
     FILE* fp = env_open(filename, "rb");
@@ -1046,9 +1033,9 @@ int __cdecl mod_load_map_daemon(const char* filename) {
             int min_ver = is_save ? 0x56 : 0x5;
             if (version >= min_ver) {
                 for (int i = 1; i < 8; ++i) {
-                    Console* win = MapWinPtr[i];
-                    if (win && win->iDrawToggleA) {
-                        win->iDrawToggleA = 0;
+                    MapWindow* win = MapWinPtr[i];
+                    if (win && win->DrawToggleA) {
+                        win->DrawToggleA = 0;
                         MapWin_close(win);
                     }
                 }
@@ -1057,8 +1044,8 @@ int __cdecl mod_load_map_daemon(const char* filename) {
                 if (!map_data(fp, 0, is_save)) {
                     *BaseCount = 0;
                     *VehCount = 0;
-                    MapWin->fUnitNotViewMode = 0;
-                    MapWin->iUnit = -1;
+                    MapWin->InVehMode = 0;
+                    MapWin->VehID = -1;
                     for (int i = 0; i < *MapAreaTiles; ++i) {
                         MAP* sq = &(*MapTiles)[i];
                         sq->visibility = 0;

@@ -49,6 +49,18 @@ void __cdecl net_set_treaty(int a1, int a2, int a3, int a4, int wait_diplo) {
     }
 }
 
+void __cdecl net_agenda_on(int a1, int a2, int a3, int wait_diplo) {
+    debug_ver("net_agenda_on %d %d %d\n", a1, a2, a3);
+    if (*MultiplayerActive) {
+        message_data(0x2444, 0, a1, a2, a3, 0);
+        if (wait_diplo) {
+            NetDaemon_await_diplo(NetState, 0x444);
+        }
+    } else {
+        agenda_on(a1, a2, a3);
+    }
+}
+
 void __cdecl net_agenda_off(int a1, int a2, int a3, int wait_diplo) {
     debug_ver("net_agenda_off %d %d %d\n", a1, a2, a3);
     if (*MultiplayerActive) {
@@ -134,6 +146,18 @@ void __cdecl net_pact_ends(int a1, int a2, int wait_diplo) {
         }
     } else {
         pact_ends(a1, a2);
+    }
+}
+
+void __cdecl net_withdrawal(int a1, int a2, int wait_diplo) {
+    debug_ver("net_withdrawal %d %d\n", a1, a2);
+    if (*MultiplayerActive) {
+        message_data(0x244A, 0, a1, a2, 0, 0);
+        if (wait_diplo) {
+            NetDaemon_await_diplo(NetState, 0x44A);
+        }
+    } else {
+        do_withdrawal(a1, a2);
     }
 }
 

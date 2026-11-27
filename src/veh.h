@@ -12,6 +12,9 @@ bool is_native_unit(int unit_id);
 bool is_battle_ogre(int unit_id);
 bool can_repair(int unit_id);
 bool can_monolith(int unit_id);
+void __cdecl boom_veh(int x, int y, int flag, int veh_id);
+void __cdecl boom_veh_at(int x, int y, int flag);
+void __cdecl boom_tile(int x, int y, int flag);
 
 int __cdecl veh_at(int x, int y);
 int __cdecl veh_who(int x, int y);
@@ -46,9 +49,10 @@ int __cdecl proto_speed(int unit_id);
 int __cdecl veh_speed(int veh_id, int skip_morale);
 int __cdecl veh_cargo(int veh_id);
 int __cdecl want_monolith(int veh_id);
-void __cdecl mod_monolith(int veh_id);
-int __cdecl mod_goody_box(int veh_id);
-int __cdecl mod_study_artifact(int veh_id);
+void __cdecl monolith(int veh_id);
+int __cdecl do_unity_crash(int x, int y, int faction_id);
+int __cdecl goody_box(int veh_id);
+int __cdecl study_artifact(int veh_id);
 int __cdecl arm_strat(int armor_id, int faction_id);
 int __cdecl weap_strat(int weapon_id, int faction_id);
 int __cdecl weap_val(int unit_id, int faction_id);
@@ -64,8 +68,8 @@ int __cdecl mod_upgrade_cost(int faction_id, int new_unit_id, int old_unit_id);
 int __cdecl mod_upgrade_prototype(int faction_id, int new_unit_id, int old_unit_id, int flag);
 void __cdecl part_upgrade(int faction_id, int new_unit_id, int old_unit_id);
 void __cdecl full_upgrade(int faction_id, int new_unit_id, int old_unit_id);
-int __cdecl mod_veh_avail(int unit_id, int faction_id, int base_id);
-int __cdecl mod_stack_check(int veh_id, int type, int cond1, int cond2, int cond3);
+int __cdecl veh_avail(int unit_id, int faction_id, int base_id);
+int __cdecl stack_check(int veh_id, int type, int cond1, int cond2, int cond3);
 
 int __cdecl veh_jail(int veh_id);
 void __cdecl veh_skip(int veh_id);
@@ -81,6 +85,14 @@ void __cdecl mod_make_proto(int unit_id, VehChassis chassis_id,
     VehWeapon weapon_id, VehArmor armor_id, VehAblFlag abls, VehReactor reactor_id);
 int __cdecl mod_name_proto(char* name, int unit_id, int faction_id,
     VehChassis chs, VehWeapon wpn, VehArmor arm, VehAblFlag abls, VehReactor rec);
+
+void __cdecl spot_base(int base_id, int faction_id);
+void __cdecl spot_stack(int veh_id, int faction_id);
+void __cdecl unspot_stack(int veh_id);
+void __cdecl spot_loc(int x, int y, int faction_id);
+int __cdecl want_to_wake(int faction_id, int veh_id, int veh_id2);
+void __cdecl wake_stack(int veh_id);
+void __cdecl spot_all(int veh_id, int flag);
 
 VehArmor best_armor(int faction_id, int max_cost);
 VehWeapon best_weapon(int faction_id);

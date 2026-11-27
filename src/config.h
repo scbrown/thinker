@@ -7,6 +7,7 @@ extern const char* ScriptFile;
 extern const char* BlurbsxFile;
 extern const char* OpeningFile;
 extern const char* MovlistFile;
+extern const char* ExpMovlistFile;
 extern const char* TutorFile;
 extern const char* PopupScriptFile;
 extern const char* MovlistTxtFile;
@@ -49,6 +50,7 @@ static_assert(DefaultWarnPref == 0x3C3A9, "");
 static_assert(DefaultRules == 0x1A0E, "");
 
 const char* alpha_file();
+void __cdecl set_language(int value);
 FILE* env_open(const char* path, const char* mode);
 int __cdecl X_text_open(const char* filename, const char* label);
 int __cdecl text_open(const char* filename, const char* label);

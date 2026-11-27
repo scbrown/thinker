@@ -2,10 +2,6 @@
 
 #include "main.h"
 
-enum WinFlag {
-    WIN_VISIBLE = 1,
-};
-
 enum GameWinState {GW_None, GW_World, GW_Base, GW_Design};
 
 const uint32_t WM_WINDOWED = (WM_USER + 3);
@@ -60,6 +56,7 @@ bool win_has_focus();
 int __thiscall Win_is_visible(Win* This);
 LRESULT WINAPI ModWinProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 int __cdecl mod_Win_init_class(const char* lpWindowName);
+void __cdecl amovie_project(int movie_id);
 void __cdecl mod_amovie_project(const char* name);
 void restore_video_mode();
 void set_video_mode(bool reset_window);
@@ -69,7 +66,7 @@ int show_mod_menu();
 int __cdecl mod_blink_timer();
 void __cdecl mod_turn_timer();
 int __thiscall mod_calc_dim(Console* This);
-int __thiscall mod_gen_map(Console* This, int iOwner, int fUnitsOnly);
+int __thiscall mod_gen_map(Console* This, int faction_id, int units_only);
 void __thiscall MapWin_gen_overlays(Console* This, int x, int y);
 int __thiscall SetupWin_buffer_draw(Buffer* src, Buffer* dst, int a3, int a4, int a5, int a6, int a7);
 int __thiscall SetupWin_buffer_copy(
@@ -80,12 +77,10 @@ int __thiscall Credits_GraphicWin_init(
     GraphicWin* This, int a2, int a3, int a4, int a5, char* a6, int a7, Win* a8, Menu* a9, BorderSizing* a10);
 void __cdecl ReportWin_draw_ops_strcat(char* dst, char* src);
 void __thiscall ReportWin_draw_ops_color(Buffer* This, int UNUSED(a2), int a3, int a4, int a5);
-int __thiscall mod_MapWin_focus(Console* This, int x, int y);
-void __thiscall mod_MapWin_set_center(Console* This, int x, int y, int flag);
+int __thiscall mod_MapWin_focus(MapWindow* This, int x, int y);
+void __thiscall mod_MapWin_set_center(MapWindow* This, int x, int y, int flag);
 void __thiscall ReportWin_close_handler(SubInterface* This);
-void __thiscall Console_editor_fungus(Console* UNUSED(This));
 void __cdecl say_loc(char* dest, int x, int y, int a4, int a5, int a6);
-void __cdecl mod_diplomacy_caption(int faction1, int faction2);
 void __cdecl reset_netmsg_status();
 int __thiscall mod_NetMsg_pop(NetMessage* This, const char* label, int delay, int a4, const char* filename);
 int __thiscall mod_BasePop_start(

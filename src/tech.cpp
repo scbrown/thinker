@@ -24,30 +24,30 @@ void __cdecl say_tech(char* output, int tech_id, int incl_category) {
     char* buf = output + prev;
     size_t len = StrBufLen - prev;
     if (tech_id < -1) {
-        snprintf(buf, len, "%s", label_get(310)); // Not Available
+        snprintf(buf, len, "%s", label_get(TL_NotAvailable));
     } else if (tech_id < 0) {
-        snprintf(buf, len, "%s", label_get(25)); // NONE
-    } else if (tech_id == 9999) {
-        snprintf(buf, len, "%s", label_get(306)); // World Map
-    } else if (tech_id < MaxTechnologyNum) {
+        snprintf(buf, len, "%s", label_get(TL_NONE));
+    } else if (tech_id == Tech_ID_WorldMap) {
+        snprintf(buf, len, "%s", label_get(TL_WorldMap));
+    } else if (tech_id < Tech_ID_Commlink) {
         if (incl_category) {
             snprintf(buf, len, "%s (%s%d)", Tech[tech_id].name,
-                label_get(629 + tech_category(tech_id)), // 'E#', 'D#', 'B#', 'C#'
+                label_get(TL_TechTypeLetter + tech_category(tech_id)), // 'E', 'D', 'B', 'C'
                 tech_level(tech_id, 0));
         } else {
             snprintf(buf, len, "%s", Tech[tech_id].name);
         }
-    } else if (tech_id < 97) {
-        int faction_id = tech_id - MaxTechnologyNum;
+    } else if (tech_id < Tech_ID_Units) {
+        int faction_id = tech_id - Tech_ID_Commlink;
         if (*GameLanguage) {
-            snprintf(buf, len, "%s (%s)", label_get(487), // Comm Frequency
-                parse_set(faction_id));
+            snprintf(buf, len, "%s (%s)",
+                label_get(TL_CommFrequency), get_noun(faction_id));
         } else {
             snprintf(buf, len, "%s %s",
-                MFactions[faction_id].adj_name_faction, label_get(487)); // Comm Frequency
+                MFactions[faction_id].adj_name_faction, label_get(TL_CommFrequency));
         }
     } else {
-        snprintf(buf, len, "%s %s", Units[tech_id - 97].name, label_get(185)); // Prototype
+        snprintf(buf, len, "%s %s", Units[tech_id - Tech_ID_Units].name, label_get(TL_Prototype));
     }
 }
 
@@ -380,11 +380,19 @@ determines whether a simplistic or extended calculation is required for technolo
 Return Value: Value of tech_id to the specified faction
 */
 int __cdecl mod_tech_val(int tech_id, int faction_id, int simple_calc) {
-    Faction* f = &Factions[faction_id];
-    MFaction* m = &MFactions[faction_id];
-    if (tech_id == 9999) {
+    // Fix: added checks that return zero for incorrect parameters
+    if (faction_id < 0 || faction_id >= MaxPlayerNum) {
+        assert(0);
+        return 0;
+    }
+    if (tech_id == Tech_ID_WorldMap) { // Special case before other checks
         return 2;
     }
+    if (tech_id < 0 || tech_id >= Tech_ID_Units + MaxProtoNum) {
+        return 0;
+    }
+    Faction* f = &Factions[faction_id];
+    MFaction* m = &MFactions[faction_id];
     int value;
     if (tech_id < MaxTechnologyNum) {
         CTech* tech = &Tech[tech_id];
@@ -604,9 +612,9 @@ int __cdecl mod_tech_val(int tech_id, int faction_id, int simple_calc) {
                 value += (high_cost ? 20 : 40);
             }
         }
-    } else if (tech_id < 97) { // Factions
+    } else if (tech_id < Tech_ID_Units) { // Factions
         int factor = 1;
-        int faction_id_2 = tech_id - MaxTechnologyNum;
+        int faction_id_2 = tech_id - Tech_ID_Commlink;
         if (!mod_wants_to_attack(faction_id, faction_id_2, 0)) {
             factor++;
         }
@@ -616,7 +624,7 @@ int __cdecl mod_tech_val(int tech_id, int faction_id, int simple_calc) {
         value = factor * (factor / (f->AI_fight + 2));
         assert(value == tech_val(tech_id, faction_id, simple_calc));
     } else {  // Prototypes
-        UNIT* u = &Units[tech_id - 97];
+        UNIT* u = &Units[tech_id - Tech_ID_Units];
         value = clamp(u->offense_value(), 1, 2)
             + clamp(u->defense_value(), 1, 2)
             + clamp((int)u->speed(), 1, 2)
@@ -725,7 +733,7 @@ void __cdecl tech_achieved(int faction_id, int tech_id, int faction_id_2, int is
     if (is_human(faction_id)) {
         ambience(201);
     }
-    if (tech_id >= 9999) {
+    if (tech_id >= Tech_ID_WorldMap) {
         if (!(faction_id_2 >= 0 && faction_id_2 < MaxPlayerNum)) {
             assert(0);
             return;
@@ -753,16 +761,16 @@ void __cdecl tech_achieved(int faction_id, int tech_id, int faction_id_2, int is
         }
         return;
     }
-    if (tech_id >= 89) {
-        if (tech_id < 97) {
-            treaty_on(faction_id, tech_id - 89, DIPLO_COMMLINK);
+    if (tech_id >= Tech_ID_Commlink) {
+        if (tech_id < Tech_ID_Units) {
+            treaty_on(faction_id, tech_id - Tech_ID_Commlink, DIPLO_COMMLINK);
             return;
         }
-        if (tech_id - 97 >= MaxProtoNum) {
+        if (tech_id - Tech_ID_Units >= MaxProtoNum) {
             assert(0);
             return;
         }
-        UNIT* src = &Units[tech_id - 97];
+        UNIT* src = &Units[tech_id - Tech_ID_Units];
         int uid = mod_propose_proto(
             faction_id,
             (VehChassis)src->chassis_id,
@@ -871,7 +879,7 @@ void __cdecl tech_achieved(int faction_id, int tech_id, int faction_id_2, int is
                 if (faction_id_2 == -1) {
                     parse_says(2, Facility[FAC_PLANETARY_DATALINKS].name, -1, -1);
                 } else {
-                    parse_says(2, label_get(215), -1, -1); // Data Links
+                    parse_says(2, label_get(TL_DataLinks), -1, -1);
                 }
             }
         } else {
@@ -882,11 +890,11 @@ void __cdecl tech_achieved(int faction_id, int tech_id, int faction_id_2, int is
             snprintf(StrBuffer, StrBufLen, "TECH%d", tech_id);
             BasePop_init(&cur_popup, 0, 0);
             BasePop_set_width(&cur_popup, 500);
-            Popup_start(&cur_popup, BlurbsxFile, StrBuffer, -1, 0, 128, 0);
+            Popup_start(&cur_popup, BlurbsxFile, StrBuffer, -1, 0, POPUP_PRE_INIT, 0);
             BasePop_string(&cur_popup, "^");
             BasePop_string(&cur_popup, "^------");
             BasePop_string(&cur_popup, "^");
-            pop_flag = 128;
+            pop_flag = POPUP_PRE_INIT;
         }
         StrBuffer[0] = 0;
         if (faction_id == MapWin->cOwner) {
@@ -903,8 +911,7 @@ void __cdecl tech_achieved(int faction_id, int tech_id, int faction_id_2, int is
             StrBuffer[0] = 0;
             strcat(StrBuffer, "WEGETSHARETECH");
         }
-        cur_popup.field_2144 = (cur_popup.dialogs.spriteBox[13] == 0 ? TechIcons[tech_id] : 0);
-        SpriteBox_sprite((SpriteBox*)&cur_popup.dialogs.spriteBox, TechIcons[tech_id], 0, tech_id);
+        Popup_load_icon(&cur_popup, TechIcons[tech_id], tech_id, 0);
         cur_popup.field_3104 = 1;
         cur_popup.field_3108 = 2;
         Popup_start(&cur_popup, PopupScriptFile, StrBuffer, -1, 0, pop_flag, 0);
@@ -913,11 +920,11 @@ void __cdecl tech_achieved(int faction_id, int tech_id, int faction_id_2, int is
         }
         FX_play(Sounds, 51);
         if (faction_id == MapWin->cOwner) {
-            if (*MultiplayerActive && (*DiploWinState || *dword_7492CC || *ControlWaitLoop)) {
+            if (*MultiplayerActive && (*DiploWinState || *DiploWinCommlink || *ControlWaitLoop)) {
                 parse_says(0, Tech[tech_id].name, -1, -1);
                 NetMsg_pop(NetMsg, "TECHOBTAINED", 5000, 0, 0);
             } else {
-                NewTechWin_exec(NetTechWin, tech_id, faction_id_2);
+                NewTechWin_exec(NewTechWin, tech_id, faction_id_2);
             }
         } else if (!*MultiplayerActive) {
             BasePop_exec_3(&cur_popup, 0, 0);

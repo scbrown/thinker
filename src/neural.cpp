@@ -590,12 +590,12 @@ static void na_write_action_space(NaBuf* w, int base_id) {
 
     for (int id = 0; id < MaxProtoNum; id++) {
         /*
-        mod_veh_avail, NOT can_build_unit. can_build_unit checks only proto-slot
+        veh_avail, NOT can_build_unit. can_build_unit checks only proto-slot
         ownership, the colony/nutrient rule, sea adjacency and the unit cap - it never
         checks whether the prerequisite tech is known. Using it yielded 125 options for a
         turn-35 base, including Alien Artifact, which is not buildable at all.
         */
-        if (!mod_veh_avail(id, faction_id, base_id)) {
+        if (!veh_avail(id, faction_id, base_id)) {
             continue;
         }
         if (!can_build_unit(base_id, id)) {
@@ -640,8 +640,8 @@ static void na_write_action_space(NaBuf* w, int base_id) {
     }
 
     for (int id = 1; id <= SP_ID_Last; id++) {
-        // Same reasoning: mod_facility_avail is the engine's own availability test.
-        if (!mod_facility_avail((FacilityId)id, faction_id, base_id, 0)) {
+        // Same reasoning: facility_avail is the engine's own availability test.
+        if (!facility_avail((FacilityId)id, faction_id, base_id, 0)) {
             continue;
         }
         if (!can_build(base_id, id)) {
@@ -1654,11 +1654,11 @@ integer comparisons, which is nothing against a network round trip.
 static bool na_item_is_legal(int base_id, int item) {
     int faction_id = Bases[base_id].faction_id;
     if (item >= 0) {
-        return mod_veh_avail(item, faction_id, base_id) && can_build_unit(base_id, item);
+        return veh_avail(item, faction_id, base_id) && can_build_unit(base_id, item);
     }
     int id = -item;
     return id > 0 && id <= SP_ID_Last
-        && mod_facility_avail((FacilityId)id, faction_id, base_id, 0)
+        && facility_avail((FacilityId)id, faction_id, base_id, 0)
         && can_build(base_id, id);
 }
 
@@ -3711,8 +3711,8 @@ static int na_audit_base_production(int base_id) {
         const int last = pass == 0 ? MaxProtoNum - 1 : SP_ID_Last;
         for (int id = pass == 0 ? 0 : 1; id <= last; id++) {
             const bool offered = pass == 0
-                ? (mod_veh_avail(id, faction_id, base_id) && can_build_unit(base_id, id))
-                : (mod_facility_avail((FacilityId)id, faction_id, base_id, 0)
+                ? (veh_avail(id, faction_id, base_id) && can_build_unit(base_id, id))
+                : (facility_avail((FacilityId)id, faction_id, base_id, 0)
                    && can_build(base_id, id));
             char action_id[64];
             snprintf(action_id, sizeof(action_id), pass == 0 ? "unit:%d" : "facility:%d", id);
@@ -5432,7 +5432,7 @@ static int na_route_dialog(const NaDialogEntry* entry, int base_id) {
         na_build_base_staple(&w, base_id, false);
     } else if (withdrawal) {
         const int faction_id = *CurrentPlayerFaction;
-        const int target_id = *diplo_second_faction;
+        const int target_id = *DiploSecondFaction;
         if (faction_id <= 0 || faction_id >= MaxPlayerNum
             || target_id <= 0 || target_id >= MaxPlayerNum || target_id == faction_id) {
             na_dialog_route_refused++;
@@ -5576,7 +5576,7 @@ static int na_route_council_vote(bool* brain_answered) {
     return choice;
 }
 
-int __thiscall na_dialog_exec(BasePop* This, int a2, int a3) {
+int __thiscall na_dialog_exec(BasePop* This, int a2, fp_none a3) {
     const bool matched = na_pending_dialog && (BasePop*)na_pending_dialog == This;
     const NaDialogEntry* entry = matched ? na_pending_dialog_entry : nullptr;
     na_pending_dialog = nullptr;
@@ -6490,16 +6490,16 @@ void na_command_tick(void* hwnd_raw) {
     static DWORD last_poll = 0;
 
     if (na_council_open_picker_ticks > 0 && --na_council_open_picker_ticks == 0) {
-        // CouncilWindow::button_action(4) is the VOTE control measured at 0x424870's switch:
+        // CouncWindow::button_action(4) is the VOTE control measured at 0x424870's switch:
         // argument 4 enters the GOVVOTE branch at 0x424951.  It runs here because command_tick
         // is on the game thread; calling a window method from the harness thread would race UI
         // state and recreate the very modal hang this removes.
-        typedef void (__thiscall *FCouncilVoteButton)(CouncilWindow*, int);
-        ((FCouncilVoteButton)0x424870)(CouncilWin, 4);
+        typedef void (__thiscall *FCouncilVoteButton)(CouncWindow*, int);
+        ((FCouncilVoteButton)0x424870)(CouncWin, 4);
     }
     if (na_council_close_result_ticks > 0 && --na_council_close_result_ticks == 0) {
-        typedef void (__thiscall *FCouncilResultButton)(CouncilWindow*, int);
-        ((FCouncilResultButton)0x424870)(CouncilWin, 5);
+        typedef void (__thiscall *FCouncilResultButton)(CouncWindow*, int);
+        ((FCouncilResultButton)0x424870)(CouncWin, 5);
     }
 
     /*
@@ -6910,14 +6910,14 @@ void na_command_tick(void* hwnd_raw) {
         int item = 99999;
         if (strcmp(kind, "unit") == 0) {
             if (id < 0 || id >= MaxProtoNum
-            || !mod_veh_avail(id, fid, base_id) || !can_build_unit(base_id, id)) {
+            || !veh_avail(id, fid, base_id) || !can_build_unit(base_id, id)) {
                 na_cmd_result("apply", "unit not available for this base", false);
                 return;
             }
             item = id;              // item >= 0 encodes a unit prototype
         } else if (strcmp(kind, "facility") == 0) {
             if (id < 1 || id > SP_ID_Last
-            || !mod_facility_avail((FacilityId)id, fid, base_id, 0) || !can_build(base_id, id)) {
+            || !facility_avail((FacilityId)id, fid, base_id, 0) || !can_build(base_id, id)) {
                 na_cmd_result("apply", "facility not available for this base", false);
                 return;
             }
@@ -7597,7 +7597,7 @@ void na_command_tick(void* hwnd_raw) {
         // exact decision seam, not those prerequisites: establish the same globals the engine
         // establishes, then raise the representative Miriam text directly.
         *CurrentPlayerFaction = faction;
-        *diplo_second_faction = target;
+        *DiploSecondFaction = target;
         Popup cur_popup = {};
         const int answer = Popup_start(&cur_popup, ScriptFile, "GETOUT3", -1, nullptr,
                                        0x100000, nullptr);
@@ -7847,11 +7847,11 @@ void na_command_tick(void* hwnd_raw) {
                 enemy units, so it can be given an order, attempt it, spend its allowance and end
                 the turn where it started — intermittently, freeing up when the enemy unit moves.
 
-                `mod_zoc_any` is the same test `mod_enemy_veh` consults when it decides whether a
+                `zoc_any` is the same test `mod_enemy_veh` consults when it decides whether a
                 unit with a MOVE_TO order can be skipped, so this is the engine's own notion and
                 not a second one.
                 */
-                pod_zoc = mod_zoc_any(Vehs[i].x, Vehs[i].y, faction) ? 1 : 0;
+                pod_zoc = zoc_any(Vehs[i].x, Vehs[i].y, faction) ? 1 : 0;
                 /*
                 The unit's STATE BITS (na-1lj). Two pods on the same tile of the same base, one
                 turn apart, behave differently: the one placed at game start walks away and

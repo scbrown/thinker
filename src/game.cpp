@@ -1,21 +1,23 @@
 
 #include "game.h"
+#include <direct.h>
 #include "neural.h"
 #include "basewin.h"
 
 int* const dword_945818 = (int*)0x945818;
 int* const dword_945820 = (int*)0x945820;
 int* const dword_9B2074 = (int*)0x9B2074;
-int* const dword_9B7B00 = (int*)0x9B7B00;
 char* const unk_93AA0C = (char*)0x93AA0C;
 char* const unk_945E78 = (char*)0x945E78;
 char* const unk_945E7C = (char*)0x945E7C;
 char* const unk_945834 = (char*)0x945834;
 char* const unk_9B2078 = (char*)0x9B2078;
 GUID* const unk_689218 = (GUID*)0x689218;
-Popup* const ThumbPopup = (Popup*)0x9403E0;
+// multiplayer related
+void* const unk_6F107C = (void*)0x6F107C;
+int* const dword_90DE8C = (int*)0x90DE8C;
 
-const uint32_t GameRulesOptions[][2] = {
+static const uint32_t GameRulesOptions[][2] = {
     {0x1, RULES_VICTORY_TRANSCENDENCE},
     {0x2, RULES_VICTORY_CONQUEST},
     {0x4, RULES_VICTORY_DIPLOMATIC},
@@ -35,6 +37,10 @@ const uint32_t GameRulesOptions[][2] = {
     // 0x10000, STATE_RAND_FAC_LEADER_PERSONALITIES
     // 0x20000, STATE_RAND_FAC_LEADER_SOCIAL_AGENDA
 };
+
+// Exclude settings that are adjusted in Special Scenario Rules
+static const uint32_t GAME_RULES_MASK = 0x7808FFFF;
+static const uint32_t GAME_MRULES_MASK = 0xFFFFFFF0;
 
 static uint32_t custom_game_rules = 0;
 static uint32_t custom_more_rules = 0;
@@ -93,36 +99,56 @@ bool valid_triad(int triad) {
 }
 
 char* label_get(size_t index) {
-    assert(index < TextLabels->label_count);
+    assert(index < (size_t)TextLabels->label_count);
     return (TextLabels->labels)[index];
+}
+
+int __cdecl labels_init() {
+    labels_shutdown();
+    if (text_open("labels", "labels")) {
+        return 1;
+    }
+    text_get();
+    TextLabels->label_count = text_item_number();
+    TextLabels->labels = (char**)mem_get(4 * TextLabels->label_count);
+    if (!TextLabels->labels) {
+        return 1;
+    }
+    int num = 0;
+    while (num < TextLabels->label_count) {
+        // replace function text_string with Strings_put(TextTable, text_get())
+        TextLabels->labels[++num - 1] = Strings_put(TextTable, text_get());
+    }
+    text_close();
+    debug("labels_init %d\n", num);
+    return 0;
+}
+
+void __cdecl labels_shutdown() {
+    if (TextLabels->labels) {
+        mem_free(TextLabels->labels);
+        TextLabels->labels = nullptr;
+    }
+    TextLabels->label_count = 0;
 }
 
 void __cdecl clear() {
     StrBuffer[0] = '\0';
 }
 
-char* __cdecl says(const char* buf) {
+void __cdecl says(const char* buf) {
     size_t len = strnlen(StrBuffer, StrBufLen);
     snprintf(StrBuffer + len, StrBufLen - len, "%s", buf);
-    return StrBuffer;
 }
 
-char* __cdecl say_num(int value) {
+void __cdecl say_num(int value) {
     size_t len = strnlen(StrBuffer, StrBufLen);
     snprintf(StrBuffer + len, StrBufLen - len, "%d", value);
-    return StrBuffer;
 }
 
-char* __cdecl say_year(char* buf) {
+void __cdecl say_year(char* buf) {
     size_t len = strnlen(buf, StrBufLen);
     snprintf(buf + len, StrBufLen - len, "%d", *CurrentTurn + *StartingMissionYear);
-    return buf;
-}
-
-char* __cdecl parse_set(int faction_id) {
-    *GenderDefault = MFactions[faction_id].noun_gender;
-    *PluralDefault = MFactions[faction_id].is_noun_plural;
-    return MFactions[faction_id].noun_faction;
 }
 
 int __cdecl parse_num(size_t index, int value) {
@@ -152,6 +178,10 @@ int __cdecl parse_says(size_t index, const char* src, int gender, int plural) {
    return 0;
 }
 
+int __cdecl range(int input, int min_val, int max_val) {
+    return min(max(input, min_val), max(min_val, max_val));
+}
+
 int __cdecl game_year(int turn) {
     return Rules->normal_start_year + turn;
 }
@@ -161,12 +191,15 @@ int __cdecl in_box(int x, int y, RECT* rc) {
         && y >= rc->top && y < rc->bottom;
 }
 
-/*
-Calculate the offset and bitmask for the specified input.
-*/
 void __cdecl bitmask(uint32_t input, uint32_t* offset, uint32_t* mask) {
     *offset = input / 8;
     *mask = 1 << (input & 7);
+}
+
+void parse_tech(size_t index, int tech_id, int incl_category) {
+    clear();
+    say_tech(StrBuffer, tech_id, incl_category);
+    parse_says(index, StrBuffer, -1, -1);
 }
 
 void show_rules_menu() {
@@ -280,11 +313,11 @@ void __cdecl control_game() {
         system_close();
     };
     if (!system_init() && !game_init(0, 1)) {
-        *ControlTurnB = 0;
         *GameHalted = 1;
         *ControlTurnA = 0;
+        *ControlTurnB = 0;
         *MultiplayerActive = 0;
-        int start_lobby = Net_check_for_lobby(NetState, GameCmdLine, unk_689218, 3, 9);
+        int start_lobby = Net_check_for_lobby(NetState, GameCmdLine, unk_689218, 3, NetVersion);
         if (!start_lobby) {
             // Remove legacy startup code that checks whether a complete installation has been performed
             // This also skips FILEFIND_NOCD label from being displayed by filefind_init
@@ -299,6 +332,12 @@ void __cdecl control_game() {
         }
         if (!shift_key_down()) {
             FX_init(Sounds);
+        }
+        if (!conf.minimal_popups && TextLabels->label_count < TextLabelNum) {
+            // Display warning if parsed labels.txt count is below the number used
+            // by the game to avoid crashes when accessing values out of bounds
+            parse_says(0, "labels.txt", -1, -1);
+            popp("SCRIPT", "LOADERROR", 0, 0, 0);
         }
         flushlog();
         while (true) {
@@ -341,18 +380,18 @@ void __cdecl control_game() {
             }
             start_lobby = 0;
             if (*PbemActive) {
-                GraphicWin_fill(&MapWin->oWinBuffed, 0);
-                Win_show(&MapWin->oWinBuffed, 0);
+                GraphicWin_fill(&MapWin->oWinBuf, 0);
+                Win_show(&MapWin->oWinBuf, 0);
             } else {
-                GraphicWin_fill(&MapWin->oWinBuffed, 9);
-                Win_hide(&MapWin->oWinBuffed);
+                GraphicWin_fill(&MapWin->oWinBuf, 9);
+                Win_hide(&MapWin->oWinBuf);
             }
             if (desktop_init(*ControlTurnMove == 0)) {
                 break;
             }
             *GameHalted = 0;
-            MapWinPtr[0]->iWhatToDrawFlags |= (MAPWIN_DRAW_BASE_NAMES|MAPWIN_DRAW_BASE_TILES|MAPWIN_DRAW_UNITS);
-            MapWin->field_23BE0 = -1;
+            MapWinPtr[0]->DrawFlags |= (MAPWIN_DRAW_BASE_NAMES|MAPWIN_DRAW_BASE_TILES|MAPWIN_DRAW_UNITS);
+            MapWin->ReadyVehID = -1;
             if (*MultiplayerActive) {
                 net_control_turn();
             } else {
@@ -385,16 +424,14 @@ int __cdecl custom_planet(int use_images, int use_defaults) {
         Popup_dtor(&cur_popup);
     });
     if (use_images) {
-        cur_setup.field_A1C = &cur_preview[0];
-        cur_setup.field_A20 = &cur_preview[1];
-        cur_setup.field_A24 = &cur_preview[2];
+        cur_setup.preview_buffers[0] = &cur_preview[0];
+        cur_setup.preview_buffers[1] = &cur_preview[1];
+        cur_setup.preview_buffers[2] = &cur_preview[2];
     }
     memset(MapOceanCoverage, 0, 0x18u);
     // Loads the 3 preview thumbnails "S<ocean>L<life>C<cloud>.PCX", changing only
     // the dimension named by label and holding the other two at their selected values.
     auto load_previews = [&](char label) {
-        int32_t* px = &cur_setup.field_A28;
-        int32_t* py = &cur_setup.field_A34;
         for (int i = 0; i < 3; ++i) {
             int ocean = (label == 'S') ? i + 1 : clamp(*MapOceanCoverage + 1, 1, 3);
             int life  = (label == 'L') ? i + 1 : clamp(*MapNativeLifeForms + 1, 1, 3);
@@ -403,11 +440,11 @@ int __cdecl custom_planet(int use_images, int use_defaults) {
             snprintf(filename, sizeof(filename), "S%dL%dC%d.PCX", ocean, life, cloud);
             Buffer_load_pcx(&cur_preview[i], filename, 0, 10, 236);
             if (*ScreenWidth == 800) {
-                px[i] = 449;
-                py[i] = -168;
+                cur_setup.preview_x[i] = 449;
+                cur_setup.preview_y[i] = -168;
             } else {
-                px[i] = *ScreenWidth - cur_preview[0].stBitMapInfo.bmiHeader.biWidth;
-                py[i] = 0;
+                cur_setup.preview_x[i] = *ScreenWidth - cur_preview[0].bmiHeader.biWidth;
+                cur_setup.preview_y[i] = 0;
             }
         }
     };
@@ -440,12 +477,12 @@ int __cdecl custom_planet(int use_images, int use_defaults) {
                     Buffer_load_pcx(&cur_preview[0], *ScreenWidth == 800 ? "moon1_800.pcx" : "MOON1.PCX", 0, 10, 236);
                     Buffer_load_pcx(&cur_preview[1], *ScreenWidth == 800 ? "moon2_800.pcx" : "MOON2.PCX", 0, 10, 236);
                     Buffer_load_pcx(&cur_preview[2], *ScreenWidth == 800 ? "moon3_800.pcx" : "MOON3.PCX", 0, 10, 236);
-                    cur_setup.field_A28 = 0;
-                    cur_setup.field_A2C = 0;
-                    cur_setup.field_A30 = 0;
-                    cur_setup.field_A34 = 0;
-                    cur_setup.field_A38 = 0;
-                    cur_setup.field_A3C = 0;
+                    cur_setup.preview_x[0] = 0;
+                    cur_setup.preview_x[1] = 0;
+                    cur_setup.preview_x[2] = 0;
+                    cur_setup.preview_y[0] = 0;
+                    cur_setup.preview_y[1] = 0;
+                    cur_setup.preview_y[2] = 0;
                     break;
                 case 5:
                     load_previews('C');
@@ -457,8 +494,8 @@ int __cdecl custom_planet(int use_images, int use_defaults) {
                     break;
             }
         }
-        Popup_start(&cur_popup, PopupScriptFile, StrBuffer, -1, 0, 0x40, 0);
-        cur_popup.field_A44 = *pref_val;
+        Popup_start(&cur_popup, PopupScriptFile, StrBuffer, -1, 0, POPUP_BTN_CANCEL, 0);
+        cur_popup.active_id = *pref_val;
         int result = use_images
             ? SetupWin_do_menu_2(&cur_setup, &cur_popup, 1, 0)
             : BasePop_exec_3(&cur_popup, 0, 0);
@@ -473,9 +510,9 @@ int __cdecl custom_planet(int use_images, int use_defaults) {
         }
     }
     if (use_images) {
-        cur_setup.field_A1C = nullptr;
-        cur_setup.field_A20 = nullptr;
-        cur_setup.field_A24 = nullptr;
+        cur_setup.preview_buffers[0] = nullptr;
+        cur_setup.preview_buffers[1] = nullptr;
+        cur_setup.preview_buffers[2] = nullptr;
     }
     *MapLandCoverage = 2 - *MapOceanCoverage;
     prefs_save(0);
@@ -492,7 +529,8 @@ int __cdecl size_of_planet(int setup_mode) {
         SetupWin_dtor(&cur_setup);
         Popup_dtor(&cur_popup);
     });
-    Popup_start(&cur_popup, PopupScriptFile, "WORLDSIZE", -1, 0, setup_mode != 2 ? 0x40 : 0, 0);
+    Popup_start(&cur_popup, PopupScriptFile, "WORLDSIZE", -1, 0,
+        setup_mode != 2 ? POPUP_BTN_CANCEL : 0, 0);
     *dword_945820 = 1;
     int width, height;
 
@@ -512,7 +550,7 @@ int __cdecl size_of_planet(int setup_mode) {
         snprintf(StrBuffer, StrBufLen, "%s", label_get(TL_CustomSize));
         Dialogs_item(&cur_popup.dialogs, StrBuffer, 99);
         int selection = AlphaIniPrefs->custom_world[0];
-        cur_popup.field_A44 = selection;
+        cur_popup.active_id = selection;
 
         if (setup_mode == 1) {
             *MapSizePlanet = selection;
@@ -535,7 +573,7 @@ int __cdecl size_of_planet(int setup_mode) {
             width = widths[selection];
             *MapAreaY = heights[selection];
         } else {
-            Popup_start(&cur_popup, PopupScriptFile, "CUSTOMMAP", -1, 0, 0x44, 0);
+            Popup_start(&cur_popup, PopupScriptFile, "CUSTOMMAP", -1, 0, POPUP_BTN_CANCEL|POPUP_TEXTBOX, 0);
             int custom_x  = prefs_get_2("Custom Map X", 40, 0);
             int custom_y = prefs_get_2("Custom Map Y", 80, 0);
             EditGroup* editgrp = (EditGroup*)(&cur_popup.dialogs.editGroup);
@@ -588,7 +626,7 @@ int __cdecl map_menu(int flag) {
     while (true) {
         *dword_945820 = 0;
         Popup_start(&cur_popup, PopupScriptFile, "MAPMENU", -1, 0, 0, 0);
-        cur_popup.field_A44 = DefaultPrefs->map_type;
+        cur_popup.active_id = DefaultPrefs->map_type;
         /*
         -na-new-game forces a GENERATED map, and this is the line the seed actually needs
         (na-px5).
@@ -767,7 +805,7 @@ int __cdecl top_menu(int flag) {
         Popup_start(&cur_popup, flag ? PopupScriptFile : "modmenu",
             flag ? "HOTSEAT" : "TOPMENU", -1, 0, 0, 0);
         if (!flag) {
-            cur_popup.field_A44 = DefaultPrefs->top_menu;
+            cur_popup.active_id = DefaultPrefs->top_menu;
         }
         /*
         -na-autoload names the item it wants; everyone else is shown the menu. Answering here
@@ -918,6 +956,286 @@ int __cdecl top_menu(int flag) {
     }
 }
 
+int __cdecl desktop_init(int flag) {
+    load_music(MapWin->cOwner);
+    InfoWin_init(InfoWin);
+    WorldWin_init(WorldWin, flag);
+    StatusWin_init(StatusWin);
+    mapwin_system_init(flag);
+    MultiWin_init(MultiWin);
+    BaseWin_init(BaseWin);
+    DesignWin_init(DesignWin);
+    DiploPop_init(DiploPop);
+    ReportIf_init(ReportIf);
+    PrefWin_init(PrefWin);
+    MapWin->field_23D80 = 10;
+    GraphicWin* mainwin = (GraphicWin*)((char*)MapWin + *((DWORD*)MapWin->vtable + 1));
+    assert(mainwin == &MapWin->oMainWin);
+    int px = mainwin->oCanvas.bmiHeader.biWidth;
+    int py = mainwin->oCanvas.bmiHeader.biHeight;
+    MapWin->field_23D80 = MapWin->oMainMenu.winrect2.right - MapWin->oMainMenu.winrect2.left + 10;
+    MapWin->field_23D84 = px - 10;
+    if (*MultiplayerActive) {
+        MapWin->field_23D84 = MultiWin->winrect2.left - MultiWin->winrect2.right + px - 10;
+    }
+    MapWin->field_23D88 = 10;
+    MapWin->field_23D8C = -10 - py;
+    if (*CurrentTurn) {
+        draw_map(1);
+    }
+    Win_show(MainInfc, 0);
+    Win_show(mainwin, 0);
+    if (*PbemActive) {
+        GraphicWin_fill(&MapWin->oWinBuf, 0);
+        Win_show(&MapWin->oWinBuf, 0);
+    }
+    do_all_non_input();
+    close_opening();
+    do_all_non_input();
+    return 0;
+}
+
+void __cdecl desktop_close() {
+    DesignWin_close(DesignWin);
+    BaseWin_close(BaseWin);
+    mapwin_system_shutdown();
+    StatusWin_close(StatusWin);
+    GraphicWin_close(WorldWin);
+    GraphicWin_close(MultiWin);
+    Win_hide(MainInfc);
+}
+
+int __cdecl system_init() {
+    _mkdir("saves");
+    _mkdir("saves\\auto");
+    _mkdir("maps");
+    _mkdir("scenarios");
+    *GameHalted = 1;
+    log_set_state(0);
+    set_language(prefs_get_2("Language", 0, 0));
+    textcolor_init();
+    Strings_init(TextTable, 0xC320u);
+    if (labels_init()) {
+        return 1;
+    }
+    snprintf(StrBuffer, StrBufLen, "%s", label_get(TL_Cancel));
+    if (*GameLanguage != 2) {
+        CharUpperA(StrBuffer);
+    }
+    BasePop_set_def_cancel_text(StrBuffer);
+    snprintf(StrBuffer, StrBufLen, "%s", label_get(TL_OK));
+    CharUpperA(StrBuffer);
+    BasePop_set_def_ok_text(StrBuffer);
+    load_fixed_sprites();
+    config_popups();
+    for (int i = 1; i < 8; ++i) {
+        MapWinAlt* win = (MapWinAlt*)mem_get(0x22480u); // replace operator_new
+        if (win) {
+            win = (MapWinAlt*)MapWin_ctor(win, 1);
+        }
+        MapWinPtr[i] = win;
+    }
+    MapWinPtr[0] = MapWin;
+    MapWin->DrawFlags &= ~(MAPWIN_DRAW_BASE_NAMES|MAPWIN_DRAW_BASE_TILES|MAPWIN_DRAW_UNITS);
+    MainInterface_init(MainInfc, 0);
+    BattleWin_init(BattleWin);
+    Console_init(MapWin, 0);
+    void* ptr = (MapWin ? (char*)MapWin + *((DWORD*)MapWin->vtable + 1) : nullptr);
+    MultiDebug_init(MultiDebugWin, NetState, ptr, unk_6F107C);
+    MessageWin_init(MessageWin);
+    Datalink_init(DatalinkWin);
+    bung_momma();
+    return 0;
+}
+
+void __cdecl system_close() {
+    release_sound();
+    close_opening();
+    DesignWin_close(DesignWin);
+    MultiDebug_close(MultiDebugWin);
+    Console_close(MapWin);
+    Path_shutdown(Paths);
+    map_shutdown();
+    for (int i = 1; i < 8; ++i) {
+        MapWindow* win = MapWinPtr[i];
+        if (win) {
+            (**(void (__thiscall***)(int, int))((char*)&win->vtable + *((DWORD*)win->vtable + 1)))
+                ((int)win + *((DWORD*)win->vtable + 1), 1);
+            MapWinPtr[i] = nullptr;
+        }
+    }
+}
+
+int __cdecl multiplayer_init(int flag) {
+    int value;
+    auto cleanup_close = [](int val) {
+        log_set_state(0);
+        NetDaemon_cleanup(NetState);
+        *MultiplayerActive = 0;
+        return val;
+    };
+    *MultiplayerActive = 1;
+    log_set_state(0);
+    NetWin_config_players(NetWin);
+    if (flag) {
+        NetState->field_48 = 0xDC;
+        NetState->field_4C = 0x100DC;
+        NetState->field_D8 |= 1u;
+    } else if (NetDaemon_init(NetState, 0)) {
+        return cleanup_close(1);
+    }
+    if (*PbemActive) {
+        *MultiplayerActive = 0;
+        value = top_menu(1);
+        if (value) {
+            *PbemActive = 0;
+        }
+        return value;
+    }
+    NetState->dword_93E8D8 = 0;
+    if (*ControlTurnA || NetWin_exec(NetWin) < 1) {
+        return cleanup_close(1);
+    }
+    *GameRules = *NetConfigRules;
+    *DiffLevel = NetConfigValue[2];
+    *GameState |= *NetConfigState & (STATE_RAND_FAC_LEADER_SOCIAL_AGENDA|STATE_RAND_FAC_LEADER_PERSONALITIES);
+    if (*NetConfigMRules & MRULES_UNK_10) {
+        *GameMoreRules |= MRULES_UNK_10;
+    } else {
+        *GameMoreRules &= ~MRULES_UNK_10;
+    }
+    if (NetState->dword_93E8C0) {
+        FactionStatus[0] = 0;
+        for (int i = 1, cnt = NetState->field_768; i <= cnt; ++i) {
+            FactionStatus[0] |= (1 << ((uint8_t)NetState->plr_list[i][9]));
+        }
+        if (!*NetSetupType) {
+            if (text_open(AlphaFile, "WORLDSIZE")) {
+                *MapSizePlanet = 2;
+                *MapAreaX = 40;
+                *MapAreaY = 80;
+            } else {
+                text_get();
+                int entry_count = min(32, text_item_number());
+                int mx[32] = {};
+                int my[32] = {};
+                for (int i = 0; i < entry_count; i++) {
+                    text_get();
+                    text_item();
+                    mx[i] = text_item_number();
+                    my[i] = text_item_number();
+                }
+                int val;
+                if (NetConfigValue[6] == -1) {
+                    val = game_rand() % 5;
+                } else {
+                    val = NetConfigValue[6];
+                }
+                *MapSizePlanet = val;
+                *MapAreaX = 2 * mx[val];
+                *MapAreaY = my[val];
+            }
+            map_init();
+            Path_init(Paths);
+            *GameDrawState |= 8u;
+            // Fix: rewrite values setup for MapOceanCoverage/MapLandCoverage
+            if (NetConfigValue[7] < 0 || NetConfigValue[7] > 2) {
+                *MapOceanCoverage = 2 - clamp((game_rand() % 7 + 1) / 2, 0, 2);
+            } else {
+                *MapOceanCoverage = NetConfigValue[7];
+            }
+            *MapLandCoverage = 2 - *MapOceanCoverage;
+            *MapPlanetaryOrbit = 1;
+            *MapErosiveForces = NetConfigValue[8];
+            *MapCloudCover = NetConfigValue[10];
+            *MapNativeLifeForms = NetConfigValue[9];
+            mod_world_build();
+        }
+        if (*NetSetupType != 3 && *NetSetupType != 2) {
+            *VehCount = 0;
+            setup_game(0);
+        }
+    }
+    if (NetState->field_768 >= 1) {
+        int32_t* ptr = dword_90DE8C;
+        for (int i = 1, cnt = NetState->field_768; i <= cnt; ++i) {
+            int fc_id = (uint8_t)NetState->plr_list[i][9];
+            Factions[fc_id].unk_102 = *ptr;
+            ptr += 95;
+        }
+    }
+    *GameState |= *NetConfigState & (STATE_RAND_FAC_LEADER_SOCIAL_AGENDA|STATE_RAND_FAC_LEADER_PERSONALITIES);
+    if (*NetConfigMRules & MRULES_UNK_10) {
+        *GameMoreRules |= MRULES_UNK_10;
+    } else {
+        *GameMoreRules &= ~MRULES_UNK_10;
+    }
+    GameTimeControl[0] = (uint8_t)NetConfigValue[3];
+    MapWin->cOwner = AlphaNet_pid_2_who(NetState, NetState->field_760);
+    if (*NetSetupType == 3) {
+        *GameState |= STATE_IS_SCENARIO;
+        if (NetDaemon_send_files(NetState)) {
+            pop_close();
+            return cleanup_close(1);
+        }
+        if (NetState->dword_93E8C0) {
+            scenario_setup();
+        }
+    } else {
+        *GameState &= ~STATE_IS_SCENARIO;
+    }
+    log_reset();
+    if (NetState->dword_93E8C0) {
+        FactionStatus[0] = 0;
+        for (int i = 1, cnt = NetState->field_768; i <= cnt; ++i) {
+            FactionStatus[0] |= (1 << ((uint8_t)NetState->plr_list[i][9]));
+        }
+        NetDaemon_send_rules(NetState);
+        NetDaemon_send_game(NetState);
+    } else {
+        memcpy(AltNatural, ElevDetail, 44u);
+        while (NetState->dword_93E8D8 < 8) {
+            if (*ControlTurnA) {
+                break;
+            }
+            NetDaemon_receive(NetState);
+            do_all_tasks();
+        }
+    }
+    if (*NetSetupType == 3) {
+        desktop_close();
+        stop_timers();
+        labels_shutdown();
+        Strings_shutdown(TextTable);
+        if (!game_init(1, 0)) {
+            desktop_init(1);
+            *GameHalted = 0;
+        }
+    }
+    Lock_clear(LockState);
+    if (!*ControlTurnMove) {
+        planetfall(MapWin->cOwner);
+    }
+    if (*NetSetupType == 3) {
+        parse_says(1, get_title(MapWin->cOwner), -1, -1);
+        parse_says(2, get_name(MapWin->cOwner), -1, -1);
+        parse_says(3, get_noun(MapWin->cOwner), -1, -1);
+        snprintf(StrBuffer, StrBufLen, "%s ", label_get(TL_MissionYear));
+        say_year(StrBuffer);
+        parse_says(4, StrBuffer, -1, -1);
+        parse_num(0, *ObjectiveReqVictory);
+        parse_num(1, *ObjectivesSuddenDeathVictory);
+        parse_num(2, num_objectives(MapWin->cOwner, *GameRules & RULES_VICTORY_COOPERATIVE));
+        parse_num(3, *EndingMissionYear);
+        X_pop_2("SCENARIO", "INTRO", 0);
+    }
+    value = *ControlTurnA;
+    if (!value) {
+        return value;
+    }
+    return cleanup_close(value);
+}
+
 int __cdecl game_init(int tgl_text, int tgl_rules) {
     *GameHalted = 1;
     /*
@@ -957,20 +1275,15 @@ int __cdecl game_init(int tgl_text, int tgl_rules) {
         return 1;
     }
     start_timers();
-    dword_9B7B00[0] = 0x75AE4C;
-    dword_9B7B00[1] = 0x75AE78;
-    dword_9B7B00[3] = 0x75AE20;
+    MenuIconPtr[0] = &MenuAltBtnIcons[1];
+    MenuIconPtr[1] = &MenuAltBtnIcons[2];
+    MenuIconPtr[3] = &MenuAltBtnIcons[0];
     return 0;
 }
 
 int __cdecl game_reload(int tgl_init, int tgl_rules) {
     if (tgl_init) {
-        DesignWin_close(DesignWin);
-        mapwin_system_shutdown();
-        StatusWin_close(StatusWin);
-        GraphicWin_close(WorldWin);
-        GraphicWin_close(MultiWin);
-        Win_hide(MainWin);
+        desktop_close();
     }
     stop_timers();
     labels_shutdown();
@@ -1064,7 +1377,7 @@ void __cdecl scenario_setup() {
             if (!retry) {
                 int owner_id = veh_at(x, y);
                 if (owner_id < 0 || (Vehs[owner_id].faction_id == veh->faction_id
-                && iter >= 500 * (mod_stack_check(owner_id, 1, -1, -1, -1) + 10))) {
+                && iter >= 500 * (stack_check(owner_id, 1, -1, -1, -1) + 10))) {
                     int min_dist = 9999;
                     for (int i = 0; i < *VehCount; ++i) {
                         if (i != veh_id) {
@@ -1115,7 +1428,7 @@ int __cdecl config_game(int flag) {
         MFaction* fac = &MFactions[faction_id];
         char buf[StrBufLen];
         while (1) {
-            Popup_start(&cur_popup, PopupScriptFile, "CUSTOMNAMES", -1, 0, 0x44, 0);
+            Popup_start(&cur_popup, PopupScriptFile, "CUSTOMNAMES", -1, 0, POPUP_BTN_CANCEL|POPUP_TEXTBOX, 0);
             snprintf(buf, StrBufLen, "%s", fac->is_leader_female ? label_get(TL_Female) : label_get(TL_Male));
             EditGroup* grp = (EditGroup*)&cur_popup.dialogs.editGroup;
             EditGroup_edit(grp, label_get(TL_Name), fac->name_leader, 23);
@@ -1156,7 +1469,7 @@ CONF_DIFF:
         Win_hide(&cur_setup);
         Win_show(&cur_setup, 0);
         if (!(*GameRules & RULES_SCN_FORCE_CURRENT_DIFF_LEVEL)) {
-            Popup_start(&cur_popup, PopupScriptFile, "DIFFICULTY", -1, 0, 0x40, 0);
+            Popup_start(&cur_popup, PopupScriptFile, "DIFFICULTY", -1, 0, POPUP_BTN_CANCEL, 0);
             for (int i = 0; i < MaxDiffNum; ++i) {
                 if (i == 0) {
                     snprintf(StrBuffer, StrBufLen, "%s (%s)", Difficulty[i], label_get(TL_Novice));
@@ -1168,7 +1481,7 @@ CONF_DIFF:
                 Dialogs_item(&cur_popup.dialogs, StrBuffer, i);
             }
             int choice;
-            cur_popup.field_A44 = DefaultPrefs->difficulty;
+            cur_popup.active_id = DefaultPrefs->difficulty;
             choice = SetupWin_do_menu_2(&cur_setup, &cur_popup, 1, 0);
             if (choice < 0) {
                 return 1;
@@ -1184,8 +1497,8 @@ CONF_RULES:
             }
             Win_hide(&cur_setup);
             Win_show(&cur_setup, 0);
-            Popup_start(&cur_popup, PopupScriptFile, "USERULES", -1, 0, 0x40, 0);
-            cur_popup.field_A44 = AlphaIniPrefs->customize;
+            Popup_start(&cur_popup, PopupScriptFile, "USERULES", -1, 0, POPUP_BTN_CANCEL, 0);
+            cur_popup.active_id = AlphaIniPrefs->customize;
             int value = SetupWin_do_menu_2(&cur_setup, &cur_popup, 1, 0);
             if (value < 0) {
                 break;
@@ -1308,7 +1621,7 @@ CONF_SEAT:
 CONF_FINAL:
         if (*MultiplayerActive) {
             time_controls_dialog(&cur_popup);
-            cur_popup.field_A44 = AlphaIniPrefs->time_controls;
+            cur_popup.active_id = AlphaIniPrefs->time_controls;
             int value = BasePop_exec_3(&cur_popup, 0, 0);
             if (value < 0) {
                 if (!(*GameRules & RULES_SCN_FORCE_PLAYER_PLAY_CURRENT_FACT)) {
@@ -1382,7 +1695,7 @@ CONF_MULTI:
         goto CONF_FINAL;
     } else {
         human_plrs |= 1 << plr_id;
-        Popup_start(&cur_popup, PopupScriptFile, "HOTSEATADD0", -1, 0, 0x40, 0);
+        Popup_start(&cur_popup, PopupScriptFile, "HOTSEATADD0", -1, 0, POPUP_BTN_CANCEL, 0);
         for (int i = 1; i < MaxPlayerNum; ++i) {
             if ((1 << i) & human_plrs) {
                 if (X_text_open(ScriptFile, "MULTISTRING")) {
@@ -1397,7 +1710,7 @@ CONF_MULTI:
                 BasePop_string(&cur_popup, StrBuffer);
             }
         }
-        Popup_start(&cur_popup, PopupScriptFile, "HOTSEATADD1", -1, 0, 0x80, 0);
+        Popup_start(&cur_popup, PopupScriptFile, "HOTSEATADD1", -1, 0, POPUP_PRE_INIT, 0);
         int value = BasePop_exec_3(&cur_popup, 0, 0);
         if (!value) {
             goto CONF_SEAT;
@@ -1428,16 +1741,13 @@ CONF_LOOP:
                     ListBox_item(&PickWin->listBox, StrBuffer, i);
                 }
             }
-            int32_t ptr = *(int32_t*)((char*)PickWin->listBox.field_0 + 8);
-            ListBox_attach(&PickWin->listBox.dialog, PickWin,
-                *(int32_t*)((char*)&PickWin->listBox.field_24 + ptr),
-                *(int32_t*)((char*)&PickWin->listBox.field_28 + ptr),
-                0x80020);
+            Dialog* dlg = (Dialog*)((char*)&PickWin->listBox + *((DWORD*)PickWin->listBox.vtable + 2));
+            assert(dlg == &PickWin->listBox.dialog);
+            ListBox_attach(&PickWin->listBox.dialog, PickWin, dlg->ptWindow.x, dlg->ptWindow.y, 0x80020);
             DefaultPrefs->faction_id = clamp(DefaultPrefs->faction_id, 1, 7);
             ListBox_set_selected_id(&PickWin->listBox, DefaultPrefs->faction_id);
-            PickWin->field_5DB4 = Dialog_get_selected_id(
-                (Dialog *)((char*)PickWin->listBox.field_0 + ptr));
-            PickWin->listBox.field_3C = (int32_t)thumb_routine;
+            PickWin->list_select_id = Dialog_get_selected_id(dlg);
+            PickWin->listBox.cb_select_item = thumb_routine;
             thumb_routine(DefaultPrefs->faction_id);
             int choice = PickWin_show_window(PickWin);
             if (choice < 0) {
@@ -1460,19 +1770,19 @@ CONF_LOOP:
             } else {
                 plr_id = choice;
                 bool name_popup = false;
-                if (PickWin->field_5DA4 == 261) {
-                    plr_id = random(7) + 1;
+                if (PickWin->pick_button_id == 261) {
+                    plr_id = random(MaxPlayerNum - 1) + 1;
                     Popup_close(ThumbPopup);
                     GraphicWin_close(PickWin);
                     name_popup = true;
-                } else if (PickWin->field_5DA4 != 263) {
+                } else if (PickWin->pick_button_id != 263) {
                     if (*GameMorePreferences & MPREF_AV_VOLUME_VOICE_TOGGLE) {
                         snprintf(StrBuffer, StrBufLen, "voices\\%s.mp3", MFactions[plr_id].filename);
                         Wave_unload(WaveState);
                         Wave_load(WaveState, StrBuffer);
                         Wave_play_2(WaveState);
                     }
-                    if (!PickWin->field_5DA4) {
+                    if (!PickWin->pick_button_id) {
                         name_popup = true;
                     } else if (!strcmp(MFactions[plr_id].filename, "JENN282")) {
                         goto CONF_LOOP;
@@ -1494,7 +1804,7 @@ CONF_LOOP:
                         StrBuffer[0] = 0;
                         strcat(StrBuffer, "NAME");
                         int value;
-                        if (PickWin->field_5DA4 == 261) {
+                        if (PickWin->pick_button_id == 261) {
                             strcat(StrBuffer, "3");
                             value = X_pop_ask(StrBuffer, 23, unk_945834, 0, 0);
                         } else {
@@ -1515,7 +1825,7 @@ CONF_LOOP:
                         if (!*DialogToggle) {
                             goto CONF_PICK;
                         }
-                        if (PickWin->field_5DA4 != 261) {
+                        if (PickWin->pick_button_id != 261) {
                             update_custom_names(plr_id, 1);
                             Popup_close(ThumbPopup);
                             GraphicWin_close(PickWin);
@@ -1533,15 +1843,15 @@ CONF_LOOP:
             }
             continue; // restart while loop
         }
-        Popup_start(&cur_popup, PopupScriptFile, "FACTIONX", -1, 0, 0x40, 0);
+        Popup_start(&cur_popup, PopupScriptFile, "FACTIONX", -1, 0, POPUP_BTN_CANCEL, 0);
         for (int i = 1; i < MaxPlayerNum; ++i) {
             if (flag != 2 || is_alive(i)) {
                 snprintf(StrBuffer, StrBufLen, "%s|(%s)", MFactions[i].formal_name_faction, MFactions[i].desc_name_faction);
                 Dialogs_item(&cur_popup.dialogs, StrBuffer, i);
             }
         }
-        cur_popup.field_A44 = (flag & 2 ? MapWin->cOwner : DefaultPrefs->faction_id);
-        cur_popup.dialogs.listBox[15] = (int32_t)thumb_routine;
+        cur_popup.active_id = (flag & 2 ? MapWin->cOwner : DefaultPrefs->faction_id);
+        cur_popup.dialogs.listBox.cb_select_item = thumb_routine;
         thumb_routine(flag & 2 ? MapWin->cOwner : DefaultPrefs->faction_id);
         int choice = BasePop_exec_3(&cur_popup, 0, 0);
         if (choice < 0) {
@@ -1648,8 +1958,8 @@ void __cdecl setup_game(int flag) {
     *GameState &= (STATE_RAND_FAC_LEADER_SOCIAL_AGENDA | STATE_RAND_FAC_LEADER_PERSONALITIES);
     cs->dword_9A64AC = 0;
     cs->dword_9A64B0 = 0;
-    *TutWinMapState = 0;
-    cs->dword_9A64B8 = 0;
+    cs->TutWinMapState[0] = 0;
+    cs->TutWinMapState[1] = 0;
     cs->dword_9A64BC = 0;
     *CurrentTurn = 0;
     FactionStatus[1] = 0xFF;
@@ -1832,12 +2142,10 @@ int __cdecl generators(int faction_id, int* pop_size_req) {
     for (int i = 0; i < *BaseCount; i++) {
         BASE* base = &Bases[i];
         if (base->faction_id == faction_id && base->has_fac_built(FAC_SUBSPACE_GENERATOR)) {
-            if (base->pop_size < Rules->base_size_subspace_gen) {
-                if (pop_size_req) {
-                    ++(*pop_size_req);
-                }
-            } else {
+            if (base->pop_size >= Rules->base_size_subspace_gen) {
                 ++completed;
+            } else if (pop_size_req) {
+                ++(*pop_size_req);
             }
         }
     }
@@ -2084,9 +2392,7 @@ int __cdecl end_of_game(int flag) {
 
     case VIC_ALIEN_LOSS:
         if (!MFactions[player_id].is_alien()) {
-            *GenderDefault = MFactions[victor_id].noun_gender;
-            *PluralDefault = MFactions[victor_id].is_noun_plural;
-            interlude(29, MFactions[victor_id].noun_faction, 1, 0);
+            interlude(29, get_noun(victor_id), 1, 0);
         }
         setup_parser(victor_id);
         popp(ScriptFile, "ENDBEACONLOSE", 0, "beaconlose_sm.pcx", 0);
