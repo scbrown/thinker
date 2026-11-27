@@ -39,13 +39,23 @@ python3 "$here/check_native_choice_withheld.py" >/dev/null \
     && echo "ok    every decide surface withholds the native answer"
 python3 "$here/check_defer_recognised.py" >/dev/null \
     && echo "ok    every decide surface recognises defer before calling it unparseable"
+python3 "$here/check_order_gates.py"
 echo
 
 # Presets resolve against the working directory, not the -S path, so this has to
 # run from the Thinker root — the caller's cwd is usually a NeuralAmplifier checkout.
 (cd "$root" && cmake --preset release >/dev/null)
-cmake --build "$root/build/release" --target na_http_test -j"$(nproc)" >/dev/null
-echo "built na_http_test"
+cmake --build "$root/build/release" --target na_http_test na_order_policy_test -j"$(nproc)" >/dev/null
+echo "built na_http_test na_order_policy_test"
+
+# The seat order policy needs no server and no game. It runs in its own throwaway
+# WINEPREFIX so it can neither read nor disturb a prefix a live game is using.
+policy_prefix="$(mktemp -d)"
+WINEPREFIX="$policy_prefix" WINEDEBUG="${WINEDEBUG:--all}" \
+    wine "$root/build/release/na_order_policy_test.exe" | tail -n 1
+policy_rc=${PIPESTATUS[0]}
+rm -rf "$policy_prefix"
+[ "$policy_rc" -eq 0 ] || { echo "na_order_policy_test failed" >&2; exit 1; }
 
 pids=()
 cleanup() {
