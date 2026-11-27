@@ -265,7 +265,7 @@ Execute the dynamically-built Planetary Governor candidate picker.
 Popup_start only initialises the dialog; callers may add dynamic rows afterward. The paired
 BasePop_exec_3 entry hook reaches this wrapper after that action space exists.
 */
-int __thiscall na_dialog_exec(BasePop* This, int a2, int a3);
+int __thiscall na_dialog_exec(BasePop* This, int a2, fp_none a3);
 
 /*
 Record a dialog the BRAIN answered, tier llm / applied llm.

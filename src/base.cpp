@@ -3562,7 +3562,7 @@ int __cdecl mod_base_production() {
             if (veh_id < 0) {
                 return 0;
             }
-            na_outcome_unit_produced(faction_id, item_id);
+            na_outcome_unit_produced(faction_id, unit_id);
             VEH* veh = &Vehs[veh_id];
             if (Units[unit_id].plan == PLAN_COLONY) {
                 if ((base->state_flags & BSTATE_UNK_2000000)

@@ -5576,7 +5576,7 @@ static int na_route_council_vote(bool* brain_answered) {
     return choice;
 }
 
-int __thiscall na_dialog_exec(BasePop* This, int a2, int a3) {
+int __thiscall na_dialog_exec(BasePop* This, int a2, fp_none a3) {
     const bool matched = na_pending_dialog && (BasePop*)na_pending_dialog == This;
     const NaDialogEntry* entry = matched ? na_pending_dialog_entry : nullptr;
     na_pending_dialog = nullptr;
