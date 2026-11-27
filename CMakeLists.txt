@@ -129,3 +129,13 @@ add_executable(na_order_policy_test EXCLUDE_FROM_ALL
 )
 set_target_properties(na_order_policy_test PROPERTIES PREFIX "" SUFFIX ".exe")
 target_link_options(na_order_policy_test PRIVATE -static)
+
+# The policy overlay parser (src/na_policy.cpp) is engine-free for the same reason.
+add_executable(na_policy_test EXCLUDE_FROM_ALL
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/na_policy_test.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/na_policy.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/na_http.cpp
+)
+set_target_properties(na_policy_test PROPERTIES PREFIX "" SUFFIX ".exe")
+target_link_options(na_policy_test PRIVATE -static)
+target_link_libraries(na_policy_test PRIVATE ws2_32)

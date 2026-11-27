@@ -40,13 +40,14 @@ python3 "$here/check_native_choice_withheld.py" >/dev/null \
 python3 "$here/check_defer_recognised.py" >/dev/null \
     && echo "ok    every decide surface recognises defer before calling it unparseable"
 python3 "$here/check_order_gates.py"
+python3 "$here/check_na_policy_registry.py"
 echo
 
 # Presets resolve against the working directory, not the -S path, so this has to
 # run from the Thinker root — the caller's cwd is usually a NeuralAmplifier checkout.
 (cd "$root" && cmake --preset release >/dev/null)
-cmake --build "$root/build/release" --target na_http_test na_order_policy_test -j"$(nproc)" >/dev/null
-echo "built na_http_test na_order_policy_test"
+cmake --build "$root/build/release" --target na_http_test na_order_policy_test na_policy_test -j"$(nproc)" >/dev/null
+echo "built na_http_test na_order_policy_test na_policy_test"
 
 # The seat order policy needs no server and no game. It runs in its own throwaway
 # WINEPREFIX so it can neither read nor disturb a prefix a live game is using.
@@ -91,3 +92,5 @@ fi
 sleep 1
 WINEDEBUG="${WINEDEBUG:--all}" wine "$root/build/release/na_http_test.exe" \
     "http://127.0.0.1:$stub_port" $orch_url
+WINEDEBUG="${WINEDEBUG:--all}" wine "$root/build/release/na_policy_test.exe" \
+    "http://127.0.0.1:$stub_port"

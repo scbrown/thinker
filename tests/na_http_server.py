@@ -11,9 +11,35 @@ orchestrator can only supply the first of those on demand.
 
 from __future__ import annotations
 
+import json
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+# The shape NeuralAmplifier's announce_turn returns with an overlay set (faction_policy.py).
+TURN_POLICY_REPLY = {
+    "turn": 12,
+    "expected": 3,
+    "grounding": {"status": "primed", "rows": 2},
+    "na_policy": [
+        {
+            "faction_id": 3,
+            "knobs": {
+                "focus.fight": -1,
+                "focus.tech": 1,
+                "strategy.sea_power": True,
+                "strategy.attack_enemy_hq": False,
+                "target.base": 41,
+                "target.goals": [
+                    {"priority": 5, "type": "attack", "x": 10, "y": 12},
+                    {"priority": 20, "type": "colonize", "x": 0, "y": 511},
+                ],
+            },
+        },
+        {"faction_id": 5, "knobs": {"target.base": -1}},
+    ],
+    "policy_hash": "0123456789abcdef" * 4,
+}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -31,6 +57,15 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+        elif self.path == "/turn-policy":
+            # The orchestrator's /turn reply with an overlay, byte for byte the inline REPLY
+            # in na_policy_test.cpp, so the wire read is checked against the same values.
+            reply = json.dumps(TURN_POLICY_REPLY, separators=(",", ":")).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(reply)))
+            self.end_headers()
+            self.wfile.write(reply)
         elif self.path == "/boom":
             self.send_error(500, "deliberate")
         elif self.path == "/slow":

@@ -1,5 +1,6 @@
 
 #include "neural.h"
+#include "na_policy.h"
 #include "savegame.h"
 #include "veh.h"
 #include "tech.h"
@@ -4502,6 +4503,238 @@ void na_observe_econ_energy_sliders(int faction_id) {
 }
 
 /*
+=============================================================================
+Per-faction policy overlay (docs/seats-and-policy.md, section 4, first cut)
+=============================================================================
+
+A seat sets a standing posture and Thinker's own AI executes under it. The orchestrator sends
+the complete overlay on every `/turn` reply (na_policy.h has the shape); this keeps it in
+na_policy[] and writes it into the per-faction fields the engine already has on an AI slot:
+AI_fight/growth/tech/wealth/power, the strategy bits of player_flags, base_id_attack_target
+and goals. They are read by the AI, set once at spawn and saved with the game, so steering
+them needs no new seam.
+
+WHERE IT APPLIES: only to a faction with llm_enabled() that is an AI slot. A human slot's
+AI_* fields are not its posture, and a faction without an LLM seat has no one entitled to set
+one. Anything else in the reply for such a faction is ignored, and its fields are restored.
+
+RESTORE, so the overlay never outlives its seat. The first time a knob is applied the native
+value is kept; when the knob leaves the overlay the native value goes back. If the engine (or a
+game load) changed a field away from what was written, the new value is taken as the native
+one, so a stale native is never written over the engine's own decision. base_id_attack_target
+is the exception: the engine renumbers it when a base is destroyed, so its native value is
+always -1, "no target", and the engine picks again.
+
+WRITE-ONLY: nothing here sends any of this, or any AIPlans state, back to a seat.
+
+EMPTY OVERLAY, BYTE-IDENTICAL: with no knob ever set nothing is written, nothing is logged.
+*/
+NaPolicy na_policy[MaxPlayerNum];
+static char na_policy_hash[65];
+
+struct NaPolicyApplied {
+    uint32_t int_set;                     // int fields currently overlaid
+    int32_t written[NA_PF_INT_COUNT];
+    int32_t native[NA_PF_INT_COUNT];
+    uint32_t flag_mask;                   // player_flags bits currently overlaid
+    uint32_t flag_written;                // their written values, within flag_mask
+    uint32_t flag_native;                 // their native values, within flag_mask
+    int goal_count;                       // goals the overlay placed last turn
+    NaPolicyGoal goals[NA_POLICY_MAX_GOALS];
+};
+static NaPolicyApplied na_policy_applied[MaxPlayerNum];
+
+static int32_t* na_policy_field(Faction& plr, int field) {
+    switch (field) {
+        case NA_PF_AI_FIGHT: return &plr.AI_fight;
+        case NA_PF_AI_GROWTH: return &plr.AI_growth;
+        case NA_PF_AI_TECH: return &plr.AI_tech;
+        case NA_PF_AI_WEALTH: return &plr.AI_wealth;
+        case NA_PF_AI_POWER: return &plr.AI_power;
+        case NA_PF_ATTACK_TARGET: return &plr.base_id_attack_target;
+    }
+    return nullptr;
+}
+
+// A target the engine itself would keep: an existing base of a faction this one is at war
+// with (game.cpp clears base_id_attack_target otherwise, and a fight over it helps nobody).
+static bool na_policy_target_ok(int faction_id, int base_id) {
+    if (base_id < 0) {
+        return true;
+    }
+    return base_id < *BaseCount && base_id < MaxBaseNum
+        && at_war(faction_id, Bases[base_id].faction_id);
+}
+
+// add_goal without its thinker_enabled gate: that gate keeps Thinker's own planner from
+// writing engine goal types, but these are the seat's, and the engine's AI reads them.
+static void na_policy_place_goal(int faction_id, const NaPolicyGoal& g) {
+    if (!mapsq(g.x, g.y)) {
+        return;
+    }
+    Goal* goals = Factions[faction_id].goals;
+    for (int i = 0; i < MaxGoalsNum; i++) {
+        if (goals[i].type == g.type && goals[i].x == g.x && goals[i].y == g.y) {
+            goals[i].priority = max(goals[i].priority, (int16_t)g.priority);
+            return;
+        }
+    }
+    int best_value = 0, goal_id = -1;
+    for (int i = 0; i < MaxGoalsNum; i++) {
+        if (goals[i].type < 0 || goals[i].priority < g.priority) {
+            int value = goals[i].type >= 0 ? 0 : 1000;
+            if (!value) {
+                value = goals[i].priority > 0 ? (20 - goals[i].priority) : goals[i].priority + 100;
+            }
+            if (value > best_value) {
+                best_value = value;
+                goal_id = i;
+            }
+        }
+    }
+    if (goal_id >= 0) {
+        goals[goal_id].type = (int16_t)g.type;
+        goals[goal_id].priority = (int16_t)g.priority;
+        goals[goal_id].x = g.x;
+        goals[goal_id].y = g.y;
+        goals[goal_id].base_id = -1;
+    }
+}
+
+static bool na_policy_has_goal(const NaPolicy& p, const NaPolicyGoal& g) {
+    for (int i = 0; p.goals_set && i < p.goal_count; i++) {
+        if (p.goals[i].type == g.type && p.goals[i].x == g.x && p.goals[i].y == g.y) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void na_policy_apply_faction(int faction_id, const NaPolicy& want) {
+    Faction& plr = Factions[faction_id];
+    NaPolicyApplied& a = na_policy_applied[faction_id];
+
+    for (int i = 0; i < NA_PF_INT_COUNT; i++) {
+        const uint32_t bit = 1u << i;
+        int32_t* v = na_policy_field(plr, i);
+        const bool held = a.int_set & bit;
+        const bool wanted = want.present && (want.int_set & bit)
+            && (i != NA_PF_ATTACK_TARGET || na_policy_target_ok(faction_id, want.ints[i]));
+        if (!held && !wanted) {
+            continue;
+        }
+        if (!held || *v != a.written[i]) {
+            a.native[i] = (i == NA_PF_ATTACK_TARGET) ? -1 : *v;
+        }
+        if (wanted) {
+            *v = want.ints[i];
+            a.written[i] = *v;
+            a.int_set |= bit;
+        } else {
+            *v = a.native[i];
+            a.int_set &= ~bit;
+        }
+    }
+
+    const uint32_t want_mask = want.present ? want.flag_mask : 0;
+    if (a.flag_mask || want_mask) {
+        uint32_t pf = (uint32_t)plr.player_flags;
+        const uint32_t moved = a.flag_mask & (pf ^ a.flag_written);
+        a.flag_native = (a.flag_native & ~moved) | (pf & moved);
+        const uint32_t released = a.flag_mask & ~want_mask;
+        pf = (pf & ~released) | (a.flag_native & released);
+        const uint32_t fresh = want_mask & ~a.flag_mask;
+        a.flag_native = (a.flag_native & ~fresh) | (pf & fresh);
+        a.flag_mask = want_mask;
+        pf = (pf & ~want_mask) | (want.flag_bits & want_mask);
+        a.flag_written = pf & want_mask;
+        plr.player_flags = (int32_t)pf;
+    }
+
+    // Goals the overlay placed and no longer asks for are withdrawn; the rest are re-placed,
+    // which keeps them ahead of wipe_goals' per-turn decay.
+    for (int j = 0; j < a.goal_count; j++) {
+        const NaPolicyGoal& old = a.goals[j];
+        if (want.present && na_policy_has_goal(want, old)) {
+            continue;
+        }
+        for (int i = 0; i < MaxGoalsNum; i++) {
+            Goal& g = plr.goals[i];
+            if (g.type == old.type && g.x == old.x && g.y == old.y) {
+                g.type = AI_GOAL_UNUSED;
+                g.priority = 0;
+            }
+        }
+    }
+    a.goal_count = 0;
+    for (int j = 0; want.present && want.goals_set && j < want.goal_count; j++) {
+        na_policy_place_goal(faction_id, want.goals[j]);
+        a.goals[a.goal_count++] = want.goals[j];
+    }
+}
+
+static bool na_policy_holds(int faction_id) {
+    const NaPolicyApplied& a = na_policy_applied[faction_id];
+    return a.int_set || a.flag_mask || a.goal_count;
+}
+
+/*
+Apply the overlay a `/turn` reply carried. Called only with a reply in hand: when the POST
+fails the engine keeps the overlay it is under, which is what the orchestrator last delivered.
+*/
+static void na_policy_receive(const char* reply) {
+    NaPolicySet set;
+    char why[96];
+    const NaPolicyParse got = na_policy_parse(reply, &set, why, sizeof(why));
+
+    bool held_before = false;
+    for (int f = 1; f < MaxPlayerNum; f++) {
+        held_before = held_before || na_policy_holds(f);
+    }
+    if (got == NA_POLICY_ABSENT && !held_before && !na_policy_hash[0]) {
+        return;  // the empty overlay, and nothing to restore: touch nothing, log nothing
+    }
+
+    static const NaPolicy none = {};
+    for (int f = 1; f < MaxPlayerNum; f++) {
+        const bool allowed = llm_enabled(f) && !is_human(f);
+        const NaPolicy& want = (allowed && set.faction[f].present) ? set.faction[f] : none;
+        na_policy[f] = want;
+        na_policy_apply_faction(f, want);
+    }
+
+    const char* hash = got == NA_POLICY_OK ? set.hash : "";
+    const bool changed = strcmp(hash, na_policy_hash) != 0;
+    strncpy(na_policy_hash, hash, sizeof(na_policy_hash) - 1);
+    na_policy_hash[sizeof(na_policy_hash) - 1] = '\0';
+    if (!changed && got != NA_POLICY_REFUSED) {
+        return;
+    }
+
+    NaBuf w;
+    na_buf_init(&w);
+    na_buf_puts(&w, "{\"surface_id\":\"na.policy\",\"engine\":\"thinker\"");
+    na_buf_printf(&w, ",\"event\":\"%s\"", got == NA_POLICY_REFUSED ? "refused" : "applied");
+    na_buf_printf(&w, ",\"turn\":%d,\"run_id\":\"%s\"", *CurrentTurn + 1, na_run_id());
+    na_buf_printf(&w, ",\"policy_hash\":\"%s\"", na_policy_hash);
+    if (got == NA_POLICY_REFUSED) {
+        na_buf_puts(&w, ",\"reason\":\"");
+        na_buf_escaped(&w, why);
+        na_buf_puts(&w, "\"");
+    }
+    na_buf_puts(&w, ",\"factions\":[");
+    int n = 0;
+    for (int f = 1; f < MaxPlayerNum; f++) {
+        if (na_policy_holds(f)) {
+            na_buf_printf(&w, "%s%d", n++ ? "," : "", f);
+        }
+    }
+    na_buf_puts(&w, "]}");
+    na_log_record(&w);
+    na_buf_free(&w);
+}
+
+/*
 Announce the coming turn's expected decisions.
 
 The orchestrator cannot show an agent a turn it has not been told about: when base #1 is asked,
@@ -4554,6 +4787,9 @@ void na_announce_turn() {
     if (!w.failed) {
         NaBuf resp;
         if (na_http_post(llm_endpoint.c_str(), "/turn", w.data, NA_OUTCOME_TIMEOUT_MS, &resp)) {
+            // The reply carries the policy overlay (above), and lands before this turn's
+            // decisions are made.
+            na_policy_receive(resp.data);
             na_buf_free(&resp);
         }
     }
