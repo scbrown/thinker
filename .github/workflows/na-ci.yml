@@ -1,0 +1,74 @@
+# Neural Amplifier fork CI: the checks a merge into this fork needs.
+#
+# Until this existed, a pull request here carried zero checks, so nothing but a
+# local build stood between a merge and the Neural Amplifier repo's own CI, which
+# builds this fork's master on every push. A sync with upstream can break that
+# build in ways no textual conflict shows: v5.6 renamed locals and changed hook
+# types that only the compiler reports.
+#
+# Two jobs, cheap first:
+#   source  - the source-property checks from tests/run-na-tests.sh. No build,
+#             no Wine: they catch a seam a merge dropped or moved, which a green
+#             build cannot.
+#   build   - the same MinGW cross-compile the Neural Amplifier repo runs, so a
+#             green PR here means its next main run can build this master.
+#
+# The Wine wire tests (tests/run-na-tests.sh) stay a local step for now.
+name: NA CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    name: Source properties (seams, options, withheld choices)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Seam guard and its own mutation test
+        run: |
+          python3 tests/check_seams.py
+          python3 tests/test_check_seams.py
+      - name: Option wiring, dialog escape, base support state
+        run: |
+          python3 tests/check_na_options.py
+          python3 tests/check_dialog_headless_escape.py
+          python3 tests/check_base_support_state.py
+      - name: Decide surfaces withhold the native answer and recognise defer
+        run: |
+          python3 tests/check_native_choice_withheld.py
+          python3 tests/check_defer_recognised.py
+
+  build:
+    name: MinGW cross-compile (thinker.dll + thinker.exe)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the 32-bit MinGW toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential ninja-build g++-mingw-w64-i686-posix
+      - name: Install CMake
+        # CMakePresets.json requires >= 3.31; the runner image's CMake can lag.
+        uses: lukka/get-cmake@latest
+        with:
+          cmakeVersion: "3.31.6"
+      - name: Build
+        run: |
+          cmake --preset ninja-develop
+          cmake --build --preset ninja-develop
+      - name: Verify both artifacts are 32-bit PE
+        run: |
+          for name in thinker.dll thinker.exe; do
+            f=$(find build -name "$name" -print -quit)
+            test -n "$f" || { echo "$name was not produced"; exit 1; }
+            file "$f"
+            file "$f" | grep -q 'PE32 ' || { echo "$name is not a 32-bit PE"; exit 1; }
+          done
