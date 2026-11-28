@@ -39,6 +39,7 @@ build.cpp	select_build_inner	na_observe_base_project	call	1	-
 build.cpp	select_build_inner	na_observe_base_satellite	call	1	-
 build.cpp	select_build_inner	na_pod_note	call	7	-
 build.cpp	select_build_inner	na_pod_note_gov	call	1	-
+config.cpp	prefs_use	na_headless	call	1	-
 faction.cpp	mod_social_ai	na_decide_faction_se	call	1	-
 faction.cpp	steal_tech	na_observe_faction_tech_steal	call	1	-
 faction_talk.cpp	mod_base_swap	na_observe_diplo_base_swap	call	1	-
