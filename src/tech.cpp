@@ -292,7 +292,19 @@ Note that tech_pick is also used for TECHSTEAL faction ability.
 */
 int __cdecl mod_tech_pick(int faction_id, int flag, int other_faction_id, const char* label) {
     Faction& plr = Factions[faction_id];
-    int tech_id = tech_pick(faction_id, flag, other_faction_id, label);
+    /*
+    Neural Amplifier: the engine's tech_pick opens SELECT RESEARCH GOAL for a human seat and
+    waits for a click. A headless run has nobody to click, so an unattended -na-new-game sat
+    on that picker at turn 1 forever, and every auto end-turn returned with the turn
+    unchanged (aegis-km6g). For a research pick (no other faction: not a steal or a
+    trade), the seat takes the engine's own AI choice instead. mod_tech_selection still
+    hands that choice to na_decide_faction_tech when the seat has a brain, so an LLM seat
+    keeps the decision. Interactive play never reaches this branch.
+    */
+    const bool headless_research = other_faction_id < 0 && is_human(faction_id) && na_headless();
+    int tech_id = headless_research
+        ? mod_tech_ai(faction_id)
+        : tech_pick(faction_id, flag, other_faction_id, label);
     debug("tech_pick %d %d %d prev: %d %d tech: %d %s\n", *CurrentTurn, faction_id, other_faction_id,
         plr.tech_research_id, plr.tech_cost, tech_id, tech_str(tech_id));
     if (other_faction_id < 0 && revised_tech_cost()) {

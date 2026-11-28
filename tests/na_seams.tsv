@@ -102,6 +102,7 @@ plan.cpp	governor_priorities	na_governor_policy	call	1	-
 plan.cpp	governor_priorities	na_observe_base_governor_config	call	1	-
 plan.cpp	na_gov_priorities_set	na_gov_priorities_set	def	1	-
 plan.cpp	na_governor_policy	na_governor_policy	def	1	-
+tech.cpp	mod_tech_pick	na_headless	call	1	-
 tech.cpp	mod_tech_selection	na_decide_faction_tech	call	1	-
 veh.cpp	battle_kill	na_outcome_unit_killed	call	1	-
 veh.cpp	set_action	na_outcome_unit_action	call	1	-
