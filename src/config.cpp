@@ -1,5 +1,6 @@
 
 #include "config.h"
+#include "neural.h"
 
 const char* AlphaFile = "ALPHAX";
 const char* ScriptFile = "SCRIPT";
@@ -1619,6 +1620,18 @@ void __cdecl prefs_use() {
     *GamePreferences = AlphaIniPrefs->preferences;
     *GameMorePreferences = AlphaIniPrefs->more_preferences;
     *GameWarnings = AlphaIniPrefs->announce;
+    /*
+    Neural Amplifier: nobody is watching a headless run. Monuments ("M.Y. 2100: ... founds
+    mankind's first base") and interludes are full-screen modals that wait for a BACK click.
+    Under Xvfb the first-base monument held a -na-new-game run at turn 0 forever: every auto
+    end-turn returned and the turn never advanced (aegis-5af). Only the live globals change,
+    never AlphaIniPrefs, so nothing is written back to Alpha Centauri.Ini and an attended
+    session is untouched.
+    */
+    if (na_headless()) {
+        *GamePreferences |= PREF_AV_INTERLUDES_DISABLED;
+        *GameMorePreferences |= MPREF_AV_MONUMENTS_DISABLED;
+    }
 }
 
 

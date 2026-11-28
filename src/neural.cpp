@@ -4038,7 +4038,14 @@ void na_autoload_tick() {
         announced = true;
         na_autoload_log("hook_alive", na_autoload.c_str(), 1);
     }
-    if (na_autoload.empty()) {
+    /*
+    -na-new-game drives the same menu path as -na-autoload (QUICK START, then the PLANETFALL
+    intro), only without a save to load at the end. Leaving here on an empty na_autoload alone
+    meant a new-game run never confirmed PLANETFALL: under Xvfb nobody presses its OK, so the
+    run sat at turn 0 with GameHalted set until the harness timeout (aegis-5af).
+    */
+    const bool new_game = na_new_game_requested();
+    if (na_autoload.empty() && !new_game) {
         state = NA_AS_DONE;
         return;
     }
@@ -4103,6 +4110,12 @@ void na_autoload_tick() {
                 na_autoload_log("give_up", "no session after quickstart", 0);
                 state = NA_AS_DONE;
             }
+            return;
+        }
+        if (na_autoload.empty()) {
+            // -na-new-game: the generated game IS the session; there is nothing to load.
+            na_autoload_log("new_game_session", "PLANETFALL confirmed, session running", 1);
+            state = NA_AS_DONE;
             return;
         }
         char path[1024] = {};
